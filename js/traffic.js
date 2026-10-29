@@ -2064,7 +2064,13 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     focusZ = lastFocusZ = z;
     nearX = Infinity;
     refreshNear();
-    for (const v of vehicles) v.edge = null;
+    for (const v of vehicles) {
+      v.edge = null;
+      // The per-driver randomness drawn when the pool was made, drawn again from the seed
+      v.laneTimer = random() * 0.5;
+      v.blinkPhase = random() * 0.8;
+      v.reaction = 0.6 + random() * 0.4;
+    }
     buildOccupancy();
     const playerWasActive = player.active;
     player.active = false;

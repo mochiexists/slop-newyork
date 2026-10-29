@@ -3,7 +3,7 @@ import { pass, mrt, output, normalView, positionView, metalness, roughness, vec2
 import { ssr } from 'three/addons/tsl/display/SSRNode.js';
 import { createPostProcessing } from './post-processing.js';
 import { ClusteredLighting } from 'three/addons/lighting/ClusteredLighting.js';
-import { getLocationLabel, isTypingInField, ROADS, NYC_LANDMARKS, TELEPORT_LOCATIONS } from './city-config.js';
+import { getLocationLabel, isTypingInField, ROADS, NYC_LANDMARKS, SIGNAL_TIMING, TELEPORT_LOCATIONS } from './city-config.js';
 import { buildCityGrid } from './city-grid.js';
 import { buildBoroughs } from './boroughs.js';
 import { buildLandmarks } from './landmarks.js';
@@ -20,7 +20,7 @@ import { NYCMapSystem } from './nyc-map.js';
 import { setupSceneCulling, updateSceneCulling } from './scene-culling.js';
 import { CityAudioSystem } from './audio-system.js';
 import { bindSwimEngineToggle } from './swim-engine-toggle.js';
-import { SwimDirector, SWIM_STARTS, SQUEEZE_ROUTE, SHOW_SPOT } from './swim-mode.js';
+import { SwimDirector, SWIM_STARTS, SQUEEZE_ROUTE, SHOW_SPOT, SHOW_SIGNAL_TIME } from './swim-mode.js';
 import { M5Cockpit } from './m5-cockpit.js';
 
 // Application setup, shader warm-up and frame loop.
@@ -539,6 +539,8 @@ async function initApp() {
   function startSwimShow() {
     selectMode('swim');
     teleportTo(SHOW_SPOT.x, SHOW_SPOT.z, SHOW_SPOT.heading);
+    // The city clock jumps on to the show's point in the signal cycle, so its lights repeat along with its traffic
+    elapsed += (((SHOW_SIGNAL_TIME - elapsed) % SIGNAL_TIMING.cycle) + SIGNAL_TIMING.cycle) % SIGNAL_TIMING.cycle;
     swimDirector.startShow();
   }
   document.querySelectorAll('[data-swim-show]').forEach((btn) => {

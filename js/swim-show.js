@@ -28,6 +28,9 @@ const DRIFT_RADIUS = 11; // m from the cop to the car: the circle fills the cros
 // clears the Con Ed steam stack 6 m from the cop by two
 const SHOW_SPOT = { x: COP_SPOT.x + DRIFT_RADIUS, z: COP_SPOT.z, heading: Math.PI };
 const SHOW_TRAFFIC_SEED = 1; // traffic layout of the opening (traffic.js reseed)
+// Where in the 60 s signal cycle (city-config.js SIGNAL_TIMING) the show starts: the avenues turn green as the car
+// leaves the drift circle, so the run down 7th Ave meets the same lights every time
+const SHOW_SIGNAL_TIME = 45;
 const SHOW_CLEAR_RADIUS = 42; // m of Times Square kept clear of traffic for the stunts
 // The run: down 7th Ave, west on 42nd St, up 8th Ave past Smith's, west on 57th St. The avenues are one-way, so the
 // line runs down their middle; 42nd and 57th are two-way, so it keeps to the westbound (north, -z) half.
@@ -484,4 +487,4 @@ class SwimShow {
   }
 }
 
-export { SHOW_SPOT, ESCAPE_ROUTE, PoliceCruiser, SwimShow };
+export { SHOW_SPOT, SHOW_SIGNAL_TIME, ESCAPE_ROUTE, PoliceCruiser, SwimShow };

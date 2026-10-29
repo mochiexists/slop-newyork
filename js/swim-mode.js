@@ -2,7 +2,7 @@ import * as THREE from 'three/webgpu';
 import { attribute, float, texture, vec3 } from 'three/tsl';
 import { avenueX, streetZ } from './city-config.js';
 import { BODY_SPECS } from './cars.js';
-import { PoliceCruiser, SwimShow, SHOW_SPOT } from './swim-show.js';
+import { PoliceCruiser, SwimShow, SHOW_SPOT, SHOW_SIGNAL_TIME } from './swim-show.js';
 
 // Swimming: the BMW M5 weaving through traffic and drifting through Times Square to Careless Whisper. This module owns
 // everything about the mode except the car itself (controllers.js) and its physics (drift-physics.js): the
@@ -712,4 +712,4 @@ class SwimDirector {
   }
 }
 
-export { CARELESS_WHISPER, SWIM_STARTS, SQUEEZE_ROUTE, SHOW_SPOT, CloseCalls, SwimDirector };
+export { CARELESS_WHISPER, SWIM_STARTS, SQUEEZE_ROUTE, SHOW_SPOT, SHOW_SIGNAL_TIME, CloseCalls, SwimDirector };
