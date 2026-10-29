@@ -106,7 +106,22 @@ function createBusDestinationTexture() {
 
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 
+// A small seeded generator (mulberry32): the same seed gives the same sequence
+function seededRandom(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
+  // Every random choice traffic makes (where cars appear, their turns, lane changes) comes from here, so reseed()
+  // can make a scene repeat
+  let random = Math.random;
   const group = new THREE.Group();
   group.name = 'ManhattanTrafficAndPedestrians';
   let collisionListener = null;
@@ -171,12 +186,12 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
       bus, half, halfWidth, axle, driver, v0,
       edge: null, lane: 0, s: 0, speed: 0, acc: 0, gap: Infinity, leaderSpeed: 0,
       move: null, out: 0, conn: null, cs: 0, trail: null, commit: null, claimed: false, yielding: false, yieldAt: 0,
-      wait: 0, laneTimer: Math.random() * 0.5,
-      dl: 0, dlv: 0, blink: 0, blinkPhase: Math.random() * 0.8,
-      evade: 0, alarm: 0, panicUntil: 0, panicAcc: 0, reaction: 0.6 + Math.random() * 0.4,
+      wait: 0, laneTimer: random() * 0.5,
+      dl: 0, dlv: 0, blink: 0, blinkPhase: random() * 0.8,
+      evade: 0, alarm: 0, panicUntil: 0, panicAcc: 0, reaction: 0.6 + random() * 0.4,
       x: 0, z: 0, prevX: 0, prevZ: 0, tx: 0, tz: 1, nose: 0, yaw: 0, yawRate: 0, steer: 0, delta: 0,
       pitch: 0, roll: 0, pitchVel: 0, rollVel: 0, vx: 0, vz: 0, yawOffset: 0, yawVel: 0, impactTime: 0,
-      pAhead: Infinity, pRight: 0, pSpeed: 0, wheelSpin: Math.random() * Math.PI * 2
+      pAhead: Infinity, pRight: 0, pSpeed: 0, wheelSpin: random() * Math.PI * 2
     };
   }
 
@@ -347,16 +362,16 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     for (let k = 0; k < count; k++) {
       const sp = sparks[sparkCursor];
       sparkCursor = (sparkCursor + 1) % MAX_SPARKS;
-      const spread = (Math.random() - 0.5) * 2.2;
-      const outBoost = (0.3 + Math.random() * 0.9) * Math.min(14.0, impactSpeed * 0.65);
+      const spread = (random() - 0.5) * 2.2;
+      const outBoost = (0.3 + random() * 0.9) * Math.min(14.0, impactSpeed * 0.65);
       const tanBoost = spread * Math.min(12.0, impactSpeed * 0.55);
-      sp.x = x + (Math.random() - 0.5) * 0.35;
-      sp.y = y + (Math.random() - 0.5) * 0.18;
-      sp.z = z + (Math.random() - 0.5) * 0.35;
+      sp.x = x + (random() - 0.5) * 0.35;
+      sp.y = y + (random() - 0.5) * 0.18;
+      sp.z = z + (random() - 0.5) * 0.35;
       sp.vx = nx * outBoost + tx * tanBoost;
-      sp.vy = 2.4 + Math.random() * 5.4;
+      sp.vy = 2.4 + random() * 5.4;
       sp.vz = nz * outBoost + tz * tanBoost;
-      sp.maxLife = 0.28 + Math.random() * 0.24;
+      sp.maxLife = 0.28 + random() * 0.24;
       sp.life = sp.maxLife;
     }
   }
@@ -756,7 +771,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
       weights[k] = w;
       total += w;
     }
-    let r = Math.random() * total;
+    let r = random() * total;
     let pick = null;
     for (let k = 0; k < e.moves.length; k++) {
       if (weights[k] <= 0) continue;
@@ -1259,7 +1274,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
   function drive(v, dt) {
     v.laneTimer -= dt;
     if (v.laneTimer <= 0) {
-      v.laneTimer = 0.4 + Math.random() * 0.3;
+      v.laneTimer = 0.4 + random() * 0.3;
       changeLanes(v);
     }
     accelerate(v);
@@ -1570,14 +1585,14 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
   // Put v in a free lane around the focus. Normal replenishment protects the near view; teleports can fill it.
   function spawnVehicle(v, rMin, rMax, protectView) {
     for (let attempt = 0; attempt < 12; attempt++) {
-      const e = nearEdges[Math.floor(Math.random() * nearEdges.length)];
+      const e = nearEdges[Math.floor(random() * nearEdges.length)];
       if (!e || (v.bus && e.axis !== 'ave') || e.len < 2 * v.half + 10) continue;
-      const lane = Math.floor(Math.random() * e.lanes.length);
+      const lane = Math.floor(random() * e.lanes.length);
       const along = (focusX - e.sx) * e.dx + (focusZ - e.sz) * e.dz;
       const minS = Math.max(v.half + 5, along - rMax);
       const maxS = Math.min(e.len - v.half - 5, along + rMax);
       if (minS > maxS) continue;
-      const s = minS + Math.random() * (maxS - minS);
+      const s = minS + random() * (maxS - minS);
       const x = e.sx + e.dx * s + e.rx * e.lanes[lane];
       const z = e.sz + e.dz * s + e.rz * e.lanes[lane];
       const d = Math.hypot(x - focusX, z - focusZ);
@@ -2040,11 +2055,28 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     }
   }
 
+  // Lay the same traffic out round a spot every time (the AI show's opening), and keep every later choice (turns,
+  // lane timers) on the same sequence. Vehicles are re-placed in pool order on the edges near the spot.
+  function reseed(seed, x, z) {
+    random = seededRandom(seed);
+    focusX = lastFocusX = x;
+    focusZ = lastFocusZ = z;
+    nearX = Infinity;
+    refreshNear();
+    for (const v of vehicles) v.edge = null;
+    buildOccupancy();
+    const playerWasActive = player.active;
+    player.active = false;
+    for (const v of vehicles) spawnVehicle(v, 0, NEAR_RADIUS, false);
+    player.active = playerWasActive;
+  }
+
   return {
     group,
     update,
     setCollisionListener,
     setClearZone,
+    reseed,
     cars,
     buses,
     peds: pedestrianSystem.peds,
