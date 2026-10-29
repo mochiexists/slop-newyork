@@ -1182,7 +1182,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     const later = threat.aside + threat.across * 0.5;
     const side = Math.abs(later) < 0.3 ? 1 : -Math.sign(later);
     const room = swerveRoom(v, side);
-    const other = swerveRoom(v, -side);
+    // Coming from behind, a car passing close by is using the gap on its side: only ever swerve away from it
+    const other = threat.ahead < 0 ? 0 : swerveRoom(v, -side);
     v.evade = other > room ? -side * other : side * room;
   }
 
