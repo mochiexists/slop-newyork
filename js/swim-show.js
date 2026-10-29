@@ -24,7 +24,8 @@ const RAD = Math.PI / 180;
 // The cruiser parks in the middle of 7th Ave & 45th St, at the foot of the bowtie, and the car starts on the circle it
 // drifts round it: in the crossing's east arm, facing north with the cop off its left side
 const COP_SPOT = { x: avenueX('7') - 2, z: streetZ(45) };
-const DRIFT_RADIUS = 10; // m from the cop to the car: the circle fills the crossing, the way the clip's does
+const DRIFT_RADIUS = 11; // m from the cop to the car: the circle fills the crossing, the way the clip's does, and
+// clears the Con Ed steam stack 6 m from the cop by two
 const SHOW_SPOT = { x: COP_SPOT.x + DRIFT_RADIUS, z: COP_SPOT.z, heading: Math.PI };
 const SHOW_TRAFFIC_SEED = 1; // traffic layout of the opening (traffic.js reseed)
 const SHOW_CLEAR_RADIUS = 42; // m of Times Square kept clear of traffic for the stunts
