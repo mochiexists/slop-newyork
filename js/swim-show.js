@@ -42,8 +42,12 @@ const ESCAPE_ROUTE = [
 const BURNOUT_TIME = 2.6;
 const DONUT_TIME = 11; // s of drifting round the cop (a lap takes about six) before looking for the way out
 const EXIT_TIME = 0.7; // s straightening out of the circle before the escape
-const CHASE_TIME = 24; // s the cop keeps up the chase before it gives up
-const SHOW_TIME_LIMIT = 75; // s before the car is handed over wherever it is
+const CHASE_TIME = 14; // s the cop keeps up the chase before it gives up
+// The hand-over, like the opening of a racing game: a few seconds into the swim, at speed, the car is the player's
+const SWIM_TIME = 7; // s of swimming before it looks for a moment to hand over
+const HANDOVER_SPEED = 22; // m/s (50 mph) it hands over at, so the player takes a car that is flying
+const HANDOVER_WAIT = 8; // s more it waits for that speed before handing over anyway
+const SHOW_TIME_LIMIT = 60; // s before the car is handed over wherever it is
 const CORRIDOR = 7; // m off the route before the show eases the car back toward it
 const LOOK_BACK_TIME = 2.5; // s the escape camera looks back at the cop
 const STUCK_TIME = 2; // s standing still before the AI backs out
@@ -395,6 +399,11 @@ class SwimShow {
         Object.assign(input, this.pilot.update(car, dt, this.obstacles));
         this.unstick(car, dt, input);
         this.keepNearRoute(car, dt);
+        if (this.phase === 'swim' && this.time > SWIM_TIME
+          && (car.speed > HANDOVER_SPEED || this.time > SWIM_TIME + HANDOVER_WAIT)) {
+          this.stop();
+          return undefined;
+        }
         if (this.phase === 'escape' && this.time > CHASE_TIME) {
           this.cruiser.giveUp();
           this.setPhase('swim');
