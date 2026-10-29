@@ -13,10 +13,12 @@ const RAD = Math.PI / 180;
 
 // George Michael's official video, streamed by YouTube's own player when swimming begins; nothing is stored here.
 // Label uploads often refuse embedding (player error 150, seen from localhost on 2026-10-29), so a lyric upload that
-// embeds is the fallback. The sax riff opens the track, so it plays from the top.
+// embeds is the fallback. The sax riff opens the track, so it plays from the top; `riff` is where it comes in on each
+// upload (measured from their audio on 2026-10-30), for the show to start the song right on it.
 const CARELESS_WHISPER = {
   videoIds: ['izGwDsrQ1eQ', 'JqIHlDVqUTw'],
   start: 0,
+  riff: [0, 0.2],
   title: 'Careless Whisper',
   artist: 'George Michael'
 };
@@ -284,6 +286,7 @@ class SwimRadio {
             this.ready = true;
             this.applyMute();
             if (this.wanted) this.player.playVideo();
+            else if (this.cued) this.cueRiff();
             resolve();
           },
           onStateChange: (event) => this.onState(event.data),
@@ -301,7 +304,8 @@ class SwimRadio {
       this.setStatus('offline');
       return;
     }
-    const options = { videoId: CARELESS_WHISPER.videoIds[this.source], startSeconds: CARELESS_WHISPER.start };
+    const startSeconds = this.cued ? CARELESS_WHISPER.riff[this.source] : CARELESS_WHISPER.start;
+    const options = { videoId: CARELESS_WHISPER.videoIds[this.source], startSeconds };
     if (this.wanted) this.player.loadVideoById(options);
     else this.player.cueVideoById(options);
   }
@@ -337,7 +341,24 @@ class SwimRadio {
     }, 2500);
   }
 
+  // The show holds the song back, cued on the sax riff, until the car swings into its drift (play() then starts it
+  // right on the riff)
+  cue() {
+    this.card?.removeAttribute('hidden');
+    this.wanted = false;
+    this.cued = true;
+    if (this.ready) this.cueRiff();
+    else this.load();
+    this.setStatus('paused');
+  }
+
+  cueRiff() {
+    const source = this.source ?? 0;
+    this.player.cueVideoById({ videoId: CARELESS_WHISPER.videoIds[source], startSeconds: CARELESS_WHISPER.riff[source] });
+  }
+
   pause() {
+    this.cued = false;
     this.wanted = false;
     if (this.ready) this.player.pauseVideo();
     this.setStatus('paused');
@@ -487,8 +508,9 @@ class SwimDirector {
     }
   }
 
-  // The car is already at SHOW_SPOT (main.js teleports it): run the show from there
+  // The car is already at SHOW_SPOT (main.js teleports it): run the show from there, the song held for the drift
   startShow() {
+    this.radio.cue();
     this.show.start();
   }
 
@@ -510,6 +532,8 @@ class SwimDirector {
       const text = this.pilotChip.querySelector('.swim-pilot-text');
       if (text && caption) text.textContent = `${caption[0]} · any driving key takes the wheel`;
     }
+    // The sax comes in as the car swings into its drift round the cop
+    if (phase === 'donuts') this.radio.play();
     // Leaving the donuts launches the car: bank them first, and don't take the launch for a crash
     if (phase === 'escape') {
       this.score.bank();
