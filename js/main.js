@@ -20,6 +20,7 @@ import { NYCMapSystem } from './nyc-map.js';
 import { setupSceneCulling, updateSceneCulling } from './scene-culling.js';
 import { CityAudioSystem } from './audio-system.js';
 import { SwimDirector, SWIM_STARTS, SQUEEZE_ROUTE, SHOW_SPOT } from './swim-mode.js';
+import { M5Cockpit } from './m5-cockpit.js';
 
 // Application setup, shader warm-up and frame loop.
 
@@ -159,6 +160,7 @@ async function initApp() {
   }
   soundButton?.addEventListener('click', () => audioSystem.setEnabled(!audioSystem.enabled));
   swimDirector = new SwimDirector({ scene, controllerManager, audioSystem, trafficSystem });
+  const m5Cockpit = new M5Cockpit(controllerManager.entities.swim, swimDirector.radio);
   updateSoundButton();
   // pagehide also covers navigation away on mobile; preserve the context across back-forward cache restores.
   window.addEventListener('pagehide', (event) => {
@@ -279,8 +281,8 @@ async function initApp() {
     car: [[['W', 'S'], 'Drive / Reverse'], [['A', 'D'], 'Steer'], [['B'], 'Horn'], [['Drag'], 'Orbit']],
     cyclist: [[['W', 'S'], 'Pedal / Brake'], [['A', 'D'], 'Lean & Turn'], [['Drag'], 'Orbit']],
     helicopter: [[['W', 'S'], 'Pitch'], [['A', 'D'], 'Yaw'], [['Space', 'E'], 'Ascend'], [['Q', 'C'], 'Descend']],
-    swim: [[['W', 'S'], 'Gas / Brake'], [['W', 'S'], 'Both: burnout'], [['A', 'D'], 'Steer'], [['Space'], 'Handbrake'],
-      [['P'], 'AI show']]
+    swim: [[['W', 'S'], 'Gas / Brake'], [['W', 'S'], 'Both: burnout'], [['Space'], 'Handbrake'], [['P'], 'AI show'],
+      [['F'], 'Flip off'], [['G'], 'George Michael']]
   };
   // Top speeds in mph (controllers.js & drift-physics.js cap them at 8.2, 36, 19, 52 & 85 m/s): full scale of the
   // speed meter
@@ -605,6 +607,15 @@ async function initApp() {
       case 'KeyB':
         if (!e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey && !mapSystem.isFullMapOpen) audioSystem.honk(controllerManager.getActiveEntity());
         break;
+      case 'KeyG': // swimming: George Michael on / off
+        if (!e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey && controllerManager.activeMode === 'swim') {
+          if (swimDirector.radio.wanted) swimDirector.radio.pause();
+          else swimDirector.radio.play();
+        }
+        break;
+      case 'KeyF': // swimming: the driver's left hand up (toggle), see m5-cockpit.js
+        if (!e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey && controllerManager.activeMode === 'swim') m5Cockpit.toggleBird();
+        break;
     }
   });
 
@@ -729,6 +740,7 @@ async function initApp() {
     controllerManager.update(dt, elapsed, cameraSystem.initialized ? cameraSystem.currentPos : null);
     cameraSystem.update(dt, elapsed);
     swimDirector.update(dt, cameraSystem.camera);
+    m5Cockpit.update(dt, controllerManager.activeMode === 'swim', cameraSystem.activePresetId === 'pov');
     streetDetails.signalClock.value = elapsed;
     trafficSystem.update(
       dt,
