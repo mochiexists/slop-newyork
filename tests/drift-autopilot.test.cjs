@@ -98,3 +98,43 @@ test('a player drift circle carries on from the line the car is sliding along', 
   assert.ok(c.angularVel < 0, 'turning right');
   assert.ok(Math.abs(Math.hypot(c.position.x - circle.center.x, c.position.z - circle.center.z) - 10) < 0.5, 'on its circle');
 });
+
+test('weaving staggered traffic at 85 mph, the swimmer allows for its own car turned in a flick', () => {
+  // Codex's round-2 reproduction: a contact at 2.7 s while the plan was marked safe, from a street-aligned own footprint
+  const { vehicleContact } = loadModule(readFileSync(join(__dirname, '../js/vehicle-physics.js'), 'utf8'));
+  const traffic = [[1.75, 51, 6], [3.5, 79, 2], [-5.75, 101, 9], [-1, 104, 12], [-0.25, 79, 4]]
+    .map(([x, z, speed]) => ({ x, z, speed, yaw: 0, half: 2.3, halfWidth: 0.95 }));
+  const c = car(0);
+  c.speed = 38;
+  const pilot = new DriftAutopilot();
+  pilot.setPath([{ x: 0, z: 0 }, { x: 0, z: 1000 }], { corridors: [{ left: 7, right: -7, centre: null }] });
+  let contacts = 0;
+  for (let frame = 0; frame < 420; frame++) {
+    const input = pilot.update(c, 1 / 60, traffic);
+    for (let k = 0; k < 4; k++) physics.stepDriftCar(c, input, 1 / 240);
+    for (const o of traffic) {
+      o.z += o.speed / 60;
+      const a = { x: c.position.x, z: c.position.z, sin: Math.sin(c.heading), cos: Math.cos(c.heading), halfW: 0.97, halfL: 2.5 };
+      const b = { x: o.x, z: o.z, sin: 0, cos: 1, halfW: 0.95, halfL: 2.3 };
+      if (vehicleContact(a, b, {})) contacts++;
+    }
+  }
+  assert.equal(contacts, 0);
+  assert.ok(c.position.z > 150, `and it got through (${c.position.z.toFixed(0)} m)`);
+});
+
+test('a drift circle shoved by a car moves with the shove instead of snapping back at a false speed', () => {
+  const c = car(0);
+  c.position.x = 10;
+  const circle = DriftCircle.around(c, { x: 0, z: 0 }, { direction: 1 });
+  const tel = {};
+  for (let t = 0; t < 4; t += DT) circle.update(c, DT, tel);
+  const before = Math.hypot(c.speed, c.vx, c.vz);
+  // A traffic car knocks it a metre along its way, between two steps
+  const along = Math.atan2(c.vx + Math.sin(c.heading) * c.speed, c.vz + Math.cos(c.heading) * c.speed);
+  c.position.x += Math.sin(along);
+  c.position.z += Math.cos(along);
+  circle.update(c, DT, tel);
+  const after = Math.hypot(c.speed, c.vx, c.vz);
+  assert.ok(Math.abs(after - before) < 1, `speed holds through the knock (${before.toFixed(1)} → ${after.toFixed(1)} m/s)`);
+});

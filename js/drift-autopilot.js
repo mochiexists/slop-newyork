@@ -158,6 +158,12 @@ class DriftAutopilot {
     this.refVel = carLatVel;
 
     // Traffic in the street's frame: along (m ahead of the car, centre to centre), across, and both velocities
+    // The swimmer's own footprint along and across the street, turned as it is (a flick turns it 10-20°, which widens it
+    // by half a metre)
+    const egoRel = car.heading - Math.atan2(s.ux, s.uz);
+    const egoCos = Math.abs(Math.cos(egoRel)), egoSin = Math.abs(Math.sin(egoRel));
+    const egoAlong = o.carHalfLength * egoCos + o.carHalfWidth * egoSin;
+    const egoAcross = o.carHalfWidth * egoCos + o.carHalfLength * egoSin;
     // (entries are pooled: this runs several times a second with dozens of cars)
     const seen = this._seen ??= [];
     const band = this.corridor();
@@ -174,7 +180,7 @@ class DriftAutopilot {
       const cosRel = Math.abs(Math.cos(rel)), sinRel = Math.abs(Math.sin(rel));
       const extentAlong = half * cosRel + halfWidth * sinRel;
       const extentAcross = half * sinRel + halfWidth * cosRel;
-      const length = extentAlong + o.carHalfLength + o.followMargin;
+      const length = extentAlong + egoAlong + o.followMargin;
       if (along < -length - 10 || along > o.scanAhead) continue;
       const lateral = (ob.x - s.a.x) * lx + (ob.z - s.a.z) * lz;
       // Out of reach across the street for the whole look-ahead: skip it
@@ -183,7 +189,7 @@ class DriftAutopilot {
       const speed = ob.speed || 0;
       const vx = (ob.yaw === undefined ? 0 : Math.sin(ob.yaw) * speed) + (ob.vx || 0);
       const vz = (ob.yaw === undefined ? 0 : Math.cos(ob.yaw) * speed) + (ob.vz || 0);
-      const reach = extentAcross + o.carHalfWidth + o.passMargin;
+      const reach = extentAcross + egoAcross + o.passMargin;
       // Already inside the margins (tailgating, or squeezed alongside): only getting closer counts as a hit, or every
       // plan, the escape too, would fail in its first instant
       const inside = Math.abs(lateral - carLat) < reach && Math.abs(along) < length;
@@ -192,8 +198,8 @@ class DriftAutopilot {
       entry.lateral = lateral;
       entry.vAlong = vx * s.ux + vz * s.uz;
       entry.vLateral = vx * lx + vz * lz;
-      entry.length = inside ? Math.max(extentAlong + o.carHalfLength, Math.abs(along) - 0.2) : length;
-      entry.reach = inside ? Math.max(extentAcross + o.carHalfWidth, Math.min(reach, Math.abs(lateral - carLat) - 0.05)) : reach;
+      entry.length = inside ? Math.max(extentAlong + egoAlong, Math.abs(along) - 0.2) : length;
+      entry.reach = inside ? Math.max(extentAcross + egoAcross, Math.min(reach, Math.abs(lateral - carLat) - 0.05)) : reach;
       count++;
     }
 
@@ -497,6 +503,12 @@ class DriftCircle {
     this.radius += (radiusGoal - this.radius) * (1 - Math.exp(-dt * o.radiusRate));
     this.slip += (slipGoal - this.slip) * (1 - Math.exp(-dt * o.slipRate));
 
+    // Pushed since the last step (a wall, a post, a car it touched): the circle moves with the car rather than pulling it
+    // back, which would also read as a burst of speed
+    if (this.placedX !== undefined) {
+      this.center.x += car.position.x - this.placedX;
+      this.center.z += car.position.z - this.placedZ;
+    }
     const prevX = car.position.x, prevZ = car.position.z, prevHeading = car.heading;
     if (this.exiting) {
       // Run straight out along the last tangent while the angle comes off
@@ -508,6 +520,8 @@ class DriftCircle {
       car.position.z = this.center.z + dir * this.radius * Math.sin(this.travel);
     }
     car.heading = this.travel + this.slip;
+    this.placedX = car.position.x;
+    this.placedZ = car.position.z;
 
     // Velocities from the motion itself, split into the car's frame
     const vx = (car.position.x - prevX) / dt, vz = (car.position.z - prevZ) / dt;

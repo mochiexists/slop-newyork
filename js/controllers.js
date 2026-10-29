@@ -1417,14 +1417,8 @@ class ThirdPersonControllerManager {
     const step = dt / steps;
     for (let i = 0; i < steps; i++) {
       const telemetry = scripted ? c.drift : stepDriftCar(c, input, step, M5_DRIFT, c.drift);
-      const beforeX = c.position.x, beforeZ = c.position.z;
+      // (a drift circle pushed off a wall or a post here moves with the car: DriftCircle rebases on the push)
       this.resolveHorizontalCollision(c.position, 1.35, c);
-      // The drift circle ran into something solid (a wall, a lamp post): the circle moves off it with the car, so the
-      // slide carries on clear of it rather than grinding along it
-      if (c.donut) {
-        c.donut.center.x += c.position.x - beforeX;
-        c.donut.center.z += c.position.z - beforeZ;
-      }
 
       // Squat under power, dive under braking, lean out of the corner; collisions kick the same springs
       const targetPitch = -Math.max(-1, Math.min(1, c.longAccel / 9)) * 0.03;
