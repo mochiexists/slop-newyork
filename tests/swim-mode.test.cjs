@@ -65,3 +65,28 @@ test('the soundtrack is streamed by YouTube id, not stored in the repository', (
   for (const id of swim.CARELESS_WHISPER.videoIds) assert.match(id, /^[\w-]{11}$/);
   assert.ok(Number.isFinite(swim.CARELESS_WHISPER.start));
 });
+
+test('a close call scores a car passed at speed with less than a metre of air, and chains', () => {
+  const calls = new swim.CloseCalls();
+  const dt = 1 / 60;
+  // The swimmer at 30 m/s up +z; traffic at 10 m/s, each one 0.4 m off its right side or 3 m off its left
+  function pass(sideGap) {
+    const car = { position: { x: 0, z: 0 }, heading: 0, speed: 30 };
+    const other = { edge: {}, x: -(0.97 + 0.95 + sideGap), z: 6, yaw: 0, speed: 10, half: 2.3, halfWidth: 0.95 };
+    let points = 0;
+    for (let t = 0; t < 0.9; t += dt) {
+      car.position.z += car.speed * dt;
+      other.z += other.speed * dt;
+      points += calls.update(dt, car, [other]);
+    }
+    return points;
+  }
+  const first = pass(0.4);
+  assert.ok(first > 100, `scores the close pass (${first})`);
+  assert.equal(calls.chain, 1);
+  assert.equal(pass(3), 0, 'a wide pass is just a pass');
+  const second = pass(0.4);
+  assert.ok(second > first, 'a second close call in a row is worth more');
+  assert.equal(calls.chain, 2);
+  assert.equal(pass(-0.1), 0, 'a scrape is a crash, not a close call');
+});

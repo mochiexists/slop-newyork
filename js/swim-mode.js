@@ -57,6 +57,13 @@ const DRIFT_GRACE = 0.7; // s a drift may straighten before it is banked
 const SKID_SLIDE = 3.2; // m/s of rear tire slide before rubber is laid
 const SMOKE_SLIDE = 5; // m/s of rear tire slide before smoke
 const CRASH_SPEED_CHANGE = 5; // m/s of velocity change in one frame
+const CLOSE_GAP = 1; // m of air at most between the cars for a pass to count as a close call
+const CLOSE_SPEED = 8; // m/s at least the swimmer passes the other car by
+const CLOSE_CHAIN_TIME = 3; // s between close calls that keeps a chain going
+const CLOSE_CHAIN_MAX = 5;
+const CLOSE_RANGE = 14; // m around the car that traffic is checked for close calls
+const SWIM_HALF_WIDTH = 0.97; // m: the swim car's half width and half length
+const SWIM_HALF_LENGTH = 2.52;
 const SMOKE_COUNT = 220;
 const SKID_COUNT = 2400;
 
@@ -231,6 +238,27 @@ class TireScreech {
     this.voice = { context, source, band, gain };
   }
 
+  // A close call's rush of air: the same noise, swept down through a band filter in half a second
+  whoosh(strength) {
+    const context = this.audio.context;
+    if (!this.voice || this.voice.context !== context || !this.audio.enabled) return;
+    const now = context.currentTime;
+    const source = context.createBufferSource();
+    source.buffer = this.voice.source.buffer;
+    const band = context.createBiquadFilter();
+    band.type = 'bandpass';
+    band.Q.value = 1.4;
+    band.frequency.setValueAtTime(2600, now);
+    band.frequency.exponentialRampToValueAtTime(380, now + 0.5);
+    const gain = context.createGain();
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.5 * strength + 0.05, now + 0.06);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.55);
+    source.connect(band).connect(gain).connect(this.audio.mix);
+    source.onended = () => gain.disconnect();
+    source.start(now, Math.random(), 0.6);
+  }
+
   update(slide, speed, active) {
     const context = this.audio.context;
     if (!context || !this.audio.mix || context.state === 'closed') return;
@@ -381,6 +409,58 @@ class SwimRadio {
   }
 }
 
+// Close calls, the fun of swimming: a car passed at speed with less than CLOSE_GAP of air between them. Each one scores,
+// more the closer and the faster, and a run of them chains a multiplier, the way a swimmer threads a block. Pure: fed
+// the car and the traffic each frame, it returns the points of a close call completed in that frame.
+class CloseCalls {
+  constructor() {
+    this.alongside = new Map(); // vehicle → closest gap while alongside
+    this.chain = 0;
+    this.sinceLast = Infinity;
+  }
+
+  update(dt, car, ...groups) {
+    this.sinceLast += dt;
+    if (this.sinceLast > CLOSE_CHAIN_TIME) this.chain = 0;
+    const sin = Math.sin(car.heading), cos = Math.cos(car.heading);
+    let points = 0;
+    for (const vehicles of groups) {
+      for (const v of vehicles) {
+        const dx = v.x - car.position.x, dz = v.z - car.position.z;
+        if (!v.edge || Math.abs(dx) > CLOSE_RANGE || Math.abs(dz) > CLOSE_RANGE) {
+          this.alongside.delete(v);
+          continue;
+        }
+        // In the swim car's frame: metres ahead, to the left, and the other car's extent along and across it
+        const ahead = dx * sin + dz * cos;
+        const left = dx * cos - dz * sin;
+        const rel = (v.yaw ?? 0) - car.heading;
+        const relSin = Math.abs(Math.sin(rel)), relCos = Math.abs(Math.cos(rel));
+        const half = v.half ?? 2.3, halfWidth = v.halfWidth ?? 0.95;
+        const reachAlong = SWIM_HALF_LENGTH + half * relCos + halfWidth * relSin;
+        const gap = Math.abs(left) - SWIM_HALF_WIDTH - half * relSin - halfWidth * relCos;
+        if (Math.abs(ahead) < reachAlong) {
+          const closest = this.alongside.get(v);
+          this.alongside.set(v, closest === undefined ? gap : Math.min(closest, gap));
+          continue;
+        }
+        const closest = this.alongside.get(v);
+        if (closest === undefined) continue;
+        this.alongside.delete(v);
+        // Out the back, untouched, close, and passed rather than drifted past
+        const passing = car.speed - (v.speed || 0) * Math.cos(rel);
+        if (ahead < 0 && closest > 0 && closest < CLOSE_GAP && passing > CLOSE_SPEED) {
+          this.chain = Math.min(CLOSE_CHAIN_MAX, this.chain + 1);
+          this.sinceLast = 0;
+          const closeness = 1 - closest / CLOSE_GAP;
+          points += Math.round((100 + 400 * closeness) * Math.min(2, car.speed / 25) * this.chain);
+        }
+      }
+    }
+    return points;
+  }
+}
+
 // Drift scoring: points for angle × speed while sliding, banked when the car straightens up, lost in a crash.
 class DriftScore {
   constructor(elements) {
@@ -418,6 +498,13 @@ class DriftScore {
       this.flash(`+${Math.round(this.points).toLocaleString('en-US')} SWIM`, 'banked');
     }
     this.reset();
+  }
+
+  // Points scored outright (a close call), with their own flash
+  award(points, text) {
+    this.total += points;
+    this.best = Math.max(this.best, points);
+    this.flash(text, 'banked');
   }
 
   wipeout() {
@@ -475,6 +562,7 @@ class SwimDirector {
     this.smoke = new TireSmoke(scene);
     this.skids = new SkidMarks(scene);
     this.screech = new TireScreech(audioSystem);
+    this.closeCalls = new CloseCalls();
     this.radio = new SwimRadio(document.getElementById('swim-radio'));
     this.score = new DriftScore({
       angle: document.getElementById('swim-angle'),
@@ -576,6 +664,12 @@ class SwimDirector {
       this.skipImpact = false;
       // Scored on the speed over the ground: a donut is all sideways
       this.score.update(dt, drift.slipAngle, Math.hypot(worldVX, worldVZ));
+      const close = this.closeCalls.update(dt, c, this.traffic.cars, this.traffic.buses);
+      if (close) {
+        const chain = this.closeCalls.chain > 1 ? ` ×${this.closeCalls.chain}` : '';
+        this.score.award(close, `CLOSE CALL${chain} +${close.toLocaleString('en-US')}`);
+        this.screech.whoosh(Math.min(1, Math.abs(c.speed) / 35));
+      }
       const contacts = this.rearContacts();
       const laying = slide > SKID_SLIDE && c.position.y < 0.5;
       for (let i = 0; i < 2; i++) {
@@ -618,4 +712,4 @@ class SwimDirector {
   }
 }
 
-export { CARELESS_WHISPER, SWIM_STARTS, SQUEEZE_ROUTE, SHOW_SPOT, SwimDirector };
+export { CARELESS_WHISPER, SWIM_STARTS, SQUEEZE_ROUTE, SHOW_SPOT, CloseCalls, SwimDirector };
