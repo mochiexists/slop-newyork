@@ -17,6 +17,10 @@ const CAMERA_PRESETS = [
   { id: 'drone',       name: 'Auto-Director Aerial',     category: 'scenic', fov: 50 }
 ];
 
+const DEFAULT_NEAR = 0.35;
+const SEAT_NEAR = 0.05; // inside a cabin (entity.povEye): the wheel and hands are ~0.4 m from the eye
+const SEAT_BODY_FOLLOW = 0.5; // share of the chassis' pitch & roll the seated view turns with
+
 class CameraSystem {
   constructor(domElement, controllerManager) {
     this.domElement = domElement;
@@ -25,7 +29,7 @@ class CameraSystem {
     this.camera = new THREE.PerspectiveCamera(
       56,
       window.innerWidth / window.innerHeight,
-      0.35,
+      DEFAULT_NEAR,
       60000 // at 1:1 the boroughs & harbor run out ~20-40 km to the fogged horizon (reversed float depth keeps precision)
     );
 
@@ -48,6 +52,7 @@ class CameraSystem {
     this.smoothedSpeed = 0;
     this._desiredPos = new THREE.Vector3();
     this._desiredLook = new THREE.Vector3();
+    this.seatRoll = 0; // see seatView()
 
     this.bindPointerControls();
   }
@@ -230,6 +235,10 @@ class CameraSystem {
       }
 
       case 'pov': {
+        if (entity.povEye) {
+          this.seatView(entity, desiredPos, desiredLook);
+          break;
+        }
         let fwdOffset = 0.35;
         let eyeY = 1.68;
         if (entity.type === 'car') {
@@ -360,8 +369,47 @@ class CameraSystem {
       this.currentLookAt.lerp(desiredLook, k);
     }
 
+    // A seat inside the vehicle has a dashboard and hands within half a metre of the eye
+    const seated = this.activePresetId === 'pov' && Boolean(entity.povEye);
+    const near = seated ? SEAT_NEAR : DEFAULT_NEAR;
+    if (this.camera.near !== near) {
+      this.camera.near = near;
+      this.camera.updateProjectionMatrix();
+    }
+
     this.camera.position.copy(this.currentPos);
     this.camera.lookAt(this.currentLookAt);
+    if (seated) this.camera.rotateZ(-this.seatRoll);
+  }
+
+  // First person from a seat: entity.povEye is the eye in the vehicle's chassis frame (+z forward), entity.povPitch
+  // tips the view down. The eye rides the chassis' heave, pitch and roll (Euler XYZ: roll applied first); the view
+  // takes only part of the pitch and roll, so the cabin moves a little around the driver as it does in a real car.
+  seatView(entity, desiredPos, desiredLook) {
+    const eye = entity.povEye;
+    const chassis = entity.chassisPivot;
+    const pitch = chassis ? chassis.rotation.x : 0;
+    const roll = chassis ? chassis.rotation.z : 0;
+    const lift = chassis ? chassis.position.y : 0;
+    const x = eye.x * Math.cos(roll) - eye.y * Math.sin(roll);
+    const rolledY = eye.x * Math.sin(roll) + eye.y * Math.cos(roll);
+    const y = rolledY * Math.cos(pitch) - eye.z * Math.sin(pitch);
+    const z = rolledY * Math.sin(pitch) + eye.z * Math.cos(pitch);
+    const sin = Math.sin(entity.heading), cos = Math.cos(entity.heading);
+    desiredPos.set(
+      entity.position.x + x * cos + z * sin,
+      entity.position.y + lift + y,
+      entity.position.z - x * sin + z * cos
+    );
+
+    const yaw = entity.heading + this.orbitYawOffset;
+    const down = (entity.povPitch ?? 0) + pitch * SEAT_BODY_FOLLOW + (this.orbitPitchOffset - 0.09);
+    desiredLook.set(
+      desiredPos.x + Math.sin(yaw) * Math.cos(down) * 40.0,
+      desiredPos.y - Math.sin(down) * 40.0,
+      desiredPos.z + Math.cos(yaw) * Math.cos(down) * 40.0
+    );
+    this.seatRoll = roll * SEAT_BODY_FOLLOW;
   }
 }
 
