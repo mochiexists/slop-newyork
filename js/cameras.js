@@ -192,18 +192,21 @@ class CameraSystem {
         const dist = entity.chaseDistance * this.zoomMultiplier * (1 + Math.min(0.25, this.smoothedSpeed * 0.01));
         const height = entity.chaseHeight * this.zoomMultiplier + Math.sin(this.orbitPitchOffset) * dist * 0.85;
         const horizDist = Math.cos(this.orbitPitchOffset) * dist + speedLag;
+        // A drifting car steers the chase camera by its own camera yaw, swung toward the direction of the slide
+        const chaseHeading = entity.cameraYaw ?? entity.heading;
+        const chaseYaw = chaseHeading + this.orbitYawOffset;
 
         desiredPos.set(
-          entity.position.x - Math.sin(totalYaw) * horizDist,
+          entity.position.x - Math.sin(chaseYaw) * horizDist,
           Math.max(0.65, entity.position.y + height),
-          entity.position.z - Math.cos(totalYaw) * horizDist
+          entity.position.z - Math.cos(chaseYaw) * horizDist
         );
 
         const lookUpBias = entity.type === 'helicopter' ? 0.2 : (entity.type === 'car' ? 0.52 : 1.55);
         desiredLook.set(
-          entity.position.x + Math.sin(entity.heading) * 5.2,
+          entity.position.x + Math.sin(chaseHeading) * 5.2,
           entity.position.y + entity.cameraTargetOffset.y + lookUpBias,
-          entity.position.z + Math.cos(entity.heading) * 5.2
+          entity.position.z + Math.cos(chaseHeading) * 5.2
         );
         break;
       }

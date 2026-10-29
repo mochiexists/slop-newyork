@@ -5,8 +5,10 @@ import {
   getIslandBoundsAtZ,
   isTypingInField,
   blockAt,
-  streetZ
+  streetZ,
+  TELEPORT_LOCATIONS
 } from './city-config.js';
+import { M5_DRIFT, stepDriftCar } from './drift-physics.js';
 import { cityUniforms, createCarPaintMaterial, createContactShadowMaterial } from './tsl-materials.js';
 import {
   BODY_SPECS,
@@ -40,6 +42,8 @@ const CAR_DRIVE = {
   rolling: 0.18, drag: 0.0012, coast: 0.6, brake: 9,
   wheelbase: 2.76, grip: 9.5, cornering: 10.5 // Wheelbase (m), tire and steering acceleration limits (m/s²).
 };
+const M5_PAINT = 0x1b4fa8; // BMW Marina Bay Blue metallic
+const SWIM_STEPS_PER_SECOND = 240; // the drift model wants short steps: slip angles change fast in a slide
 const BICYCLE_DRIVE = {
   speed: 19, reverseSpeed: 4.5, acceleration: 9,
   rolling: 0.08, drag: 0.004, coast: 0.2, brake: 7.5 // Backward input is scaled to 0.6, giving 4.5 m/s² braking.
@@ -67,10 +71,14 @@ function driveSpeed(speed, throttle, dt, drive) {
 // Walking surface for the player's pedestrian (its rig samples it around its feet)
 const personGround = (controllers, x, z) => controllers.getGroundHeight(x, z, 'person');
 
+// Half-width & half-length of the drivable cars' collision boxes, by mode
+const CAR_BOXES = { car: [0.86, 2.18], swim: [0.97, 2.52] };
+
 function collisionBody(mode, radius, heading, margin = 0) {
-  const car = mode === 'car';
+  const box = CAR_BOXES[mode];
+  const car = Boolean(box);
   const sin = Math.sin(heading), cos = Math.cos(heading);
-  const hx = 0.86 + margin, hz = 2.18 + margin;
+  const hx = (box ? box[0] : 0) + margin, hz = (box ? box[1] : 0) + margin;
   return {
     car, sin, cos, hx, hz, radius: radius + margin,
     extX: car ? Math.abs(cos) * hx + Math.abs(sin) * hz : radius + margin,
@@ -166,7 +174,7 @@ function createTaxiDoorDecalTexture() {
   return tex;
 }
 
-function createNYLicensePlateTexture() {
+function createNYLicensePlateTexture(number = '7Y48A', footer = 'NYC T&LC') {
   const c = document.createElement('canvas');
   c.width = 256;
   c.height = 128;
@@ -181,9 +189,9 @@ function createNYLicensePlateTexture() {
   ctx.fillText('NEW YORK', 128, 23);
   ctx.fillStyle = '#0d2244';
   ctx.font = '900 48px JetBrains Mono, monospace';
-  ctx.fillText('7Y48A', 128, 82);
+  ctx.fillText(number, 128, 82);
   ctx.font = '700 13px Inter, Arial, sans-serif';
-  ctx.fillText('NYC T&LC', 128, 114);
+  ctx.fillText(footer, 128, 114);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 16;
@@ -195,7 +203,7 @@ class ThirdPersonControllerManager {
     this.scene = scene;
     this.colliders = colliders;
     this._colliderCells = null; // built on first use, see nearColliders()
-    this.activeMode = 'car'; // 'person' | 'car' | 'cyclist' | 'helicopter'
+    this.activeMode = 'car'; // 'person' | 'car' | 'cyclist' | 'helicopter' | 'swim'
 
     this.keys = {
       forward: false,
@@ -210,7 +218,8 @@ class ThirdPersonControllerManager {
       person: this.createPersonEntity(),
       car: this.createCarEntity(),
       cyclist: this.createCyclistEntity(),
-      helicopter: this.createHelicopterEntity()
+      helicopter: this.createHelicopterEntity(),
+      swim: this.createSwimEntity()
     };
 
     Object.values(this.entities).forEach((ent) => {
@@ -333,8 +342,10 @@ class ThirdPersonControllerManager {
       active._riderHidden = false;
       active._posedX = NaN;
     }
-    const car = this.entities.car;
-    if (mode !== 'car' && car?.carState) car.carState.value.x = car.carState.value.w = 0;
+    // Parked cars show no brake or reverse lights
+    for (const car of [this.entities.car, this.entities.swim]) {
+      if (car !== active && car?.carState) car.carState.value.x = car.carState.value.w = 0;
+    }
   }
 
   getActiveEntity() {
@@ -363,10 +374,15 @@ class ThirdPersonControllerManager {
       ent.crowd.begin();
       ent.crowd.add(ent.rig, 0);
       ent.crowd.end();
-    } else if (this.activeMode === 'car') {
+    } else if (ent.type === 'car') {
       ent.prevX = ent.position.x;
       ent.prevZ = ent.position.z;
       ent.vx = ent.vz = ent.angularVel = ent.steerAngle = 0;
+      if (ent.drift) {
+        ent.longAccel = 0;
+        ent.cameraYaw = ent.heading;
+        ent.drift.slipAngle = ent.drift.rearSlide = ent.drift.wheelspin = 0;
+      }
       ent.pitchVel = ent.rollVel = ent.heaveY = ent.heaveVel = 0;
       ent.chassisPivot.rotation.x = ent.chassisPivot.rotation.z = 0;
       ent.chassisPivot.position.y = 0;
@@ -400,10 +416,11 @@ class ThirdPersonControllerManager {
     const margin = heli ? 6000 : 0;
     const entity = this.getActiveEntity();
     // Conservative body cylinders, including the taxi's corners, bicycle wheels and helicopter tail/rotor.
-    const body = { person: [0.48, 1.9], car: [2.4, 1.9], cyclist: [1.0, 1.9], helicopter: [6.2, 3.2] };
+    const body = { person: [0.48, 1.9], car: [2.4, 1.9], swim: [2.75, 1.9], cyclist: [1.0, 1.9], helicopter: [6.2, 3.2] };
+    const footprint = (e) => body[e.mode ?? e.type];
     const others = Object.values(this.entities).filter(e => e !== entity).map(e => ({
-      x: e.position.x, z: e.position.z, radius: body[e.type][0],
-      bottom: e.position.y - (e.type === 'helicopter' ? 0.7 : 0), top: e.position.y + body[e.type][1]
+      x: e.position.x, z: e.position.z, radius: footprint(e)[0],
+      bottom: e.position.y - (e.type === 'helicopter' ? 0.7 : 0), top: e.position.y + footprint(e)[1]
     }));
     const cameraBack = Math.cos(0.09) * entity.chaseDistance;
     const cameraUp = entity.chaseHeight + Math.sin(0.09) * entity.chaseDistance * 0.85;
@@ -423,12 +440,12 @@ class ThirdPersonControllerManager {
       const baseY = heli ? altitude : this.getGroundHeight(p.x, p.z, this.activeMode);
       // Keep other player models out of both the arrival and its default chase view. A corridor also prevents a
       // parked car between camera and character from hiding the character even when the camera itself is outside it.
-      const viewTop = baseY + Math.max(body[entity.type][1], cameraUp);
+      const viewTop = baseY + Math.max(footprint(entity)[1], cameraUp);
       for (const other of others) {
         if (other.bottom > viewTop + 0.3 || other.top < baseY - (heli ? 0.7 : 0) - 0.3) continue;
         const dx = other.x - p.x, dz = other.z - p.z;
         const back = Math.max(0, Math.min(cameraBack, -dx * sinH - dz * cosH));
-        if (Math.hypot(dx + sinH * back, dz + cosH * back) < other.radius + Math.max(body[entity.type][0], 0.5) + 0.1) return false;
+        if (Math.hypot(dx + sinH * back, dz + cosH * back) < other.radius + Math.max(footprint(entity)[0], 0.5) + 0.1) return false;
       }
       for (const c of this.nearColliders(p.x, p.z, reach)) {
         if (buildingContact(c, p.x, baseY, p.z, shape)) return false;
@@ -605,6 +622,106 @@ class ThirdPersonControllerManager {
       cameraTargetOffset: new THREE.Vector3(0, 0.96, 0),
       chaseDistance: 6.9,
       chaseHeight: 2.12
+    };
+  }
+
+  // =========================================================================
+  // 2b. SWIMMING (BMW M5 SUPER SALOON WITH DRIFT PHYSICS, see drift-physics.js)
+  // =========================================================================
+  createSwimEntity() {
+    const root = new THREE.Group();
+    root.name = 'PlayerSwimmingM5';
+
+    const chassisPivot = new THREE.Group();
+    root.add(chassisPivot);
+
+    const spec = BODY_SPECS.m5;
+    const paint = createLoftedCarMaterial(spec, M5_PAINT);
+    const body = new THREE.Mesh(buildCarGeometry(spec, false), paint);
+    chassisPivot.add(body);
+
+    const plateMat = new THREE.MeshStandardNodeMaterial({ map: createNYLicensePlateTexture('SWIM', 'EMPIRE STATE'), roughness: 0.28 });
+    for (const front of [true, false]) {
+      const y = spec.plates[front ? 0 : 1];
+      const plate = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.14, 0.008), plateMat);
+      plate.position.set(0, y, carTipZ(spec, y, front) + (front ? 0.003 : -0.003));
+      plate.rotation.x = Math.atan((carTipZ(spec, y + 0.07, front) - carTipZ(spec, y - 0.07, front)) / 0.14);
+      chassisPivot.add(plate);
+    }
+
+    // Quad tailpipes under the rear bumper, two either side
+    const pipeMat = new THREE.MeshStandardNodeMaterial({ color: 0x2b2e33, metalness: 0.92, roughness: 0.28, side: THREE.DoubleSide });
+    const pipeGeo = new THREE.CylinderGeometry(0.047, 0.05, 0.16, 16, 1, true).rotateX(Math.PI * 0.5);
+    const pipeY = 0.3;
+    const pipeZ = carTipZ(spec, pipeY, false) + 0.03;
+    for (const x of [-0.56, -0.43, 0.43, 0.56]) {
+      const pipe = new THREE.Mesh(pipeGeo, pipeMat);
+      pipe.position.set(x, pipeY, pipeZ);
+      chassisPivot.add(pipe);
+    }
+
+    const leftWheelGeo = buildSteerableWheelGeo(spec, -1);
+    const rightWheelGeo = buildSteerableWheelGeo(spec, 1);
+    const wheelMat = createCarWheelMaterial({ wheelRadius: spec.wheelRadius });
+    const wheels = [];
+    for (const [side, z, isFront] of [[-1, spec.wheelZ, true], [1, spec.wheelZ, true], [-1, -spec.wheelZ, false], [1, -spec.wheelZ, false]]) {
+      const steerPivot = new THREE.Group();
+      steerPivot.position.set(side * spec.wheelX, spec.wheelRadius, z);
+      const tire = new THREE.Mesh(side < 0 ? leftWheelGeo : rightWheelGeo, wheelMat);
+      steerPivot.add(tire);
+      root.add(steerPivot);
+      wheels.push({ steerPivot, tire, isFront });
+    }
+
+    const shadowGeo = new THREE.PlaneGeometry(2.3, 5.45);
+    shadowGeo.rotateX(-Math.PI * 0.5);
+    const shadow = new THREE.Mesh(shadowGeo, createContactShadowMaterial());
+    shadow.position.y = 0.02;
+    shadow.renderOrder = 998;
+    root.add(shadow);
+
+    const headLights = [];
+    for (const side of [-1, 1]) {
+      const spot = createVehicleHeadlight();
+      placeVehicleHeadlight(spot, spec, side);
+      chassisPivot.add(spot, spot.target);
+      headLights.push(spot);
+    }
+
+    this.scene.add(root);
+
+    // Parked on 7th Ave just north of Times Square, facing south down the avenue: the opening of the Squeeze clip
+    const start = TELEPORT_LOCATIONS.timessq;
+    return {
+      type: 'car',
+      mode: 'swim',
+      label: 'BMW M5 · Swimming',
+      mesh: root,
+      chassisPivot,
+      carState: paint.userData.carState,
+      headLights,
+      wheels,
+      position: new THREE.Vector3(start.x, 0, start.z - 40),
+      prevX: start.x,
+      prevZ: start.z - 40,
+      heading: start.heading,
+      cameraYaw: start.heading,
+      speed: 0,
+      vx: 0,
+      vz: 0,
+      angularVel: 0,
+      longAccel: 0,
+      pitchVel: 0,
+      rollVel: 0,
+      heaveY: 0,
+      heaveVel: 0,
+      lastCollisionSpark: null,
+      steerAngle: 0,
+      wheelSpin: 0,
+      drift: { slipAngle: 0, rearSlide: 0, wheelspin: 0, steer: 0, loadFront: 0, loadRear: 0, lateralAccel: 0 },
+      cameraTargetOffset: new THREE.Vector3(0, 0.92, 0),
+      chaseDistance: 7.6,
+      chaseHeight: 2.05
     };
   }
 
@@ -951,7 +1068,7 @@ class ThirdPersonControllerManager {
           const sin = carEntity ? sinH : Math.sin(entity.heading);
           const cos = carEntity ? cosH : Math.cos(entity.heading);
           const approachSpeed = -((sin * entity.speed + (entity.vx || 0)) * nx + (cos * entity.speed + (entity.vz || 0)) * nz);
-          const support = carEntity ? Math.abs(nx * cos - nz * sin) * 0.86 + Math.abs(nx * sin + nz * cos) * 2.18 : radius;
+          const support = carEntity ? Math.abs(nx * cos - nz * sin) * body.hx + Math.abs(nx * sin + nz * cos) * body.hz : radius;
           this.reportCollision(entity, c, 'building', pos.x - nx * support, pos.y + (heli ? 1.1 : 0.56), pos.z - nz * support,
             nx, 0, nz, approachSpeed);
         }
@@ -1093,6 +1210,8 @@ class ThirdPersonControllerManager {
 
     if (this.activeMode === 'car') {
       this.updateCar(dt, elapsed);
+    } else if (this.activeMode === 'swim') {
+      this.updateSwim(dt);
     } else if (this.activeMode === 'cyclist') {
       this.updateCyclist(dt, elapsed);
     } else if (this.activeMode === 'helicopter') {
@@ -1108,8 +1227,8 @@ class ThirdPersonControllerManager {
     // Modulate clustered vehicle & bike lights by time of day (off during Midday & Golden Hour; fade in at Dusk & Night)
     const glow = cityUniforms && cityUniforms.uInteriorGlow ? cityUniforms.uInteriorGlow.value : 0.48;
     const beamScale = Math.min(1.28, Math.max(0.0, (glow - 0.60) * 1.45));
-    const car = this.entities.car;
-    if (car.headLights) {
+    for (const car of [this.entities.car, this.entities.swim]) {
+      if (!car.headLights) continue;
       for (const spot of car.headLights) {
         // Accelerating does not change the headlamp output or range.
         spot.intensity = HEADLIGHTS.intensity * beamScale;
@@ -1246,6 +1365,65 @@ class ThirdPersonControllerManager {
       if (w.isFront) {
         w.steerPivot.rotation.y = c.steerAngle;
       }
+    }
+  }
+
+  // Swimming: the M5 on the drift model. W throttle, S brakes then reverses, A/D steer, Space/E handbrake.
+  updateSwim(dt) {
+    if (dt <= 0) return;
+    const c = this.entities.swim;
+    const forward = Number(this.keys.forward) || 0;
+    const backward = Number(this.keys.backward) || 0;
+    const input = this._swimInput ??= { throttle: 0, brake: 0, reverse: 0, steer: 0, handbrake: 0 };
+    const rollingBack = c.speed < -0.5;
+    input.throttle = rollingBack ? 0 : forward;
+    input.brake = rollingBack ? forward : c.speed > 0.5 ? backward : 0;
+    input.reverse = c.speed <= 0.5 ? backward : 0;
+    input.steer = (Number(this.keys.left) || 0) - (Number(this.keys.right) || 0);
+    input.handbrake = Number(this.keys.up) || 0;
+
+    const prevX = c.position.x;
+    const prevZ = c.position.z;
+    c.prevX = prevX;
+    c.prevZ = prevZ;
+    const steps = Math.ceil(dt * SWIM_STEPS_PER_SECOND);
+    const step = dt / steps;
+    for (let i = 0; i < steps; i++) {
+      const telemetry = stepDriftCar(c, input, step, M5_DRIFT, c.drift);
+      this.resolveHorizontalCollision(c.position, 1.35, c);
+
+      // Squat under power, dive under braking, lean out of the corner; collisions kick the same springs
+      const targetPitch = -Math.max(-1, Math.min(1, c.longAccel / 9)) * 0.03;
+      const targetRoll = Math.max(-0.07, Math.min(0.07, telemetry.lateralAccel * 0.009));
+      c.pitchVel += ((targetPitch - c.chassisPivot.rotation.x) * 68 - c.pitchVel * 11.2) * step;
+      c.rollVel += ((targetRoll - c.chassisPivot.rotation.z) * 68 - c.rollVel * 11.2) * step;
+      c.chassisPivot.rotation.x = Math.max(-0.22, Math.min(0.22, c.chassisPivot.rotation.x + c.pitchVel * step));
+      c.chassisPivot.rotation.z = Math.max(-0.26, Math.min(0.26, c.chassisPivot.rotation.z + c.rollVel * step));
+      c.heaveVel += (-c.heaveY * 85 - c.heaveVel * 12) * step;
+      c.heaveY = Math.max(-0.08, Math.min(0.14, c.heaveY + c.heaveVel * step));
+    }
+    c.position.y = this.getGroundHeight(c.position.x, c.position.z, 'swim');
+    c.chassisPivot.position.y = c.heaveY;
+
+    if (c.carState) {
+      c.carState.value.x = input.brake > 0 || input.handbrake > 0 ? 1 : 0;
+      c.carState.value.w = c.speed < -0.2 ? 1 : 0;
+    }
+
+    // The chase camera swings out with the slide, so a drift is seen from the side rather than from straight behind
+    const cameraTarget = c.heading + c.drift.slipAngle * 0.6;
+    const turn = Math.atan2(Math.sin(cameraTarget - c.cameraYaw), Math.cos(cameraTarget - c.cameraYaw));
+    c.cameraYaw += turn * (1 - Math.exp(-dt * 5));
+
+    // Front wheels roll with the ground; the driven rears spin up with wheelspin and stop under the handbrake
+    const forwardDist = (c.position.x - prevX) * Math.sin(c.heading) + (c.position.z - prevZ) * Math.cos(c.heading);
+    const roll = forwardDist / BODY_SPECS.m5.wheelRadius;
+    c.wheelSpin = (c.wheelSpin + Math.sign(roll) * Math.min(Math.abs(roll), 0.48)) % (Math.PI * 2);
+    const rearRoll = input.handbrake > 0.05 ? 0 : roll + c.drift.wheelspin * dt * 40;
+    c.rearWheelSpin = ((c.rearWheelSpin || 0) + Math.sign(rearRoll) * Math.min(Math.abs(rearRoll), 0.48)) % (Math.PI * 2);
+    for (const w of c.wheels) {
+      w.tire.rotation.x = w.isFront ? c.wheelSpin : c.rearWheelSpin;
+      if (w.isFront) w.steerPivot.rotation.y = c.steerAngle;
     }
   }
 

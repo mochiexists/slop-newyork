@@ -148,7 +148,7 @@ class GamepadControls {
     if (recenter) this.camera.resetOrbit();
 
     const mode = this.controller.activeMode;
-    const driving = mode === 'car' || mode === 'cyclist';
+    const driving = mode === 'car' || mode === 'swim' || mode === 'cyclist';
     const movement = driving ? { x: steeringAxis(pad.axes?.[0]), y: 0 } : stick(pad, 0);
     const look = stick(pad, 2);
     let drive = -movement.y;
@@ -162,7 +162,9 @@ class GamepadControls {
     this.controller.setGamepadInput('backward', Math.max(0, -drive));
     this.controller.setGamepadInput('left', Math.max(0, -movement.x));
     this.controller.setGamepadInput('right', Math.max(0, movement.x));
-    this.controller.setGamepadInput('up', mode === 'person' ? Number(Boolean(held(0))) : Math.max(0, vertical));
+    // A jumps on foot and pulls the handbrake when swimming
+    const aButton = mode === 'person' || mode === 'swim';
+    this.controller.setGamepadInput('up', aButton ? Number(Boolean(held(0))) : Math.max(0, vertical));
     this.controller.setGamepadInput('down', Math.max(0, -vertical));
     const zoom = Number(Boolean(held(13))) - Number(Boolean(held(12)));
     this.camera.applyGamepadInput(look.x, look.y, zoom, Number.isFinite(dt) ? Math.max(0, Math.min(0.1, dt)) : 0);

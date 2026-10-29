@@ -57,6 +57,8 @@ const CAR_KINDS = {
 
 // Retire distant actors even when looking their way: keeping them indefinitely starves upcoming streets.
 // Replacements may enter the far view, but nearby visible roads and sidewalks are protected from pop-in.
+// Player half-width & half-length against traffic, by mode (the swimming M5 is bigger than the taxi)
+const PLAYER_BOXES = { person: [0.32, 0.32], cyclist: [0.35, 0.85], car: [0.86, 2.18], swim: [0.97, 2.52] };
 const VEHICLE_RADIUS = 380;
 const NEAR_RADIUS = 350;
 const VEHICLE_SPAWN_DISTANCE = 250;
@@ -1903,8 +1905,9 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
       player.vx = player.fx * speed + (playerEntity.vx || 0);
       player.vz = player.fz * speed + (playerEntity.vz || 0);
     }
-    player.halfW = activeMode === 'cyclist' ? 0.35 : activeMode === 'person' ? 0.32 : 0.86;
-    player.halfL = activeMode === 'cyclist' ? 0.85 : activeMode === 'person' ? 0.32 : 2.18;
+    const playerBox = PLAYER_BOXES[activeMode] || PLAYER_BOXES.car;
+    player.halfW = playerBox[0];
+    player.halfL = playerBox[1];
 
     // 1. Cars & buses
     // Limit attempted placements, not just successes, and rotate through the pool so an awkward location
