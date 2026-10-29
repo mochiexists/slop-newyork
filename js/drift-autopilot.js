@@ -420,7 +420,8 @@ const DRIFT_CIRCLE = {
   speedRate: 1.1, // 1/s easing of speed, angle and radius toward their targets
   slipRate: 1.8,
   radiusRate: 0.9,
-  counterSteer: 0.85 // front wheels follow the slide by this share of the drift angle
+  counterSteer: 0.6 // front wheels follow the slide by this share of the drift angle (about 25° at 42°, as measured
+  // on a held 13 m circle: Velenis et al. 2011)
 };
 
 class DriftCircle {
