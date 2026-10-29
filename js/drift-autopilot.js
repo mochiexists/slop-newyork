@@ -196,7 +196,20 @@ class DriftAutopilot {
 
     const oncoming = band.centre !== null && band.centre !== undefined ? band.centre : Infinity;
     let best = null;
+    const near = this._near ??= [];
+    const overshoot = carLatVel * Math.abs(carLatVel) / (2 * o.lateralAccel); // where its sideways speed carries it
     for (let y = band.right; y <= band.left + 1e-6; y += o.gapStep) {
+      // Only the cars this move could come near: across the street, the move spans the car's line to y (plus any
+      // overshoot); a car spans where it drifts to over the look-ahead, plus the passing reach
+      const low = Math.min(carLat, y, carLat + overshoot), high = Math.max(carLat, y, carLat + overshoot);
+      let nearCount = 0;
+      for (let i = 0; i < count; i++) {
+        const ob = seen[i];
+        const drift = ob.vLateral * o.planTime;
+        if (ob.lateral + Math.max(0, drift) + ob.reach > low && ob.lateral + Math.min(0, drift) - ob.reach < high) {
+          near[nearCount++] = ob;
+        }
+      }
       for (const accel of o.pedals) {
         // Fly the plan: speed eases toward the pedal's, position slides across at the flick rate
         let travelled = 0, speed = u, lat = carLat, latVel = carLatVel, hitAt = Infinity, closest = Infinity;
@@ -207,8 +220,8 @@ class DriftAutopilot {
           travelled += speed * o.planStep;
           latVel = slideAcross(lat, latVel, y, o.planStep, o.lateralAccel, lateralSpeed);
           lat += latVel * o.planStep;
-          for (let i = 0; i < count; i++) {
-            const ob = seen[i];
+          for (let i = 0; i < nearCount; i++) {
+            const ob = near[i];
             const gapAlong = Math.abs(ob.along + ob.vAlong * t - travelled) - ob.length;
             const gapAcross = Math.abs(ob.lateral + ob.vLateral * t - lat) - ob.reach;
             if (gapAlong < 0 && gapAcross < 0) {
@@ -227,8 +240,8 @@ class DriftAutopilot {
           // and the speed it carries into it. And a plan is only safe if it ends with room to brake to the speed of the car ahead in its lane: otherwise
           // it is a trap a step past the look-ahead (closing at 30 mph on a queue)
           let open = o.scanAhead, trapped = false;
-          for (let i = 0; i < count; i++) {
-            const ob = seen[i];
+          for (let i = 0; i < nearCount; i++) {
+            const ob = near[i];
             const ahead = ob.along + ob.vAlong * o.planTime - travelled - ob.length;
             if (ahead > -1 && Math.abs(ob.lateral + ob.vLateral * o.planTime - lat) < ob.reach) {
               open = Math.min(open, Math.max(0, ahead));
