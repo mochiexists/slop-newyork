@@ -20,12 +20,14 @@ const M5_DRIFT = {
   // transfer) and the handbrake are what step the tail out.
   frontGrip: 1.14,
   rearGrip: 1.24,
-  tractionGrip: 1.3, // longitudinal friction of the rear tires: the friction circle is an ellipse
+  tractionGrip: 1.75, // longitudinal friction of the rear tires: the friction circle is an ellipse
+  launchGrip: 1.87, // traction when straight and not sliding: 0-100 km/h in 2.8 s, a tuned M5's launch; steering or
+  // a slide drops it back to tractionGrip
   slideGrip: 0.86, // share of peak force left far past the peak (the curve keeps sliding cars sliding)
   peakSlip: 8 * RAD, // slip angle of the peak lateral force
-  power: 455000, // W at the wheels
-  launchForce: 2.15, // × weight: more than the rear tires hold, so full throttle from low speed spins them
-  topSpeed: 85, // m/s: the 305 km/h limiter
+  power: 1150000, // W at the wheels: a cartoon-tuned, de-limited M5 rather than the showroom 535 kW
+  launchForce: 3.4, // × weight: more than the rear tires hold, so full throttle from low speed spins them
+  topSpeed: 98, // m/s: 220 mph
   reverseSpeed: 9,
   dragArea: 0.46, // ½ ρ Cd A
   rolling: 0.012, // × weight
@@ -61,10 +63,14 @@ function driveForce(speed, throttle, params) {
 
 /**
  * Advances the car by one short step (call it at 120 Hz or more).
- * input: throttle 0..1, brake 0..1, reverse 0..1, steer -1..1 (+ left), handbrake 0..1.
+ * input: throttle 0..1, brake 0..1, reverse 0..1, steer -1..1 (+ left), handbrake 0..1, burnout 0..1 (line lock:
+ * front brakes hold while the throttle spins the rears), assist 0..1 (counter-steer and slide limit; default 1, the
+ * autopilot turns it off for donuts).
  * Returns the step's telemetry (the same object each call): body slip angle, rear slide speed, wheelspin and loads.
  */
 function stepDriftCar(car, input, dt, params = M5_DRIFT, out = stepDriftCar.telemetry) {
+  const assistLevel = input.assist ?? 1;
+  const burnout = input.burnout > 0 ? 1 : 0;
   const sin = Math.sin(car.heading), cos = Math.cos(car.heading);
   let u = car.speed;
   let v = car.vx * cos - car.vz * sin;
@@ -81,7 +87,7 @@ function stepDriftCar(car, input, dt, params = M5_DRIFT, out = stepDriftCar.tele
   const speedAbs = Math.abs(u);
   const driverLock = params.highSpeedSteer + (params.maxSteer - params.highSpeedSteer) / (1 + (speedAbs / 14) ** 2);
   const bodySlip = speedAbs > 1 ? Math.atan2(v, speedAbs) : 0;
-  const assist = u > 3 ? params.counterSteer * bodySlip : 0;
+  const assist = u > 3 ? params.counterSteer * bodySlip * assistLevel : 0;
   const target = Math.max(-params.maxSteer, Math.min(params.maxSteer, input.steer * driverLock + assist));
   const steerStep = params.steerRate * dt;
   car.steerAngle += Math.max(-steerStep, Math.min(steerStep, target - car.steerAngle));
@@ -114,7 +120,8 @@ function stepDriftCar(car, input, dt, params = M5_DRIFT, out = stepDriftCar.tele
   // Rear tires: drive and lateral force share a friction ellipse. Asking for more traction than it holds spins the
   // wheels; a spinning (or locked) tire keeps only its sliding grip.
   const rearMax = params.rearGrip * loadRear;
-  const tractionMax = params.tractionGrip * loadRear;
+  const straight = Math.max(0, Math.min(1, 1 - Math.abs(bodySlip) / (8 * RAD) - Math.abs(input.steer)));
+  const tractionMax = (params.tractionGrip + (params.launchGrip - params.tractionGrip) * straight) * loadRear;
   const lateralShare = (long) => Math.sqrt(Math.max(0, 1 - (long / tractionMax) ** 2));
   let wheelspin = 0;
   let rearLat;
@@ -151,7 +158,7 @@ function stepDriftCar(car, input, dt, params = M5_DRIFT, out = stepDriftCar.tele
   // Past the slip limit, rotation that would widen the slide is pulled back (the handbrake overrides it for spins).
   const excess = Math.max(0, Math.abs(bodySlip) - params.slipLimit);
   const widening = r * bodySlip < 0 ? 1 : 0;
-  const stabilise = -Math.sign(r) * excess * params.stability * widening * (1 - handbrake);
+  const stabilise = -Math.sign(r) * excess * params.stability * widening * (1 - handbrake) * assistLevel;
 
   const longAccel = forceX / params.mass;
   // Body-frame equations of motion (semi-implicit): the r·v and r·u terms turn the velocity with the car.
@@ -162,9 +169,16 @@ function stepDriftCar(car, input, dt, params = M5_DRIFT, out = stepDriftCar.tele
   // A stopped car must not creep from rounding: brakes and rolling resistance hold it still.
   const holding = !throttle && (input.brake > 0 || handbrake > 0);
   if (holding && Math.abs(u) < 0.3) u = 0;
+  // Line lock: the front brakes hold the car where it stands while the rear tires spin
+  if (burnout && Math.abs(u) < 2) {
+    u = 0;
+    wheelspin = 1;
+  }
   // At a crawl the tire model loses meaning; settle toward rolling without slip so the car can't spin in place.
-  if (Math.abs(u) < 1.5) {
-    const settle = 1 - Math.exp(-dt * 6 * (1 - Math.abs(u) / 1.5));
+  // Spinning rear tires (a donut pivots with little forward speed) keep their rotation.
+  const crawl = Math.hypot(u, v);
+  if (crawl < 1.5 && !wheelspin) {
+    const settle = 1 - Math.exp(-dt * 6 * (1 - crawl / 1.5));
     v -= v * settle;
     r += (u * Math.tan(delta) / wheelbase - r) * settle;
   }
@@ -180,7 +194,8 @@ function stepDriftCar(car, input, dt, params = M5_DRIFT, out = stepDriftCar.tele
   car.position.z += (nextCos * u - nextSin * v) * dt;
 
   out.slipAngle = speedAbs > 2 ? Math.atan2(v, Math.abs(u)) : 0;
-  out.rearSlide = Math.abs(v - b * r) + wheelspin * Math.max(4, speedAbs * 0.5) + handbrake * speedAbs * 0.6;
+  out.rearSlide = Math.abs(v - b * r) + wheelspin * Math.max(4, speedAbs * 0.5) + handbrake * speedAbs * 0.6
+    + burnout * 16;
   out.wheelspin = wheelspin;
   out.steer = delta;
   out.loadFront = loadFront;

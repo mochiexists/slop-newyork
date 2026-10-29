@@ -44,6 +44,7 @@ const CAR_DRIVE = {
 };
 const M5_PAINT = 0x1b4fa8; // BMW Marina Bay Blue metallic
 const SWIM_STEPS_PER_SECOND = 240; // the drift model wants short steps: slip angles change fast in a slide
+const BURNOUT_SPEED = 3; // m/s below which gas + brake together is a burnout
 const BICYCLE_DRIVE = {
   speed: 19, reverseSpeed: 4.5, acceleration: 9,
   rolling: 0.08, drag: 0.004, coast: 0.2, brake: 7.5 // Backward input is scaled to 0.6, giving 4.5 m/s² braking.
@@ -1374,11 +1375,14 @@ class ThirdPersonControllerManager {
     const c = this.entities.swim;
     const forward = Number(this.keys.forward) || 0;
     const backward = Number(this.keys.backward) || 0;
-    const input = this._swimInput ??= { throttle: 0, brake: 0, reverse: 0, steer: 0, handbrake: 0 };
+    const input = this._swimInput ??= { throttle: 0, brake: 0, reverse: 0, steer: 0, handbrake: 0, burnout: 0, assist: 1 };
     const rollingBack = c.speed < -0.5;
+    // Gas and brake together near a standstill is a burnout: line lock holds the fronts, the rears spin
+    const burnout = forward > 0 && backward > 0 && Math.abs(c.speed) < BURNOUT_SPEED;
+    input.burnout = burnout ? 1 : 0;
     input.throttle = rollingBack ? 0 : forward;
-    input.brake = rollingBack ? forward : c.speed > 0.5 ? backward : 0;
-    input.reverse = c.speed <= 0.5 ? backward : 0;
+    input.brake = burnout ? 0 : rollingBack ? forward : c.speed > 0.5 ? backward : 0;
+    input.reverse = !burnout && c.speed <= 0.5 ? backward : 0;
     input.steer = (Number(this.keys.left) || 0) - (Number(this.keys.right) || 0);
     input.handbrake = Number(this.keys.up) || 0;
 
@@ -1386,10 +1390,12 @@ class ThirdPersonControllerManager {
     const prevZ = c.position.z;
     c.prevX = prevX;
     c.prevZ = prevZ;
+    // The AI driver (swim-mode.js) either rewrites the input, or flies a choreographed move itself ('scripted')
+    const scripted = this.swimPilot?.(c, dt, input) === 'scripted';
     const steps = Math.ceil(dt * SWIM_STEPS_PER_SECOND);
     const step = dt / steps;
     for (let i = 0; i < steps; i++) {
-      const telemetry = stepDriftCar(c, input, step, M5_DRIFT, c.drift);
+      const telemetry = scripted ? c.drift : stepDriftCar(c, input, step, M5_DRIFT, c.drift);
       this.resolveHorizontalCollision(c.position, 1.35, c);
 
       // Squat under power, dive under braking, lean out of the corner; collisions kick the same springs

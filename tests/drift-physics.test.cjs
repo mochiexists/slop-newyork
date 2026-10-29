@@ -33,14 +33,14 @@ test('the tire curve peaks at its slip angle and keeps sliding grip past it', ()
   assert.equal(tireCurve(-0.3, M5_DRIFT), -tireCurve(0.3, M5_DRIFT));
 });
 
-test('full throttle reaches 100 km/h in M5 time and holds the 305 km/h limiter', () => {
+test('full throttle reaches 100 km/h in tuned-M5 time (2.8 s) and holds the limiter', () => {
   const c = car();
   let t = 0;
   while (c.speed < 100 / 3.6 && t < 10) {
     stepDriftCar(c, { ...idle, throttle: 1 }, DT);
     t += DT;
   }
-  assert.ok(t > 3 && t < 5.5, `0-100 km/h in ${t.toFixed(2)} s`);
+  assert.ok(t > 2.7 && t < 2.9, `0-100 km/h in ${t.toFixed(2)} s`);
   assert.equal(c.heading, 0);
   drive(c, 40, { ...idle, throttle: 1 });
   assert.ok(Math.abs(c.speed - M5_DRIFT.topSpeed) < 0.5, `top speed ${c.speed}`);
@@ -57,7 +57,8 @@ test('braking stops from 100 km/h in under 40 m and the brake holds a stopped ca
 
 test('plain cornering grips instead of sliding', () => {
   const c = car(15);
-  const slips = drive(c, 3, { ...idle, throttle: 0.3, steer: 0.5 });
+  // A gentle 12% of the tuned engine's power: enough to hold speed through the corner without lighting the rears
+  const slips = drive(c, 3, { ...idle, throttle: 0.12, steer: 0.5 });
   assert.ok(Math.max(...slips.map(Math.abs)) < 6 * RAD, 'part-throttle corner stays under 6° of slip');
   assert.ok(c.heading > 1, 'the car turns left');
 
@@ -89,6 +90,18 @@ test('power oversteer from low speed is caught by the counter-steer assist', () 
   assert.ok(Math.min(...slips) < -25 * RAD, 'full throttle at full lock steps the tail out');
   assert.ok(Math.min(...slips) > -70 * RAD, 'without spinning round');
   assert.ok(c.speed > 8, 'and keeps driving');
+});
+
+test('a burnout spins the rears on the spot, and letting the brake go launches the car', () => {
+  const c = car();
+  let tel;
+  for (let t = 0; t < 2; t += DT) tel = stepDriftCar(c, { ...idle, throttle: 1, burnout: 1 }, DT);
+  assert.equal(c.speed, 0);
+  assert.equal(c.position.z, 0);
+  assert.equal(tel.wheelspin, 1);
+  assert.ok(tel.rearSlide > 10, 'enough tire slide for smoke and rubber');
+  drive(c, 1, { ...idle, throttle: 1 });
+  assert.ok(c.speed > 7, `launched to ${c.speed.toFixed(1)} m/s`);
 });
 
 test('reverse is limited and steering a stopped car does not spin it', () => {

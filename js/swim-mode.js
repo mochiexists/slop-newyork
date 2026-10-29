@@ -97,16 +97,19 @@ class TireSmoke {
     scene.add(this.mesh);
   }
 
-  emit(x, y, z, vx, vz, strength) {
+  // (x, y, z) the tire, (vx, vz) the car's velocity, (fx, fz) its forward direction, side ±1 the tire's side
+  emit(x, y, z, vx, vz, strength, fx, fz, side) {
     const p = this.particles[this.next];
     this.next = (this.next + 1) % SMOKE_COUNT;
     p.x = x + (Math.random() - 0.5) * 0.3;
     p.y = y + 0.25;
     p.z = z + (Math.random() - 0.5) * 0.3;
-    // Smoke is left behind by the tire: a fraction of the car's velocity, plus a little scatter
-    p.vx = vx * 0.12 + (Math.random() - 0.5) * 1.2;
+    // A spinning tire throws its smoke back and out to its side; a little of the car's velocity carries on with it
+    const throwBack = 2 + Math.random() * 3.5;
+    const throwOut = side * (0.6 + Math.random() * 1.6);
+    p.vx = vx * 0.12 - fx * throwBack + fz * throwOut + (Math.random() - 0.5) * 0.8;
     p.vy = 0.5 + Math.random() * 0.6;
-    p.vz = vz * 0.12 + (Math.random() - 0.5) * 1.2;
+    p.vz = vz * 0.12 - fz * throwBack - fx * throwOut + (Math.random() - 0.5) * 0.8;
     p.age = 0;
     p.life = 1.2 + strength * 1.4 + Math.random() * 0.6;
     p.size = 0.5 + strength * 0.5;
@@ -135,8 +138,11 @@ class TireSmoke {
       p.z += p.vz * dt;
       const t = Math.min(1, p.age / p.life);
       const size = p.size * (1 + t * 2.6);
-      // Fade in over the first moments so a puff doesn't pop, then thin out as it spreads
-      this.alpha.array[i] = 0.2 * Math.min(1, p.age / 0.18) * (1 - t) ** 1.6;
+      // Fade in over the first moments so a puff doesn't pop, then thin out as it spreads. Puffs reaching the camera
+      // fade away, or a burnout fills the screen with white.
+      const toCamera = Math.hypot(p.x - camera.position.x, p.y - camera.position.y, p.z - camera.position.z);
+      const nearFade = Math.min(1, Math.max(0, (toCamera - size * 0.5 - 1) / 4));
+      this.alpha.array[i] = 0.2 * Math.min(1, p.age / 0.18) * (1 - t) ** 1.6 * nearFade;
       this._position.set(p.x, p.y, p.z);
       this._scale.set(size, size, size);
       this.mesh.setMatrixAt(i, this._matrix.compose(this._position, camera.quaternion, this._scale));
@@ -503,10 +509,12 @@ class SwimDirector {
       if (slide > SMOKE_SLIDE) {
         const strength = Math.min(1, (slide - SMOKE_SLIDE) / 15);
         this.smokeBudget += dt * (18 + strength * 55);
+        const fx = Math.sin(c.heading), fz = Math.cos(c.heading);
         while (this.smokeBudget >= 1) {
           this.smokeBudget -= 1;
-          const p = contacts[Math.random() < 0.5 ? 0 : 1];
-          this.smoke.emit(p.x, c.position.y, p.z, worldVX, worldVZ, strength);
+          const wheel = Math.random() < 0.5 ? 0 : 1;
+          const p = contacts[wheel];
+          this.smoke.emit(p.x, c.position.y, p.z, worldVX, worldVZ, strength, fx, fz, wheel ? 1 : -1);
         }
       } else {
         this.smokeBudget = 0;
