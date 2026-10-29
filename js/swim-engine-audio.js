@@ -2,8 +2,11 @@
 // by the engine model in swim-engine.js, with the throttle opening the sound up, the limiter's bounce, shift cuts,
 // overrun crackles, a turbo whistle and a blow-off flutter on lift. The recordings are fetched by
 // tools/fetch-m3-sound.sh and never committed; until (or unless) they load, the same voice runs on the synthesized
-// six-cylinder loops from audio-synthesis.js. It is a motor voice like the others (update/dispose) plus tick(),
-// which runs the engine at frame rate so shifts and the limiter don't wait for the 10 Hz ambience update.
+// six-cylinder loops from audio-synthesis.js. A GTA V sound mod decoded by tools/extract-m5-mod-sound.py (also never
+// committed) adds an engine to swap in for the M3 (a V10's granular banks, stitched into accel and decel loops) and
+// pops, burbles and bangs that layer over either engine's crackle. It is a motor voice like the others
+// (update/dispose) plus tick(), which runs the engine at frame rate so shifts and the limiter don't wait for the 10 Hz
+// ambience update.
 
 import { setControlRate } from './audio-synthesis.js';
 import { M3_ENGINE, createEngineState, stepEngine } from './swim-engine.js';
@@ -19,9 +22,51 @@ const M3_CLIPS = {
   crackle: 'crackle.wav'
 };
 
+// What tools/extract-m5-mod-sound.py decodes from a GTA V sound mod (Azerrty's "M5 Sound Mod"), never committed:
+// overrun one-shots layered over either engine's crackle...
+const M5_MOD_SHOTS = {
+  folder: 'assets/audio/m5mod/',
+  pops: ['pop-1.wav', 'pop-2.wav', 'pop-3.wav', 'pop-4.wav', 'pop-5.wav'],
+  burbles: ['burble-1.wav', 'burble-2.wav', 'burble-3.wav', 'burble-4.wav', 'burble-5.wav', 'burble-6.wav', 'burble-7.wav'],
+  bangs: ['bang-1.wav', 'bang-2.wav', 'bang-3.wav']
+};
+// ...and the engine voice the M3's can be swapped for (audio-system.js): steady loops stitched from the mod's granular
+// V10 banks, an accel set on the throttle and a decel set off it. A loop's rpm is its grain rate (Hz) times 100; the
+// recordings span less than the engine model revs through, so pitchRange maps the model's idle to the idle loop and
+// its limiter to the top loops.
+const M5_MOD_ENGINE_CLIPS = {
+  folder: 'assets/audio/m5mod/engine/',
+  loops: [
+    { file: 'idle.wav', rpm: 1060 },
+    { file: 'accel-1.wav', rpm: 1600 },
+    { file: 'accel-2.wav', rpm: 2400 },
+    { file: 'accel-3.wav', rpm: 3300 },
+    { file: 'accel-4.wav', rpm: 4200 },
+    { file: 'accel-5.wav', rpm: 5100 },
+    { file: 'accel-6.wav', rpm: 6000 }
+  ],
+  decelLoops: [
+    { file: 'idle.wav', rpm: 1060 },
+    { file: 'decel-1.wav', rpm: 2300 },
+    { file: 'decel-2.wav', rpm: 3200 },
+    { file: 'decel-3.wav', rpm: 4200 },
+    { file: 'decel-4.wav', rpm: 5100 },
+    { file: 'decel-5.wav', rpm: 6000 }
+  ],
+  pitchRange: [1060, 6000],
+  crackle: null
+};
+
 const LOOP_RMS = 0.16; // every loop is levelled to this, so the crossfade doesn't jump in loudness
 const CRACKLE_PEAK = 0.9;
-const LOOP_SWAP_TIME = 0.25; // s to fade from the synthesized loops to the recordings once they arrive
+const MOD_SHOT_PEAK = 0.9;
+const MOD_LAYER_LEVEL = 0.6; // the mod's one-shots sit under the M3 crackle
+const MOD_BANG_LIFT = 0.6; // a lift at least this strong can fire a bang instead of a pop cluster...
+const MOD_BANG_CHANCE = 0.5; // ...this often at a full lift
+const LIMITER_POP_CHANCE = 0.45; // share of limiter cuts that pop
+const LIMITER_POP_GAP = 0.12; // s at least between two limiter pops
+const ACCEL_LOAD = 0.35; // engine load from which a bank with decel loops plays its accel loops alone
+const LOOP_SWAP_TIME = 0.25; // s to fade from one set of loops to another (the recordings arriving, an engine swap)
 const CROSSFADE_WIDTH = 0.7; // share of the (log) rpm gap between two loops over which they crossfade
 const OVERRUN_TIME = 1.6; // s of popping after a hard lift from high revs
 
@@ -52,6 +97,31 @@ function loopWeights(rpm, loopRPMs, out = new Array(loopRPMs.length), width = CR
   return out;
 }
 
+// The engines the swimming car can sound like. A bank list maps each to its loaded bank, null when its recordings
+// aren't there, or undefined while they load (or before sound starts).
+const SWIM_ENGINES = {
+  m3: { label: 'M3 S58', clips: M3_CLIPS },
+  m5mod: { label: 'M5 V10 (GTA mod)', clips: M5_MOD_ENGINE_CLIPS }
+};
+
+// The bank to play for an engine choice: the pick once it has loaded, else the M3 recordings, else none (synthesized).
+function swimEngineBank(choice, banks) {
+  return banks[choice] || banks.m3 || null;
+}
+
+// The engine a swap goes to: the other one, unless its recordings are known to be missing.
+function nextSwimEngine(choice, banks) {
+  const other = choice === 'm5mod' ? 'm3' : 'm5mod';
+  return banks[other] === null ? choice : other;
+}
+
+// The rpm a bank's loops should sound at: the engine's own, or mapped onto the bank's pitchRange (idle to limiter).
+function enginePitch(rpm, bank, engine = M3_ENGINE) {
+  if (!bank.pitchRange) return rpm;
+  const [low, high] = bank.pitchRange;
+  return low + (rpm - engine.idle) * (high - low) / (engine.limiter - engine.idle);
+}
+
 // Scales a decoded clip to a target RMS (loops) or peak (one-shots), never past a 0.95 peak.
 function levelBuffer(buffer, { rms = 0, peak = 0 }) {
   const data = buffer.getChannelData(0);
@@ -68,28 +138,64 @@ function levelBuffer(buffer, { rms = 0, peak = 0 }) {
 }
 
 /**
- * Fetches and decodes the recorded clips. Resolves to a bank ({ recorded, loops: [{ buffer, rpm }], crackle }) or to
- * null when they aren't there (a fresh clone that hasn't run tools/fetch-m3-sound.sh); it never rejects. The first
- * loop is tried alone, so a missing set costs a single request.
+ * Fetches and decodes the recorded clips. Resolves to a bank ({ recorded, loops: [{ buffer, rpm }], decelLoops,
+ * pitchRange, crackle }) or to null when they aren't there (a fresh clone that hasn't run tools/fetch-m3-sound.sh);
+ * it never rejects. The first loop is tried alone, so a missing set costs a single request; a file listed twice is
+ * fetched once.
  */
 async function loadSwimEngineClips(context, clips = M3_CLIPS, fetchFile = globalThis.fetch) {
-  const decode = async (file) => {
-    const response = await fetchFile(clips.folder + file);
-    if (!response.ok) return null;
-    return await context.decodeAudioData(await response.arrayBuffer());
+  const decoded = new Map();
+  const decode = (file) => {
+    if (!decoded.has(file)) {
+      decoded.set(file, (async () => {
+        const response = await fetchFile(clips.folder + file);
+        if (!response.ok) return null;
+        return await context.decodeAudioData(await response.arrayBuffer());
+      })());
+    }
+    return decoded.get(file);
+  };
+  // Loops levelled to one loudness (a shared buffer is levelled twice, which leaves it as it was)
+  const loadSet = async (loops) => {
+    const buffers = await Promise.all(loops.map((loop) => decode(loop.file)));
+    if (buffers.some((buffer) => !buffer)) return null;
+    return buffers.map((buffer, i) => ({ buffer: levelBuffer(buffer, { rms: LOOP_RMS }), rpm: loops[i].rpm }));
   };
   try {
-    const first = await decode(clips.loops[0].file);
-    if (!first) return null;
-    const rest = await Promise.all(clips.loops.slice(1).map((loop) => decode(loop.file)));
-    const buffers = [first, ...rest];
-    if (buffers.some((buffer) => !buffer)) return null;
+    if (!await decode(clips.loops[0].file)) return null;
+    const loops = await loadSet(clips.loops);
+    const decelLoops = clips.decelLoops ? await loadSet(clips.decelLoops) : null;
+    if (!loops || (clips.decelLoops && !decelLoops)) return null;
     const crackle = clips.crackle ? await decode(clips.crackle).catch(() => null) : null;
     return {
       recorded: true,
-      loops: buffers.map((buffer, i) => ({ buffer: levelBuffer(buffer, { rms: LOOP_RMS }), rpm: clips.loops[i].rpm })),
+      loops,
+      decelLoops,
+      pitchRange: clips.pitchRange || null,
       crackle: crackle && levelBuffer(crackle, { peak: CRACKLE_PEAK })
     };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetches and decodes the sound mod's one-shots. Resolves to { pops, burbles, bangs } (buffers levelled to a peak)
+ * or to null when they aren't there; it never rejects. The first pop is tried alone, so a missing set costs a single
+ * request, and a clip that fails later is left out of its group.
+ */
+async function loadM5ModShots(context, shots = M5_MOD_SHOTS, fetchFile = globalThis.fetch) {
+  const decode = async (file) => {
+    const response = await fetchFile(shots.folder + file);
+    if (!response.ok) return null;
+    return levelBuffer(await context.decodeAudioData(await response.arrayBuffer()), { peak: MOD_SHOT_PEAK });
+  };
+  const group = async (files) => (await Promise.all(files.map((file) => decode(file).catch(() => null)))).filter(Boolean);
+  try {
+    const first = await decode(shots.pops[0]);
+    if (!first) return null;
+    const [pops, burbles, bangs] = await Promise.all([group(shots.pops.slice(1)), group(shots.burbles), group(shots.bangs)]);
+    return { pops: [first, ...pops], burbles, bangs };
   } catch {
     return null;
   }
@@ -121,9 +227,11 @@ function smoothParameter(parameter, timeConstant, epsilon = 0.0001) {
 }
 
 /**
- * options: entity (the swim car), controls() → { throttle } as driven this frame, clips() → the recorded bank or null.
+ * options: entity (the swim car), controls() → { throttle } as driven this frame, clips() → the recorded bank or null,
+ * shots() → the sound mod's one-shots (loadM5ModShots) or null.
  */
-function createSwimEngineVoice(context, resources, output, { entity = null, controls = () => null, clips = () => null } = {}) {
+function createSwimEngineVoice(context, resources, output,
+  { entity = null, controls = () => null, clips = () => null, shots = () => null } = {}) {
   const nodes = [];
   const own = (node) => { nodes.push(node); return node; };
   const gain = (value = 0) => {
@@ -176,31 +284,39 @@ function createSwimEngineVoice(context, resources, output, { entity = null, cont
   const state = createEngineState(M3_ENGINE);
   const input = { speed: 0, throttle: 0, wheelspin: 0, slipAngle: 0 };
   let layer = null;
+  let synthesized = null;
   let retiring = [];
   let player = false;
   let doppler = 1;
   let disposed = false;
   let overrunUntil = 0, nextPop = 0;
+  let wasCut = false, nextLimiterPop = 0;
   const oneShots = new Set();
 
   function buildLayer(bank, now, fade) {
     const layerGain = gain(fade ? 0 : 1);
     layerGain.connect(bus);
     const sources = [], gains = [], rates = [], levels = [];
-    for (const { buffer } of bank.loops) {
-      const source = own(context.createBufferSource());
-      source.buffer = buffer;
-      source.loop = true;
-      const loopGain = gain();
-      source.connect(loopGain).connect(layerGain);
-      source.start(now, Math.random() * buffer.duration);
-      sources.push(source);
-      gains.push(loopGain);
-      rates.push(smoothParameter(source.playbackRate, 0.012, 0.0005));
-      levels.push(smoothParameter(loopGain.gain, 0.02, 0.001));
+    // One set of loops, or an accel set and a decel set; each set's sources are a run of the flat lists
+    const sets = [];
+    for (const loops of [bank.loops, bank.decelLoops]) {
+      if (!loops?.length) continue;
+      sets.push({ first: sources.length, rpms: loops.map((loop) => loop.rpm), weights: [] });
+      for (const { buffer } of loops) {
+        const source = own(context.createBufferSource());
+        source.buffer = buffer;
+        source.loop = true;
+        const loopGain = gain();
+        source.connect(loopGain).connect(layerGain);
+        source.start(now, Math.random() * buffer.duration);
+        sources.push(source);
+        gains.push(loopGain);
+        rates.push(smoothParameter(source.playbackRate, 0.012, 0.0005));
+        levels.push(smoothParameter(loopGain.gain, 0.02, 0.001));
+      }
     }
     if (fade) layerGain.gain.setTargetAtTime(1, now, LOOP_SWAP_TIME / 3);
-    return { bank, layerGain, sources, gains, rates, levels, rpms: bank.loops.map((loop) => loop.rpm), weights: [] };
+    return { bank, layerGain, sources, gains, rates, levels, sets };
   }
 
   function retire(old, now) {
@@ -273,10 +389,20 @@ function createSwimEngineVoice(context, resources, output, { entity = null, cont
       const duration = short ? 0.35 : buffer.duration;
       const offset = short ? Math.random() * Math.max(0, buffer.duration - duration) : 0;
       playShot(buffer, when, { offset, duration, rate: 0.92 + Math.random() * 0.2, volume, cutoff: 90 });
-    } else {
+    } else if (!modShot(short ? 'burbles' : 'pops', when, volume, 1)) { // the mod's shots stand in for a recording
       const pops = short ? 1 + Math.floor(Math.random() * 2) : 3 + Math.floor(Math.random() * 3);
       for (let i = 0; i < pops; i++) syntheticPop(when + i * (0.05 + Math.random() * 0.12), volume * (0.6 + Math.random() * 0.4));
     }
+  }
+
+  // The sound mod's layer: a random pop cluster, burble or bang. False when the mod's clips aren't loaded.
+  function modShot(kind, when, volume, level = MOD_LAYER_LEVEL) {
+    const group = shots()?.[kind];
+    if (!group?.length) return false;
+    const buffer = group[Math.floor(Math.random() * group.length)];
+    playShot(buffer, when, { duration: buffer.duration, rate: 0.94 + Math.random() * 0.12, volume: volume * level,
+      cutoff: kind === 'bangs' ? 35 : 90 });
+    return true;
   }
 
   // Lifting with boost up: the blow-off valve's whoosh, fluttering as the compressor surges
@@ -313,13 +439,15 @@ function createSwimEngineVoice(context, resources, output, { entity = null, cont
     };
   }
 
+  // The bank clips() names (the recordings arriving, or a swap between engines) fades in over the one playing.
   function useBank(now) {
-    const recorded = clips();
+    synthesized ||= synthesizedBank(resources);
+    const wanted = clips() || synthesized;
     if (!layer) {
-      layer = buildLayer(recorded || synthesizedBank(resources), now, false);
-    } else if (recorded && layer.bank !== recorded) {
+      layer = buildLayer(wanted, now, false);
+    } else if (layer.bank !== wanted) {
       retire(layer, now);
-      layer = buildLayer(recorded, now, true);
+      layer = buildLayer(wanted, now, true);
     }
     for (let i = retiring.length - 1; i >= 0; i--) {
       if (now < retiring[i].until) continue;
@@ -345,11 +473,17 @@ function createSwimEngineVoice(context, resources, output, { entity = null, cont
     const rpm = state.rpm;
     const span = clamp((rpm - M3_ENGINE.idle) / (M3_ENGINE.limiter - M3_ENGINE.idle), 0, 1);
     const load = state.load;
-    loopWeights(rpm, layer.rpms, layer.weights);
-    for (let i = 0; i < layer.sources.length; i++) {
-      layer.rates[i](clamp(rpm / layer.rpms[i] * doppler, 0.25, 4), now);
-      layer.levels[i](layer.weights[i], now);
-    }
+    // With a decel set, the accel loops play on the throttle and the decel loops off it (and through the cuts).
+    const pitch = enginePitch(rpm, layer.bank);
+    const accel = layer.sets.length > 1 ? clamp(load / ACCEL_LOAD, 0, 1) : 1;
+    layer.sets.forEach((set, s) => {
+      const share = s === 0 ? Math.sin(accel * Math.PI / 2) : Math.cos(accel * Math.PI / 2);
+      loopWeights(pitch, set.rpms, set.weights);
+      for (let j = 0; j < set.rpms.length; j++) {
+        layer.rates[set.first + j](clamp(pitch / set.rpms[j] * doppler, 0.25, 4), now);
+        layer.levels[set.first + j](set.weights[j] * share, now);
+      }
+    });
     // Off the throttle the exhaust goes dark and quiet; on it, it opens up and gains weight.
     const synthetic = !layer.bank.recorded;
     toneCutoff((synthetic ? 500 : 900) + span * 2600 + Math.pow(load, 0.7) * (synthetic ? 2400 : 8000), now);
@@ -366,15 +500,27 @@ function createSwimEngineVoice(context, resources, output, { entity = null, cont
     intakeLevel(state.boost * 0.035 + state.throttle * span * 0.02, now);
 
     // Overrun: a burst of pops when the throttle snaps shut at high revs, then a few stragglers while coasting.
+    // The sound mod (when decoded) adds a pop cluster to each, or on a hard lift sometimes a deep bang.
     if (state.lift) {
-      crackle(now, 0.55 + 0.45 * state.lift, false);
+      const volume = 0.55 + 0.45 * state.lift;
+      crackle(now, volume, false);
+      const bang = state.lift >= MOD_BANG_LIFT && Math.random() < MOD_BANG_CHANCE * state.lift;
+      modShot(bang ? 'bangs' : 'pops', now + Math.random() * 0.05, volume);
       overrunUntil = now + OVERRUN_TIME * state.lift;
       nextPop = now + 0.5 + Math.random() * 0.4;
     } else if (now < overrunUntil && state.throttle < 0.1 && rpm > 2600 && now >= nextPop) {
-      crackle(now, 0.35 + Math.random() * 0.25, true);
+      const volume = 0.35 + Math.random() * 0.25;
+      crackle(now, volume, true);
+      modShot(Math.random() < 0.5 ? 'burbles' : 'pops', now, volume);
       nextPop = now + 0.18 + Math.random() * 0.45;
     }
     if (state.throttle > 0.2) overrunUntil = 0;
+    // Bouncing off the limiter, some of the fuel cuts pop through the mod's layer.
+    if (state.cut && !wasCut && now >= nextLimiterPop && Math.random() < LIMITER_POP_CHANCE
+      && modShot(Math.random() < 0.5 ? 'burbles' : 'pops', now, 0.35 + Math.random() * 0.2)) {
+      nextLimiterPop = now + LIMITER_POP_GAP + Math.random() * LIMITER_POP_GAP;
+    }
+    wasCut = state.cut;
     // A crisp "brap" on a flat-out upshift
     if (state.upshift && state.throttle > 0.8 && rpm > 4000) crackle(now, 0.3, true);
     if (state.blowoff) blowoff(now, state.blowoff);
@@ -416,4 +562,5 @@ function createSwimEngineVoice(context, resources, output, { entity = null, cont
   return { update, tick, dispose, state };
 }
 
-export { M3_CLIPS, loopWeights, levelBuffer, loadSwimEngineClips, createSwimEngineVoice };
+export { M3_CLIPS, M5_MOD_SHOTS, M5_MOD_ENGINE_CLIPS, SWIM_ENGINES, swimEngineBank, nextSwimEngine, loopWeights,
+  enginePitch, levelBuffer, loadSwimEngineClips, loadM5ModShots, createSwimEngineVoice };

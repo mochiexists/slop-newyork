@@ -223,3 +223,108 @@ test('loaded clips are levelled: loops to one loudness, the crackle to a peak', 
   const peak = Math.max(...bank.crackle.getChannelData(0).map(Math.abs));
   assert.ok(peak > 0.85 && peak <= 0.95);
 });
+
+test('the sound mod clips the voice loads are the ones tools/extract-m5-mod-sound.py writes', () => {
+  const script = read('tools/extract-m5-mod-sound.py');
+  const roles = Object.fromEntries([...script.matchAll(/^\s*'(\w+)': \[((?:0x[0-9a-f]+,?\s*)+)\],$/gm)]
+    .map(([, role, ids]) => [role, ids.match(/0x[0-9a-f]+/g).length]));
+  const named = (role) => Array.from({ length: roles[role] }, (_, i) => `${role}-${i + 1}.wav`);
+  assert.deepEqual([...audio.M5_MOD_SHOTS.pops], named('pop'));
+  assert.deepEqual([...audio.M5_MOD_SHOTS.burbles], named('burble'));
+  assert.deepEqual([...audio.M5_MOD_SHOTS.bangs], named('bang'));
+  // Each stitched loop's rpm is its grain rate times 100; the accel and decel sets both start on the idle loop
+  const loops = [...script.matchAll(/^\s*\('([\w-]+)', \('\w+', '\w+'\), ([\d.]+)\),$/gm)]
+    .map(([, name, hz]) => ({ file: `${name}.wav`, rpm: Math.round(Number(hz) * 100) }));
+  const idle = loops.filter((loop) => loop.file === 'idle.wav');
+  const set = (kind) => [...idle, ...loops.filter((loop) => loop.file.startsWith(kind))];
+  assert.equal(idle.length, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(audio.M5_MOD_ENGINE_CLIPS.loops)), set('accel-'));
+  assert.deepEqual(JSON.parse(JSON.stringify(audio.M5_MOD_ENGINE_CLIPS.decelLoops)), set('decel-'));
+  assert.equal(set('accel-').length + set('decel-').length, loops.length + 1, 'every loop the script cuts is played');
+  assert.ok(script.includes("'assets', 'audio', 'm5mod'"), 'writes where the voice reads');
+  assert.equal(audio.M5_MOD_SHOTS.folder, 'assets/audio/m5mod/');
+  assert.equal(audio.M5_MOD_ENGINE_CLIPS.folder, `${audio.M5_MOD_SHOTS.folder}engine/`);
+  assert.match(script, /os\.path\.join\(out, 'engine', /);
+});
+
+test('missing sound mod clips resolve to no layer after a single request', async () => {
+  const requests = [];
+  const context = { decodeAudioData: async () => { throw new Error('nothing to decode'); } };
+  const shots = await audio.loadM5ModShots(context, audio.M5_MOD_SHOTS, async (url) => {
+    requests.push(url);
+    return { ok: false, status: 404 };
+  });
+  assert.equal(shots, null);
+  assert.deepEqual(requests, ['assets/audio/m5mod/pop-1.wav']);
+  const offline = await audio.loadM5ModShots(context, audio.M5_MOD_SHOTS, async () => { throw new TypeError('offline'); });
+  assert.equal(offline, null);
+});
+
+test('loaded sound mod clips are grouped and levelled, and a broken one is left out', async () => {
+  const buffers = new Map();
+  const context = { decodeAudioData: async (bytes) => buffers.get(bytes) };
+  const shots = await audio.loadM5ModShots(context, audio.M5_MOD_SHOTS, async (url) => {
+    if (url.endsWith('burble-3.wav')) return { ok: false, status: 404 };
+    const bytes = { url };
+    const data = Float32Array.from({ length: 800 }, (_, i) => Math.sin(i * 0.4) * (url.includes('bang') ? 0.2 : 0.7));
+    buffers.set(bytes, { getChannelData: () => data, duration: 0.025 });
+    return { ok: true, arrayBuffer: async () => bytes };
+  });
+  assert.equal(shots.pops.length, audio.M5_MOD_SHOTS.pops.length);
+  assert.equal(shots.burbles.length, audio.M5_MOD_SHOTS.burbles.length - 1);
+  assert.equal(shots.bangs.length, audio.M5_MOD_SHOTS.bangs.length);
+  for (const buffer of [...shots.pops, ...shots.burbles, ...shots.bangs]) {
+    const peak = Math.max(...buffer.getChannelData(0).map(Math.abs));
+    assert.ok(peak > 0.85 && peak <= 0.95, `peak ${peak}`);
+  }
+});
+
+test('the mod engine maps the model from idle to limiter onto its loops; the M3 plays the model as it is', () => {
+  const mod = audio.M5_MOD_ENGINE_CLIPS;
+  const [low, high] = mod.pitchRange;
+  assert.equal(audio.enginePitch(M3_ENGINE.idle, mod), low);
+  assert.equal(audio.enginePitch(M3_ENGINE.limiter, mod), high);
+  assert.equal(low, mod.loops[0].rpm, 'idle plays the idle loop as recorded');
+  assert.equal(high, mod.loops.at(-1).rpm, 'the limiter plays the top accel loop as recorded');
+  assert.equal(high, mod.decelLoops.at(-1).rpm);
+  assert.equal(audio.enginePitch(4321, { pitchRange: null }), 4321);
+  for (const loops of [mod.loops, mod.decelLoops]) {
+    for (let i = 1; i < loops.length; i++) assert.ok(loops[i].rpm > loops[i - 1].rpm, 'ascending, as loopWeights needs');
+  }
+});
+
+test('the engine swap stays on the M3 when the mod engine is missing, and plays the M3 until a pick loads', () => {
+  const m3 = { id: 'm3' }, mod = { id: 'm5mod' };
+  assert.equal(audio.nextSwimEngine('m3', {}), 'm5mod', 'not loaded yet: the pick is remembered');
+  assert.equal(audio.nextSwimEngine('m3', { m3, m5mod: null }), 'm3');
+  assert.equal(audio.nextSwimEngine('m3', { m3, m5mod: mod }), 'm5mod');
+  assert.equal(audio.nextSwimEngine('m5mod', { m3, m5mod: mod }), 'm3');
+  assert.equal(audio.swimEngineBank('m5mod', { m3, m5mod: mod }), mod);
+  assert.equal(audio.swimEngineBank('m5mod', { m3 }), m3, 'the M3 plays while the mod engine loads');
+  assert.equal(audio.swimEngineBank('m5mod', { m3, m5mod: null }), m3);
+  assert.equal(audio.swimEngineBank('m3', { m3: null, m5mod: mod }), null, 'no M3 recordings: synthesized');
+  assert.deepEqual(Object.keys(audio.SWIM_ENGINES), ['m3', 'm5mod']);
+  assert.equal(audio.SWIM_ENGINES.m3.clips, audio.M3_CLIPS);
+  assert.equal(audio.SWIM_ENGINES.m5mod.clips, audio.M5_MOD_ENGINE_CLIPS);
+});
+
+test('a bank with accel and decel loops loads both sets, fetching a shared loop once', async () => {
+  const requests = [];
+  const context = { decodeAudioData: async (bytes) => bytes.buffer };
+  const bank = await audio.loadSwimEngineClips(context, audio.M5_MOD_ENGINE_CLIPS, async (url) => {
+    requests.push(url);
+    const data = Float32Array.from({ length: 1000 }, (_, i) => Math.sin(i * 0.2) * 0.5);
+    return { ok: true, arrayBuffer: async () => ({ buffer: { getChannelData: () => data, duration: 0.03 } }) };
+  });
+  assert.equal(bank.loops.length, audio.M5_MOD_ENGINE_CLIPS.loops.length);
+  assert.equal(bank.decelLoops.length, audio.M5_MOD_ENGINE_CLIPS.decelLoops.length);
+  assert.equal(bank.loops[0].buffer, bank.decelLoops[0].buffer, 'the idle loop is shared');
+  assert.equal(requests.filter((url) => url.endsWith('/idle.wav')).length, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(bank.pitchRange)), [...audio.M5_MOD_ENGINE_CLIPS.pitchRange]);
+  const rms = Math.sqrt(bank.loops[0].buffer.getChannelData(0).reduce((sum, v) => sum + v * v, 0) / 1000);
+  assert.ok(Math.abs(rms - 0.16) < 1e-3, `levelled once, not twice: ${rms}`);
+  const missingDecel = await audio.loadSwimEngineClips(context, audio.M5_MOD_ENGINE_CLIPS, async (url) => (url.includes('decel')
+    ? { ok: false, status: 404 }
+    : { ok: true, arrayBuffer: async () => ({ buffer: { getChannelData: () => new Float32Array(4), duration: 0.01 } }) }));
+  assert.equal(missingDecel, null, 'half a bank is no bank');
+});

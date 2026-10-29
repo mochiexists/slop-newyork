@@ -1613,6 +1613,9 @@ body.hud-minimized .hud-top-center { transform: translate(-50%, -10px); }
   align-self: center;
 }
 
+/* The engine sound switch (M3 / M5 GTA mod): dimmed while the mod's engine isn't installed */
+.swim-radio-buttons .swim-engine.is-unavailable { opacity: 0.55; }
+
 body.hud-minimized .swim-radio { opacity: 0; pointer-events: none; }
 
 @media (max-width: 820px) {

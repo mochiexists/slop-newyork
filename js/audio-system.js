@@ -2,7 +2,9 @@ import { createSynthResources, createMotorVoice, setControlRate } from './audio-
 import { createEventResources, playEvent, createWindVoice } from './audio-events.js';
 import { CityAudioSources } from './audio-sources.js';
 import { CityAcoustics } from './audio-acoustics.js';
-import { createSwimEngineVoice, loadSwimEngineClips } from './swim-engine-audio.js';
+import {
+  SWIM_ENGINES, createSwimEngineVoice, loadSwimEngineClips, loadM5ModShots, nextSwimEngine, swimEngineBank
+} from './swim-engine-audio.js';
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const smooth = (param, value, now, time = 0.035, immediate = false) => {
@@ -77,10 +79,18 @@ class SpatialEmitter {
 }
 
 class CityAudioSystem {
-  constructor(simulation, { onStateChange = () => {} } = {}) {
+  constructor(simulation, { onStateChange = () => {}, onSwimEngineChange = () => {} } = {}) {
     this.sources = new CityAudioSources(simulation);
     this.acoustics = new CityAcoustics(simulation.controllerManager);
     this.onStateChange = onStateChange;
+    this.onSwimEngineChange = onSwimEngineChange;
+    // Which engine the swimming car sounds like (SWIM_ENGINES), remembered; its banks load with the audio context.
+    this.swimEngine = 'm3';
+    this.swimEngineBanks = {};
+    try {
+      const saved = localStorage.getItem('nyc-swim-engine');
+      if (Object.hasOwn(SWIM_ENGINES, saved)) this.swimEngine = saved;
+    } catch { /* Private browsing. */ }
     this.context = null;
     this.ready = false;
     this.disposed = false;
@@ -171,12 +181,31 @@ class CityAudioSystem {
     this.reflectionFilter.Q.value = 0.5;
     this.reflections.connect(this.reverb).connect(this.reflectionFilter).connect(this.mix);
     this.wind = createWindVoice(context, this.resources, this.mix);
-    // The swimming car's recorded engine (tools/fetch-m3-sound.sh); its voice runs synthesized until, or unless, it loads.
-    this.swimEngineClips = null;
-    loadSwimEngineClips(context).then((bank) => {
-      if (this.context === context) this.swimEngineClips = bank;
+    // The swimming car's recorded engines (tools/fetch-m3-sound.sh, tools/extract-m5-mod-sound.py); its voice runs
+    // synthesized until, or unless, the chosen one loads, and the sound mod's pops layer over whichever plays.
+    this.swimEngineShots = null;
+    this.swimEngineBanks = {};
+    for (const [id, engine] of Object.entries(SWIM_ENGINES)) {
+      loadSwimEngineClips(context, engine.clips).then((bank) => {
+        if (this.context !== context) return;
+        this.swimEngineBanks[id] = bank;
+        if (!bank && this.swimEngine === id) this.swimEngine = nextSwimEngine(id, this.swimEngineBanks); // stays on M3
+        this.onSwimEngineChange();
+      });
+    }
+    loadM5ModShots(context).then((shots) => {
+      if (this.context === context) this.swimEngineShots = shots;
     });
     context.onstatechange = () => this.onStateChange();
+  }
+
+  // Swaps the swimming car between its engines (the voice crossfades); an engine known to be missing isn't picked.
+  toggleSwimEngine() {
+    const next = nextSwimEngine(this.swimEngine, this.swimEngineBanks);
+    if (next === this.swimEngine) return;
+    this.swimEngine = next;
+    try { localStorage.setItem('nyc-swim-engine', next); } catch { /* Storage is optional. */ }
+    this.onSwimEngineChange();
   }
 
   setEnabled(enabled) {
@@ -268,7 +297,8 @@ class CityAudioSystem {
           siren ? 9 : source.kind === 'helicopter' ? 12 : 4, siren ? 0.9 : 0, siren);
         const voice = !siren && source.kind === 'swim'
           ? createSwimEngineVoice(this.context, this.resources, emitter.input, { entity: source.id,
-            controls: () => this.sources.swimControls(), clips: () => this.swimEngineClips })
+            controls: () => this.sources.swimControls(), clips: () => swimEngineBank(this.swimEngine, this.swimEngineBanks),
+            shots: () => this.swimEngineShots })
           : createMotorVoice(this.context, this.resources, siren ? 'siren' : source.kind, emitter.input);
         slot = { emitter, voice, distance: 0, x: source.x, y: source.y, z: source.z, fresh: true };
         pool.set(source.id, slot);

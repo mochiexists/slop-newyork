@@ -19,6 +19,7 @@ import { LightingSystem } from './lighting.js';
 import { NYCMapSystem } from './nyc-map.js';
 import { setupSceneCulling, updateSceneCulling } from './scene-culling.js';
 import { CityAudioSystem } from './audio-system.js';
+import { bindSwimEngineToggle } from './swim-engine-toggle.js';
 import { SwimDirector, SWIM_STARTS, SQUEEZE_ROUTE, SHOW_SPOT } from './swim-mode.js';
 import { M5Cockpit } from './m5-cockpit.js';
 
@@ -162,6 +163,9 @@ async function initApp() {
   swimDirector = new SwimDirector({ scene, controllerManager, audioSystem, trafficSystem });
   const m5Cockpit = new M5Cockpit(controllerManager.entities.swim, swimDirector.radio);
   updateSoundButton();
+  // The swimming car's engine sound, M3 or the GTA mod's M5: the button on the Careless Whisper card and K
+  audioSystem.onSwimEngineChange = bindSwimEngineToggle(document.getElementById('swim-engine'), audioSystem);
+  audioSystem.onSwimEngineChange();
   // pagehide also covers navigation away on mobile; preserve the context across back-forward cache restores.
   window.addEventListener('pagehide', (event) => {
     savePlayerState();
@@ -282,7 +286,7 @@ async function initApp() {
     cyclist: [[['W', 'S'], 'Pedal / Brake'], [['A', 'D'], 'Lean & Turn'], [['Drag'], 'Orbit']],
     helicopter: [[['W', 'S'], 'Pitch'], [['A', 'D'], 'Yaw'], [['Space', 'E'], 'Ascend'], [['Q', 'C'], 'Descend']],
     swim: [[['W', 'S'], 'Gas / Brake'], [['W', 'S'], 'Both: burnout'], [['Space'], 'Handbrake'], [['P'], 'AI show'],
-      [['F'], 'Flip off'], [['G'], 'George Michael']]
+      [['F'], 'Flip off'], [['G'], 'George Michael'], [['K'], 'Engine sound']]
   };
   // Top speeds in mph (controllers.js & drift-physics.js cap them at 8.2, 36, 19, 52 & 85 m/s): full scale of the
   // speed meter
@@ -615,6 +619,9 @@ async function initApp() {
         break;
       case 'KeyF': // swimming: the driver's left hand up (toggle), see m5-cockpit.js
         if (!e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey && controllerManager.activeMode === 'swim') m5Cockpit.toggleBird();
+        break;
+      case 'KeyK': // swimming: swap the engine sound, M3 / M5 (GTA mod), see swim-engine-toggle.js
+        if (!e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey && controllerManager.activeMode === 'swim') audioSystem.toggleSwimEngine();
         break;
     }
   });
