@@ -432,6 +432,9 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
   // =========================================================================
   const player = { active: false, entity: null, x: 0, z: 0, vx: 0, vz: 0, fx: 0, fz: 1,
     halfW: 0.86, halfL: 2.18 };
+  // A stunt area kept clear for the swimming show (swim-mode.js): { x, z, r } or null. Traffic stops short of it and
+  // nothing spawns inside it.
+  let clearZone = null;
   const nearEdges = [];
   const nearSignals = [];
   const pedestrianSystem = createPedestrianSystem(network, {
@@ -655,6 +658,17 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     v.pAhead = dx * fx + dz * fz;
     v.pRight = dz * fx - dx * fz;
     v.pSpeed = Math.max(0, player.vx * fx + player.vz * fz);
+  }
+
+  // Distance to the edge of the clear zone if v's path runs into it
+  function zoneGap(v) {
+    if (!clearZone) return Infinity;
+    const dx = clearZone.x - v.x, dz = clearZone.z - v.z;
+    const fx = Math.sin(v.yaw), fz = Math.cos(v.yaw);
+    const along = dx * fx + dz * fz;
+    const across = Math.abs(dz * fx - dx * fz);
+    if (along < 0 || across > clearZone.r || along > LOOKAHEAD + clearZone.r) return Infinity;
+    return along - Math.sqrt(clearZone.r ** 2 - across ** 2) - v.half;
   }
 
   // Gap to the player if it is ahead in the lane whose centre is `off` metres to the right of v
@@ -1102,6 +1116,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
       }
       cap = bendSpeed(v, v.conn);
     }
+    const zg = zoneGap(v);
+    if (zg < LOOKAHEAD) worst = Math.min(worst, stopAt(v, Math.max(0, zg), 0.5));
     const pg = playerGap(v, 0);
     if (pg > 0 && pg < LOOKAHEAD) { // (a player alongside, not yet clear ahead, isn't one to follow)
       worst = Math.min(worst, brake(v, pg, v.pSpeed));
@@ -1567,6 +1583,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
       const d = Math.hypot(x - focusX, z - focusZ);
       if (d < rMin || d > rMax || (protectView && nearView(x, z, v.half + 4, VEHICLE_SPAWN_DISTANCE))) continue;
       if (player.active && Math.hypot(x - player.x, z - player.z) < 25) continue;
+      if (clearZone && Math.hypot(x - clearZone.x, z - clearZone.z) < clearZone.r + 15) continue;
       if (!laneClear(e.occ[lane], s, v.half + 8)) continue;
       place(v, e, lane, s);
       return true;
@@ -2011,10 +2028,23 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     updateSparks(dt);
   }
 
+  // Clear (or with null release) a stunt area: vehicles inside it now are moved elsewhere, the rest hold short of it
+  function setClearZone(zone) {
+    clearZone = zone ? { x: zone.x, z: zone.z, r: zone.r } : null;
+    if (!clearZone) return;
+    for (const v of vehicles) {
+      if (v.edge && Math.hypot(v.x - clearZone.x, v.z - clearZone.z) < clearZone.r + v.half) {
+        // No free lane right now: park it off the road until the regular respawn finds it a place
+        if (!spawnVehicle(v, clearZone.r + 40, NEAR_RADIUS, true)) v.edge = null;
+      }
+    }
+  }
+
   return {
     group,
     update,
     setCollisionListener,
+    setClearZone,
     cars,
     buses,
     peds: pedestrianSystem.peds,
