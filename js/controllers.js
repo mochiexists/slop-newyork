@@ -1417,7 +1417,8 @@ class ThirdPersonControllerManager {
     }
 
     // The chase camera swings out with the slide, so a drift is seen from the side rather than from straight behind
-    const cameraTarget = c.heading + c.drift.slipAngle * 0.6;
+    // (the AI show sets its own angles for the burnout and donuts)
+    const cameraTarget = c.cameraYawOverride ?? c.heading + c.drift.slipAngle * 0.6;
     const turn = Math.atan2(Math.sin(cameraTarget - c.cameraYaw), Math.cos(cameraTarget - c.cameraYaw));
     c.cameraYaw += turn * (1 - Math.exp(-dt * 5));
 

@@ -2,6 +2,7 @@ import * as THREE from 'three/webgpu';
 import { attribute, float, texture, vec3 } from 'three/tsl';
 import { avenueX, streetZ } from './city-config.js';
 import { BODY_SPECS } from './cars.js';
+import { PoliceCruiser, SwimShow, SHOW_SPOT } from './swim-show.js';
 
 // Swimming: the BMW M5 weaving through traffic and drifting through Times Square to Careless Whisper. This module owns
 // everything about the mode except the car itself (controllers.js) and its physics (drift-physics.js): the
@@ -49,7 +50,7 @@ const SQUEEZE_ROUTE = [
 ].map(([x, z]) => ({ x, z }));
 
 const DRIFT_SLIP = 12 * RAD; // body slip that counts as a drift
-const DRIFT_MIN_SPEED = 6; // m/s
+const DRIFT_MIN_SPEED = 2.5; // m/s over the ground (a donut's tail swings round at about this)
 const DRIFT_GRACE = 0.7; // s a drift may straighten before it is banked
 const SKID_SLIDE = 3.2; // m/s of rear tire slide before rubber is laid
 const SMOKE_SLIDE = 5; // m/s of rear tire slide before smoke
@@ -429,10 +430,27 @@ class DriftScore {
   }
 }
 
+// What the HUD says as the AI show moves on
+const SHOW_CAPTIONS = {
+  burnout: ['BREAKING · SWIMMING IN TIMES SQUARE', 'show'],
+  escape: ['NYPD IN PURSUIT', 'lost'],
+  swim: ['LOST THEM · SWIMMING', 'banked']
+};
+
 class SwimDirector {
-  constructor({ scene, controllerManager, audioSystem }) {
+  constructor({ scene, controllerManager, audioSystem, trafficSystem }) {
     this.controllers = controllerManager;
+    this.traffic = trafficSystem;
     this.car = controllerManager.entities.swim;
+    this.cruiser = new PoliceCruiser(scene, audioSystem);
+    this.pilotChip = document.getElementById('swim-pilot');
+    this.show = new SwimShow({
+      controllerManager,
+      trafficSystem,
+      cruiser: this.cruiser,
+      onPhase: (phase) => this.onShowPhase(phase)
+    });
+    this.clock = 0;
     this.smoke = new TireSmoke(scene);
     this.skids = new SkidMarks(scene);
     this.screech = new TireScreech(audioSystem);
@@ -461,10 +479,44 @@ class SwimDirector {
     document.body.classList.toggle('swimming', active);
     if (active) this.radio.play();
     else {
+      this.show.stop();
+      this.cruiser.hide();
       this.score.bank();
       this.radio.stop();
       this.lastContact[0] = this.lastContact[1] = null;
     }
+  }
+
+  // The car is already at SHOW_SPOT (main.js teleports it): run the show from there
+  startShow() {
+    this.show.start();
+  }
+
+  stopShow() {
+    this.show.stop();
+  }
+
+  // An NYPD cruiser watching from across the street at a clip start
+  parkCruiserNear(x, z, heading) {
+    const fx = Math.sin(heading), fz = Math.cos(heading);
+    this.cruiser.park(x + fx * 18 - fz * 8, z + fz * 18 + fx * 8, heading + Math.PI * 0.75);
+  }
+
+  onShowPhase(phase) {
+    const caption = SHOW_CAPTIONS[phase];
+    if (this.pilotChip) {
+      this.pilotChip.hidden = phase === 'off';
+      // The chip carries the headline, so a banked drift's flash can't wipe it
+      const text = this.pilotChip.querySelector('.swim-pilot-text');
+      if (text && caption) text.textContent = `${caption[0]} · any driving key takes the wheel`;
+    }
+    // Leaving the donuts launches the car: bank them first, and don't take the launch for a crash
+    if (phase === 'escape') {
+      this.score.bank();
+      this.skipImpact = true;
+    }
+    if (caption) this.score.flash(...caption);
+    else if (phase === 'off') this.score.flash('YOUR CAR · DRIVE', 'banked');
   }
 
   setMuted(muted) {
@@ -496,8 +548,10 @@ class SwimDirector {
     this.lastVZ = worldVZ;
 
     if (this.active) {
-      if (impact > CRASH_SPEED_CHANGE) this.score.wipeout();
-      this.score.update(dt, drift.slipAngle, c.speed);
+      if (impact > CRASH_SPEED_CHANGE && !this.skipImpact) this.score.wipeout();
+      this.skipImpact = false;
+      // Scored on the speed over the ground: a donut is all sideways
+      this.score.update(dt, drift.slipAngle, Math.hypot(worldVX, worldVZ));
       const contacts = this.rearContacts();
       const laying = slide > SKID_SLIDE && c.position.y < 0.5;
       for (let i = 0; i < 2; i++) {
@@ -528,7 +582,16 @@ class SwimDirector {
     this.screech.update(slide, Math.abs(c.speed), this.active);
     this.smoke.update(dt, camera);
     this.skids.update();
+
+    this.clock += dt;
+    if (this.show.running) {
+      this.show.gatherObstacles(c, this.traffic.cars, this.traffic.buses);
+      // The cruiser's own AI weaves through the same traffic; the car's AI weaves round the cruiser too
+      if (this.cruiser.state !== 'hidden') this.show.obstacles.push({ x: this.cruiser.car.position.x, z: this.cruiser.car.position.z });
+    }
+    this.cruiser.update(dt, this.clock, camera.position, this.show.obstacles, c);
+    if (this.active) this.cruiser.collide(c);
   }
 }
 
-export { CARELESS_WHISPER, SWIM_STARTS, SQUEEZE_ROUTE, SwimDirector };
+export { CARELESS_WHISPER, SWIM_STARTS, SQUEEZE_ROUTE, SHOW_SPOT, SwimDirector };

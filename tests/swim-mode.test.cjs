@@ -5,11 +5,22 @@ const test = require('node:test');
 const { loadModule } = require('./helpers/module.cjs');
 
 const read = (path) => readFileSync(join(__dirname, '..', path), 'utf8');
-let config, swim;
+let config, swim, show;
 test.before(async () => {
   config = await import('../js/city-config.js');
+  show = loadModule(read('js/swim-show.js'), {
+    imports: {
+      'three/webgpu': { Color: class { constructor() { this.r = this.g = this.b = 1; } } },
+      './city-config.js': config,
+      './cars.js': {},
+      './tsl-materials.js': {},
+      './drift-physics.js': { M5_DRIFT: {} },
+      './drift-autopilot.js': {},
+      './vehicle-physics.js': {}
+    }
+  });
   swim = loadModule(read('js/swim-mode.js'), {
-    imports: { 'three/webgpu': {}, 'three/tsl': {}, './city-config.js': config, './cars.js': { BODY_SPECS: {} } }
+    imports: { 'three/webgpu': {}, 'three/tsl': {}, './city-config.js': config, './cars.js': { BODY_SPECS: {} }, './swim-show.js': show }
   });
 });
 
@@ -39,6 +50,14 @@ test('the Squeeze Benz route starts in Times Square and runs along streets', () 
     const dx = Math.abs(route[i].x - route[i - 1].x), dz = Math.abs(route[i].z - route[i - 1].z);
     assert.ok(Math.min(dx, dz) < 15, `leg ${i} follows the grid`);
   }
+});
+
+test('the AI show stages in Times Square and escapes along streets', () => {
+  assert.ok(onRoadway(show.SHOW_SPOT), 'the stunt spot is on the road');
+  assert.match(config.getLocationLabel(show.SHOW_SPOT.x, show.SHOW_SPOT.z), /7th Ave|Broadway/);
+  for (const point of show.ESCAPE_ROUTE) assert.ok(onRoadway(point), `${point.x}, ${point.z} is on a street`);
+  // The escape starts where the stunts happen
+  assert.ok(Math.hypot(show.ESCAPE_ROUTE[0].x - show.SHOW_SPOT.x, show.ESCAPE_ROUTE[0].z - show.SHOW_SPOT.z) < 10);
 });
 
 test('the soundtrack is streamed by YouTube id, not stored in the repository', () => {

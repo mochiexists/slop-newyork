@@ -55,6 +55,8 @@
   <link rel="modulepreload" href="./js/pedestrian-routes.js" />
   <link rel="modulepreload" href="./js/drift-physics.js" />
   <link rel="modulepreload" href="./js/controllers.js" />
+  <link rel="modulepreload" href="./js/drift-autopilot.js" />
+  <link rel="modulepreload" href="./js/swim-show.js" />
   <link rel="modulepreload" href="./js/swim-mode.js" />
   <link rel="modulepreload" href="./js/touch-controls.js" />
   <link rel="modulepreload" href="./js/gamepad-controls.js" />
@@ -180,6 +182,7 @@
     <button id="tp-centralpark" class="pop-item tp-btn" data-teleport="centralpark" type="button"><span class="pop-name">Central Park</span><span class="pop-sub">6th Ave · Central Park South</span></button>
     <button id="tp-owtc" class="pop-item tp-btn" data-teleport="owtc" type="button"><span class="pop-name">One World Trade Center</span><span class="pop-sub">Vesey St · Financial District</span></button>
     <div class="pop-title">Swimming · BMW M5</div>
+    <button id="swim-show-start" class="pop-item tp-btn" data-swim-show type="button"><span class="pop-name">AI show: Times Square</span><span class="pop-sub">Burnout, donuts, the chase, then it's yours · P</span></button>
     <button id="swim-start-squeeze" class="pop-item tp-btn" data-swim-start="squeeze" type="button"><span class="pop-name">Times Square swim</span><span class="pop-sub">Squeeze Benz clip · 7th Ave &amp; W 47th St</span></button>
     <button id="swim-start-donuts" class="pop-item tp-btn" data-swim-start="donuts" type="button"><span class="pop-name">NYPD donuts</span><span class="pop-sub">BMW short · 11th Ave &amp; W 42nd St</span></button>
   </div>
@@ -200,6 +203,7 @@
         <span><span class="swim-caption">Best</span> <span id="swim-best">0</span></span>
       </div>
     </div>
+    <div id="swim-pilot" class="panel swim-pilot" hidden><span class="swim-pilot-dot" aria-hidden="true"></span><span class="swim-pilot-text">AI driving · any driving key takes the wheel</span></div>
     <div id="swim-flash" class="swim-flash" aria-live="polite"></div>
   </section>
   <aside id="swim-radio" class="panel swim-radio swim-only" data-status="loading" aria-label="Now playing" hidden>

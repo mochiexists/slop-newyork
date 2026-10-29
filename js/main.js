@@ -19,7 +19,7 @@ import { LightingSystem } from './lighting.js';
 import { NYCMapSystem } from './nyc-map.js';
 import { setupSceneCulling, updateSceneCulling } from './scene-culling.js';
 import { CityAudioSystem } from './audio-system.js';
-import { SwimDirector, SWIM_STARTS, SQUEEZE_ROUTE } from './swim-mode.js';
+import { SwimDirector, SWIM_STARTS, SQUEEZE_ROUTE, SHOW_SPOT } from './swim-mode.js';
 
 // Application setup, shader warm-up and frame loop.
 
@@ -158,7 +158,7 @@ async function initApp() {
     soundButton.querySelector('use').setAttribute('href', audioSystem.enabled ? '#i-sound' : '#i-sound-off');
   }
   soundButton?.addEventListener('click', () => audioSystem.setEnabled(!audioSystem.enabled));
-  swimDirector = new SwimDirector({ scene, controllerManager, audioSystem });
+  swimDirector = new SwimDirector({ scene, controllerManager, audioSystem, trafficSystem });
   updateSoundButton();
   // pagehide also covers navigation away on mobile; preserve the context across back-forward cache restores.
   window.addEventListener('pagehide', (event) => {
@@ -279,7 +279,8 @@ async function initApp() {
     car: [[['W', 'S'], 'Drive / Reverse'], [['A', 'D'], 'Steer'], [['B'], 'Horn'], [['Drag'], 'Orbit']],
     cyclist: [[['W', 'S'], 'Pedal / Brake'], [['A', 'D'], 'Lean & Turn'], [['Drag'], 'Orbit']],
     helicopter: [[['W', 'S'], 'Pitch'], [['A', 'D'], 'Yaw'], [['Space', 'E'], 'Ascend'], [['Q', 'C'], 'Descend']],
-    swim: [[['W', 'S'], 'Gas / Brake'], [['A', 'D'], 'Steer'], [['Space'], 'Handbrake'], [['B'], 'Horn']]
+    swim: [[['W', 'S'], 'Gas / Brake'], [['W', 'S'], 'Both: burnout'], [['A', 'D'], 'Steer'], [['Space'], 'Handbrake'],
+      [['P'], 'AI show']]
   };
   // Top speeds in mph (controllers.js & drift-physics.js cap them at 8.2, 36, 19, 52 & 85 m/s): full scale of the
   // speed meter
@@ -521,7 +522,22 @@ async function initApp() {
       const start = SWIM_STARTS[btn.getAttribute('data-swim-start')];
       if (!start) return;
       selectMode('swim');
-      teleportTo(start.x, start.z, start.heading);
+      swimDirector.stopShow();
+      const at = teleportTo(start.x, start.z, start.heading);
+      swimDirector.parkCruiserNear(at.x, at.z, start.heading);
+      closePopovers();
+    });
+  });
+
+  // The AI show: Times Square burnout & donuts, the escape, then the car is yours (P, or any driving key, ends it)
+  function startSwimShow() {
+    selectMode('swim');
+    teleportTo(SHOW_SPOT.x, SHOW_SPOT.z, SHOW_SPOT.heading);
+    swimDirector.startShow();
+  }
+  document.querySelectorAll('[data-swim-show]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      startSwimShow();
       closePopovers();
     });
   });
@@ -577,6 +593,11 @@ async function initApp() {
         break;
       case 'KeyH':
         if (hudToggleBtn) hudToggleBtn.click();
+        break;
+      case 'KeyP':
+        if (e.repeat || mapSystem.isFullMapOpen) break;
+        if (swimDirector.show.running) swimDirector.stopShow();
+        else startSwimShow();
         break;
       case 'KeyN':
         if (!e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey) audioSystem.setEnabled(!audioSystem.enabled);

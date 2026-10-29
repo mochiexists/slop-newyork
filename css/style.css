@@ -1623,3 +1623,32 @@ body.hud-minimized .swim-radio { opacity: 0; pointer-events: none; }
   .swim-points { font-size: 24px; }
   .swim-totals { display: none; }
 }
+
+/* The AI show's "driving for you" chip and its headline */
+.swim-pilot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-2);
+}
+
+.swim-pilot[hidden] { display: none; }
+
+.swim-pilot-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--m-red);
+  animation: swim-pilot-blink 1s steps(2) infinite;
+}
+
+@keyframes swim-pilot-blink {
+  50% { background: var(--m-light); }
+}
+
+.swim-flash[data-kind='show'] { color: #fff; }

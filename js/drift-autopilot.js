@@ -24,7 +24,8 @@ const AUTOPILOT = {
   laneWidth: 3.3, // m between the lanes it weaves through
   lanes: 1, // lanes either side of the route line it may use
   scanAhead: 55, // m of traffic it looks at
-  carHalfWidth: 1.1 // m: a gap narrower than two of these is closed
+  carHalfWidth: 1.1, // m: a gap narrower than two of these is closed
+  stopShort: 5 // m it stops short of a road that is blocked in every lane
 };
 
 const wrap = (angle) => Math.atan2(Math.sin(angle), Math.cos(angle));
@@ -99,6 +100,8 @@ class DriftAutopilot {
       let clear = o.scanAhead;
       for (const ob of obstacles) {
         const dx = ob.x - car.position.x, dz = ob.z - car.position.z;
+        // Something right on top of the car is the car itself (a shared traffic list), or already being hit
+        if (dx * dx + dz * dz < 2.25) continue;
         const ahead = dx * s.ux + dz * s.uz;
         if (ahead < -2 || ahead > o.scanAhead) continue;
         // Lateral position of the obstacle relative to the route line
@@ -142,7 +145,8 @@ class DriftAutopilot {
     // Speed plan: as fast as the next corner allows, slower when every lane ahead is blocked close by
     let target = o.cruiseSpeed;
     if (sharp) target = Math.min(target, Math.sqrt(o.cornerSpeed ** 2 + 2 * o.braking * Math.max(0, toCorner - 8)));
-    if (clearAhead < 25) target = Math.min(target, 8 + clearAhead * 0.9);
+    // Every lane blocked close ahead: slow down, and stop a few metres short of it
+    if (clearAhead < 25) target = Math.min(target, Math.max(0, (clearAhead - o.stopShort) * 1.1));
 
     // Drift entry: a handbrake flick and full lock into the turn as the corner arrives
     const entry = Math.max(10, Math.abs(u) * 0.85);
