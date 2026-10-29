@@ -22,6 +22,7 @@ import { CityAudioSystem } from './audio-system.js';
 import { bindSwimEngineToggle } from './swim-engine-toggle.js';
 import { SwimDirector, SWIM_STARTS, SQUEEZE_ROUTE, SHOW_SPOT, SHOW_SIGNAL_TIME } from './swim-mode.js';
 import { M5Cockpit } from './m5-cockpit.js';
+import { loadSwimCarModel } from './m3-model.js';
 
 // Application setup, shader warm-up and frame loop.
 
@@ -162,6 +163,8 @@ async function initApp() {
   soundButton?.addEventListener('click', () => audioSystem.setEnabled(!audioSystem.enabled));
   swimDirector = new SwimDirector({ scene, controllerManager, audioSystem, trafficSystem });
   const m5Cockpit = new M5Cockpit(controllerManager.entities.swim, swimDirector.radio);
+  // Full build: the real M3 Competition model replaces the procedural car when assets/models/m3.glb is there
+  loadSwimCarModel(controllerManager.entities.swim, m5Cockpit).catch((error) => console.warn('M3 model not loaded:', error));
   updateSoundButton();
   // The swimming car's engine sound, M3 or the GTA mod's M5: the button on the Careless Whisper card and K
   audioSystem.onSwimEngineChange = bindSwimEngineToggle(document.getElementById('swim-engine'), audioSystem);

@@ -339,6 +339,11 @@ class M5Cockpit {
     this.bird = false;
     this.birdAmount = 0;
     this.redrawTimer = 0;
+    // useModelCabin() moves these onto the full build's M3 model
+    this.modelCabin = false;
+    this.wheelRadius = WHEEL_RADIUS;
+    this.birdPov = BIRD_POV.clone();
+    this.birdWindow = BIRD_WINDOW.clone();
 
     // cameras.js puts the cockpit camera here (in the chassis frame) instead of on the car's centre line
     entity.povEye = EYE.clone();
@@ -546,6 +551,36 @@ class M5Cockpit {
     this.drawDisplay();
   }
 
+  // The full build's M3 model (m3-model.js) brings its own interior and steering wheel: the procedural cabin stays
+  // hidden, the model's wheel turns in a new mount at its own hub and rake, and the driver (eye, shoulders, the bird's
+  // targets) moves by the same offset as the wheel, so the hands still grip the rim
+  useModelCabin({ steeringWheel, wheelCenter, wheelTilt, wheelRadius }) {
+    const offset = new THREE.Vector3().subVectors(wheelCenter, WHEEL_CENTER);
+    this.entity.povEye.copy(EYE).add(offset);
+    for (const arm of [this.leftArm, this.rightArm]) arm.rest.add(offset);
+    this.birdPov.add(offset);
+    this.birdWindow.add(offset);
+
+    const mount = new THREE.Group();
+    mount.name = 'M3SteeringMount';
+    mount.position.copy(wheelCenter);
+    mount.rotation.x = wheelTilt;
+    const spin = new THREE.Group();
+    mount.add(spin);
+    this.entity.chassisPivot.add(mount);
+    mount.updateWorldMatrix(true, true);
+    spin.attach(steeringWheel);
+    this.wheelMount = mount;
+    this.wheelSpin = spin;
+    this.wheelRadius = wheelRadius;
+
+    // the model's body is closed and has a real cabin: no open-topped shell to swap in
+    if (this.shell) this.shell.visible = false;
+    this.shell = null;
+    this.body = null;
+    this.modelCabin = true;
+  }
+
   toggleBird() {
     this.bird = !this.bird;
   }
@@ -553,7 +588,7 @@ class M5Cockpit {
   // swimming: the swim mode is active; cockpit: the camera is the first-person preset
   update(dt, swimming, cockpit) {
     const inside = swimming && cockpit;
-    this.interior.visible = inside;
+    this.interior.visible = inside && !this.modelCabin;
     if (this.shell) {
       this.shell.visible = inside;
       this.body.visible = !inside;
@@ -592,7 +627,7 @@ class M5Cockpit {
     // grip point and hand frame in the wheel's own frame, then into the car's
     const angle = (arm.side > 0 ? 0 : Math.PI) - handTurn;
     const radial = this._radial.set(Math.cos(angle), Math.sin(angle), 0);
-    this._grip.copy(radial).multiplyScalar(WHEEL_RADIUS).applyMatrix4(this.wheelMount.matrix);
+    this._grip.copy(radial).multiplyScalar(this.wheelRadius).applyMatrix4(this.wheelMount.matrix);
     const toCar = this.wheelMount.quaternion;
     y.set(0, 0, 1).applyQuaternion(toCar); // knuckles point along the column, away from the driver
     z.copy(radial).negate().applyQuaternion(toCar); // palm toward the hub
@@ -605,7 +640,7 @@ class M5Cockpit {
     let curl = 1;
 
     if (lift > 0) {
-      const raised = inside ? BIRD_POV : BIRD_WINDOW;
+      const raised = inside ? this.birdPov : this.birdWindow;
       // finger up, the back of the hand to whoever it's for: traffic ahead, or (from outside) the car behind
       y.set(0, 1, 0);
       z.set(0, 0, inside ? -1 : 1);

@@ -699,7 +699,8 @@ class ThirdPersonControllerManager {
     return {
       type: 'car',
       mode: 'swim',
-      label: 'BMW M5 · Swimming',
+      label: 'BMW M3 Competition · Swimming',
+      paint: M5_PAINT,
       mesh: root,
       chassisPivot,
       carState: paint.userData.carState,
