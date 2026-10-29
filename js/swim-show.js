@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { avenueX, streetZ } from './city-config.js';
+import { avenueX, nearestRoads, streetZ } from './city-config.js';
 import {
   BODY_SPECS,
   buildCarGeometry,
@@ -12,7 +12,7 @@ import {
 } from './cars.js';
 import { createContactShadowMaterial } from './tsl-materials.js';
 import { M5_DRIFT, stepDriftCar } from './drift-physics.js';
-import { DriftAutopilot, DonutRoutine } from './drift-autopilot.js';
+import { DriftAutopilot, DriftCircle } from './drift-autopilot.js';
 import { resolveVehicleContact, vehicleContact } from './vehicle-physics.js';
 
 // The swimming show: the AI takes the car through the reference clips' greatest hits, then hands it over. Times Square
@@ -21,14 +21,18 @@ import { resolveVehicleContact, vehicleContact } from './vehicle-physics.js';
 
 const RAD = Math.PI / 180;
 
-// 7th Ave just south of the Broadway crossing (the bowtie), the car facing north up the avenue
-const SHOW_SPOT = { x: avenueX('7') - 2, z: streetZ(45) + 20, heading: Math.PI };
+// The cruiser parks in the middle of 7th Ave & 45th St, at the foot of the bowtie, and the car starts on the circle it
+// drifts round it: in the crossing's east arm, facing north with the cop off its left side
+const COP_SPOT = { x: avenueX('7') - 2, z: streetZ(45) };
+const DRIFT_RADIUS = 10; // m from the cop to the car: the circle fills the crossing, the way the clip's does
+const SHOW_SPOT = { x: COP_SPOT.x + DRIFT_RADIUS, z: COP_SPOT.z, heading: Math.PI };
+const SHOW_TRAFFIC_SEED = 1; // traffic layout of the opening (traffic.js reseed)
 const SHOW_CLEAR_RADIUS = 42; // m of Times Square kept clear of traffic for the stunts
 // The run: down 7th Ave, west on 42nd St, up 8th Ave past Smith's, west on 57th St. The avenues are one-way, so the
 // line runs down their middle; 42nd and 57th are two-way, so it keeps to the westbound (north, -z) half.
 const WESTBOUND = -3.5;
 const ESCAPE_ROUTE = [
-  [avenueX('7') - 2, streetZ(45) + 22],
+  [COP_SPOT.x, COP_SPOT.z],
   [avenueX('7'), streetZ(42) + WESTBOUND],
   [avenueX('8'), streetZ(42) + WESTBOUND],
   [avenueX('8'), streetZ(57) + WESTBOUND],
@@ -36,7 +40,8 @@ const ESCAPE_ROUTE = [
 ].map(([x, z]) => ({ x, z }));
 
 const BURNOUT_TIME = 2.6;
-const DONUT_TIME = 7.5;
+const DONUT_TIME = 11; // s of drifting round the cop (a lap takes about six) before looking for the way out
+const EXIT_TIME = 0.7; // s straightening out of the circle before the escape
 const CHASE_TIME = 24; // s the cop keeps up the chase before it gives up
 const SHOW_TIME_LIMIT = 75; // s before the car is handed over wherever it is
 const CORRIDOR = 7; // m off the route before the show eases the car back toward it
@@ -46,6 +51,42 @@ const HOLD_BACK = 15; // m the cop keeps behind the car it chases
 const CORNER_CLEAR_DISTANCE = 110; // m out from a drift corner that the show starts holding its traffic
 const CORNER_CLEAR_RADIUS = 26;
 const REVERSE_TIME = 1.1;
+
+const CURB_MARGIN = 1.4; // m between the curb and the middle of the car at the edge of a swim
+
+// The street under each leg of a route, as lateral bounds about the route line (m, + left of travel) for the AI's
+// swimming: the whole curb-to-curb width, and on a two-way street the centre line it should only cross to pass.
+function routeCorridors(route) {
+  const corridors = [];
+  for (let i = 0; i < route.length - 1; i++) {
+    const a = route[i], b = route[i + 1];
+    const length = Math.hypot(b.x - a.x, b.z - a.z) || 1;
+    const ux = (b.x - a.x) / length, uz = (b.z - a.z) / length;
+    const mx = (a.x + b.x) / 2, mz = (a.z + b.z) / 2;
+    // The street running the same way as the leg, nearest the leg's middle
+    let best = null;
+    for (const { road } of nearestRoads(mx, mz, 30)) {
+      for (let k = 0; k < road.pts.length - 1; k++) {
+        const p = road.pts[k], q = road.pts[k + 1];
+        const dx = q.x - p.x, dz = q.z - p.z;
+        const segLength = Math.hypot(dx, dz) || 1;
+        if (Math.abs((dx * ux + dz * uz) / segLength) < 0.9) continue;
+        const t = Math.max(0, Math.min(1, ((mx - p.x) * dx + (mz - p.z) * dz) / (segLength * segLength)));
+        const cx = p.x + dx * t, cz = p.z + dz * t;
+        const distance = Math.hypot(cx - mx, cz - mz);
+        if (!best || distance < best.distance) best = { road, cx, cz, distance };
+      }
+    }
+    if (!best) {
+      corridors.push({ left: 3.5, right: -3.5, centre: null });
+      continue;
+    }
+    const centre = (best.cx - mx) * uz - (best.cz - mz) * ux;
+    const half = Math.max(1, best.road.w / 2 - CURB_MARGIN);
+    corridors.push({ left: centre + half, right: centre - half, centre: best.road.dir === 'TW' ? centre : null });
+  }
+  return corridors;
+}
 
 // A police SUV: drift physics with less power than the M5, so it can chase but not catch
 const COP_DRIFT = { ...M5_DRIFT, mass: 2250, yawInertia: 4300, power: 420000, launchGrip: 1.6, topSpeed: 46 };
@@ -272,10 +313,11 @@ class SwimShow {
   start() {
     const c = this.controllers.entities.swim;
     this.traffic.setClearZone({ x: SHOW_SPOT.x, z: SHOW_SPOT.z, r: SHOW_CLEAR_RADIUS });
-    // The cruiser parks ahead and to the side, angled toward the car
-    const side = 9, ahead = 14;
-    const fx = Math.sin(c.heading), fz = Math.cos(c.heading);
-    this.cruiser.park(c.position.x + fx * ahead + fz * side, c.position.z + fz * ahead - fx * side, c.heading + Math.PI * 0.8);
+    // The same traffic every time, so the escape threads the same cars
+    this.traffic.reseed?.(SHOW_TRAFFIC_SEED, SHOW_SPOT.x, SHOW_SPOT.z);
+    // The cruiser parks off the car's left side, side-on to it, at the centre of the circle the car will drift round
+    const side = DRIFT_RADIUS;
+    this.cruiser.park(c.position.x + Math.cos(c.heading) * side, c.position.z - Math.sin(c.heading) * side, c.heading + Math.PI * 0.5);
     this.controllers.swimPilot = (car, dt, input) => this.fly(car, dt, input);
     this.total = 0;
     this.clearedCorner = undefined;
@@ -320,22 +362,26 @@ class SwimShow {
         input.throttle = 1;
         input.burnout = 1;
         if (this.time > BURNOUT_TIME) {
-          this.donut = DonutRoutine.from(car, { direction: 1, yawRate: 2.7 });
+          this.donut = DriftCircle.around(car, this.cruiser.car.position, { direction: 1, radius: DRIFT_RADIUS });
           this.setPhase('donuts');
         }
         return undefined;
       case 'donuts': {
-        // The camera sways slowly round the cop's side while the car spins under it
+        // The camera sways slowly round the cop's side while the car slides round it
         car.cameraYawOverride = towardCop + 0.6 * Math.sin(this.time * 0.45);
         this.donut.update(car, dt, car.drift);
-        // Leave once spun enough and pointing down the avenue
+        // Straighten out once it has done its laps and its line points down the avenue, then run
         const exit = Math.atan2(ESCAPE_ROUTE[1].x - car.position.x, ESCAPE_ROUTE[1].z - car.position.z);
-        const facing = Math.abs(Math.atan2(Math.sin(car.heading - exit), Math.cos(car.heading - exit)));
-        if (this.time > DONUT_TIME && facing < 20 * RAD) {
-          car.vx = car.vz = car.angularVel = 0;
-          car.speed = 6;
+        const facing = Math.abs(Math.atan2(Math.sin(this.donut.travel - exit), Math.cos(this.donut.travel - exit)));
+        if (!this.donut.exiting && this.time > DONUT_TIME && facing < 20 * RAD) {
+          this.donut.exiting = true;
+          this.exitAt = this.time;
+        }
+        if (this.donut.exiting && this.time - this.exitAt > EXIT_TIME) {
+          // The physics takes the car on at the speed and angle the circle left it with
           this.traffic.setClearZone(null);
-          this.pilot.setPath([{ x: car.position.x, z: car.position.z }, ...ESCAPE_ROUTE.slice(1)]);
+          const escape = [{ x: car.position.x, z: car.position.z }, ...ESCAPE_ROUTE.slice(1)];
+          this.pilot.setPath(escape, { corridors: routeCorridors(escape) });
           this.cruiser.chase(ESCAPE_ROUTE.slice(1));
           this.setPhase('escape');
         }

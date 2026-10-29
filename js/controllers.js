@@ -9,6 +9,7 @@ import {
   TELEPORT_LOCATIONS
 } from './city-config.js';
 import { M5_DRIFT, stepDriftCar } from './drift-physics.js';
+import { DriftCircle } from './drift-autopilot.js';
 import { cityUniforms, createCarPaintMaterial, createContactShadowMaterial } from './tsl-materials.js';
 import {
   BODY_SPECS,
@@ -45,6 +46,8 @@ const CAR_DRIVE = {
 const M5_PAINT = 0x1b4fa8; // BMW Marina Bay Blue metallic
 const SWIM_STEPS_PER_SECOND = 240; // the drift model wants short steps: slip angles change fast in a slide
 const BURNOUT_SPEED = 3; // m/s below which gas + brake together is a burnout
+const DONUT_SPEED = 16; // m/s over the ground below which gas + full lock in a slide becomes a drift circle
+const DONUT_SLIP = 15 * Math.PI / 180; // drift angle that counts as already sliding
 const BICYCLE_DRIVE = {
   speed: 19, reverseSpeed: 4.5, acceleration: 9,
   rolling: 0.08, drag: 0.004, coast: 0.2, brake: 7.5 // Backward input is scaled to 0.6, giving 4.5 m/s² braking.
@@ -1391,7 +1394,25 @@ class ThirdPersonControllerManager {
     c.prevX = prevX;
     c.prevZ = prevZ;
     // The AI driver (swim-mode.js) either rewrites the input, or flies a choreographed move itself ('scripted')
-    const scripted = this.swimPilot?.(c, dt, input) === 'scripted';
+    let scripted = this.swimPilot?.(c, dt, input) === 'scripted';
+    // Player donuts are drift circles: a keyboard only has full lock and full gas, which the counter-steer assist
+    // straightens into a sideways run, so gas and full lock with the rears spinning (or sliding, or on the handbrake)
+    // below DONUT_SPEED hand the car to the drift circle the AI show uses. Space tightens it; letting go of either key
+    // drives out at the circle's speed and angle.
+    const spinning = input.throttle > 0.5 && Math.abs(input.steer) > 0.9;
+    const loose = c.drift.wheelspin > 0.3 || Math.abs(c.drift.slipAngle) > DONUT_SLIP || input.handbrake > 0;
+    const starting = loose && Math.hypot(c.speed, c.vx, c.vz) < DONUT_SPEED;
+    const donut = !this.swimPilot && spinning && (c.donut || starting);
+    if (donut) {
+      input.burnout = 0;
+      const direction = Math.sign(input.steer);
+      if (!c.donut || c.donut.direction !== direction) c.donut = DriftCircle.from(c, { direction });
+      c.donut.tight = input.handbrake > 0;
+      c.donut.update(c, dt, c.drift);
+      scripted = true;
+    } else if (c.donut) {
+      c.donut = null;
+    }
     const steps = Math.ceil(dt * SWIM_STEPS_PER_SECOND);
     const step = dt / steps;
     for (let i = 0; i < steps; i++) {

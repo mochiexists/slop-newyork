@@ -56,8 +56,8 @@ test('the AI show stages in Times Square and escapes along streets', () => {
   assert.ok(onRoadway(show.SHOW_SPOT), 'the stunt spot is on the road');
   assert.match(config.getLocationLabel(show.SHOW_SPOT.x, show.SHOW_SPOT.z), /7th Ave|Broadway/);
   for (const point of show.ESCAPE_ROUTE) assert.ok(onRoadway(point), `${point.x}, ${point.z} is on a street`);
-  // The escape starts where the stunts happen
-  assert.ok(Math.hypot(show.ESCAPE_ROUTE[0].x - show.SHOW_SPOT.x, show.ESCAPE_ROUTE[0].z - show.SHOW_SPOT.z) < 10);
+  // The escape starts where the stunts happen: the cop in the middle of the crossing, the car on its drift circle
+  assert.ok(Math.hypot(show.ESCAPE_ROUTE[0].x - show.SHOW_SPOT.x, show.ESCAPE_ROUTE[0].z - show.SHOW_SPOT.z) < 12);
 });
 
 test('the soundtrack is streamed by YouTube id, not stored in the repository', () => {

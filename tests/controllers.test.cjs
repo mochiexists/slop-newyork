@@ -41,7 +41,8 @@ function keyboardHarness(nyc = {}) {
       './vehicle-lights.js': {},
       './landmarks.js': {},
       './building-collision.js': polygonCollision,
-      './drift-physics.js': driftPhysics
+      './drift-physics.js': driftPhysics,
+      './drift-autopilot.js': {}
     }
   });
   // Exercise the production event handlers without constructing the scene's 3D models.
