@@ -2,6 +2,7 @@ import { createSynthResources, createMotorVoice, setControlRate } from './audio-
 import { createEventResources, playEvent, createWindVoice } from './audio-events.js';
 import { CityAudioSources } from './audio-sources.js';
 import { CityAcoustics } from './audio-acoustics.js';
+import { createSwimEngineVoice, loadSwimEngineClips } from './swim-engine-audio.js';
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const smooth = (param, value, now, time = 0.035, immediate = false) => {
@@ -170,6 +171,11 @@ class CityAudioSystem {
     this.reflectionFilter.Q.value = 0.5;
     this.reflections.connect(this.reverb).connect(this.reflectionFilter).connect(this.mix);
     this.wind = createWindVoice(context, this.resources, this.mix);
+    // The swimming car's recorded engine (tools/fetch-m3-sound.sh); its voice runs synthesized until, or unless, it loads.
+    this.swimEngineClips = null;
+    loadSwimEngineClips(context).then((bank) => {
+      if (this.context === context) this.swimEngineClips = bank;
+    });
     context.onstatechange = () => this.onStateChange();
   }
 
@@ -260,8 +266,11 @@ class CityAudioSystem {
         if (pool.size >= limit) continue;
         const emitter = new SpatialEmitter(this.context, this.mix, this.reflections, this.acoustics,
           siren ? 9 : source.kind === 'helicopter' ? 12 : 4, siren ? 0.9 : 0, siren);
-        slot = { emitter, voice: createMotorVoice(this.context, this.resources, siren ? 'siren' : source.kind, emitter.input),
-          distance: 0, x: source.x, y: source.y, z: source.z, fresh: true };
+        const voice = !siren && source.kind === 'swim'
+          ? createSwimEngineVoice(this.context, this.resources, emitter.input, { entity: source.id,
+            controls: () => this.sources.swimControls(), clips: () => this.swimEngineClips })
+          : createMotorVoice(this.context, this.resources, siren ? 'siren' : source.kind, emitter.input);
+        slot = { emitter, voice, distance: 0, x: source.x, y: source.y, z: source.z, fresh: true };
         pool.set(source.id, slot);
       }
       slot.selected = true;
@@ -275,6 +284,7 @@ class CityAudioSystem {
       params.load = source.load;
       params.verticalSpeed = source.verticalSpeed;
       params.seed = source.seed;
+      params.player = source.player;
       params.doppler = clamp(343 / (343 + radial), 0.85, 1.18);
       slot.voice.update(params, now);
       slot.distance = distance;
@@ -392,6 +402,8 @@ class CityAudioSystem {
 
   update(dt, elapsed, camera, night = false) {
     if (!this.ready || !this.enabled || this.context?.state !== 'running' || document.hidden) return;
+    // Engines with their own model (the swimming car) run every frame, between the 10 Hz ambience updates.
+    for (const slot of this.motors.values()) slot.voice.tick?.(dt, this.context.currentTime);
     this.accumulator += dt;
     if (this.accumulator < 0.1) return;
     dt = Math.min(this.accumulator, 0.25);

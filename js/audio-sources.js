@@ -100,6 +100,15 @@ class CityAudioSources {
     };
   }
 
+  // The swimming car's pedal as driven this frame: controllers.js keeps the drift model's input (after any AI
+  // driver has rewritten it) in _swimInput; before the first swim frame, the keys.
+  swimControls() {
+    const input = this.controllers._swimInput;
+    const controls = this.swimPedal ??= { throttle: 0 };
+    controls.throttle = input ? unit(Math.max(input.throttle, input.reverse)) : unit(+this.controllers.keys.forward);
+    return controls;
+  }
+
   distanceSq(x, y, z) {
     const dx = x - this.listener.x;
     const dy = y - this.listener.y;
@@ -179,10 +188,14 @@ class CityAudioSources {
       } else {
         // Inactive bicycles stop updating and are silent, even if their stored speed is left over from riding.
         if (!player && entity.type === 'cyclist') continue;
-        const kind = entity.type === 'car' ? 'sedan' : entity.type;
+        // The swimming car has its own engine (swim-engine-audio.js); other cars share the sedan voice.
+        const kind = entity.mode === 'swim' ? 'swim' : entity.type === 'car' ? 'sedan' : entity.type;
         const helicopter = kind === 'helicopter';
         const verticalSpeed = player && helicopter ? helicopterVerticalSpeed(entity) : 0;
-        const load = player ? helicopter ? helicopterLoad(entity, keys, verticalSpeed) : driveLoad(keys, entity.speed, kind === 'cyclist') : 0;
+        let load = 0;
+        if (player && helicopter) load = helicopterLoad(entity, keys, verticalSpeed);
+        else if (player && kind === 'swim') load = this.swimControls().throttle;
+        else if (player) load = driveLoad(keys, entity.speed, kind === 'cyclist');
         const gain = player ? 1 : helicopter ? 0.22 : 0.5;
         const range = helicopter ? (player ? 500 : 200) : 160;
         this.motor(entity, kind, x, y + (helicopter ? 2.66 : 0.7), z, player ? entity.speed : 0, load, entity.heading,
