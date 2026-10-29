@@ -25,7 +25,7 @@ const AUTOPILOT = {
   steerGain: 1.5, // wheel angle per radian of heading error
   laneWidth: 3.3, // m: without a street corridor, it may use `lanes` of these either side of the route line
   lanes: 1,
-  scanAhead: 70, // m of traffic it plans through
+  scanAhead: 120, // m of traffic it plans through: at 85 mph, its look-ahead plus the room to brake to a queue
   carHalfWidth: 0.97, // m: the car's own half width and half length
   carHalfLength: 2.5,
   passMargin: 0.35, // m of air it leaves between itself and a car it passes (a swimmer's margin, not a driver's)

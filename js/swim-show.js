@@ -57,6 +57,7 @@ const CORNER_CLEAR_DISTANCE = 110; // m out from a drift corner that the show st
 const CORNER_CLEAR_RADIUS = 26;
 const REVERSE_TIME = 1.1;
 
+const GATHER_RANGE = 130; // m round the car that traffic is handed to the AI (it plans 120 m ahead)
 const CURB_MARGIN = 1.4; // m between the curb and the middle of the car at the edge of a swim
 
 // The street under each leg of a route, as lateral bounds about the route line (m, + left of travel) for the AI's
@@ -473,7 +474,7 @@ class SwimShow {
     for (const vehicles of groups) {
       for (const v of vehicles) {
         if (!v.edge) continue;
-        if (Math.abs(v.x - car.position.x) < 90 && Math.abs(v.z - car.position.z) < 90) list.push(v);
+        if (Math.abs(v.x - car.position.x) < GATHER_RANGE && Math.abs(v.z - car.position.z) < GATHER_RANGE) list.push(v);
       }
     }
     return list;
