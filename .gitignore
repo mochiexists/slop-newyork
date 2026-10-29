@@ -1,1 +1,3 @@
 .DS_Store
+# Recorded sound fetched by tools/fetch-m3-sound.sh: used, never committed (like the streamed music)
+assets/audio/
