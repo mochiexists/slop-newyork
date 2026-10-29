@@ -48,6 +48,7 @@ const SWIM_STEPS_PER_SECOND = 240; // the drift model wants short steps: slip an
 const BURNOUT_SPEED = 3; // m/s below which gas + brake together is a burnout
 const DONUT_SPEED = 16; // m/s over the ground below which gas + full lock in a slide becomes a drift circle
 const DONUT_SLIP = 15 * Math.PI / 180; // drift angle that counts as already sliding
+const DONUT_BLOCKED = 0.02; // m a wall pushes the car back by that ends a drift circle
 const BICYCLE_DRIVE = {
   speed: 19, reverseSpeed: 4.5, acceleration: 9,
   rolling: 0.08, drag: 0.004, coast: 0.2, brake: 7.5 // Backward input is scaled to 0.6, giving 4.5 m/s² braking.
@@ -1402,7 +1403,9 @@ class ThirdPersonControllerManager {
     const spinning = input.throttle > 0.5 && Math.abs(input.steer) > 0.9;
     const loose = c.drift.wheelspin > 0.3 || Math.abs(c.drift.slipAngle) > DONUT_SLIP || input.handbrake > 0;
     const starting = loose && Math.hypot(c.speed, c.vx, c.vz) < DONUT_SPEED;
-    const donut = !this.swimPilot && spinning && (c.donut || starting);
+    // A circle that ran into a wall stays ended until the wheel is let go
+    if (!spinning) c.donutBlocked = false;
+    const donut = !this.swimPilot && spinning && !c.donutBlocked && (c.donut || starting);
     if (donut) {
       input.burnout = 0;
       const direction = Math.sign(input.steer);
@@ -1417,7 +1420,13 @@ class ThirdPersonControllerManager {
     const step = dt / steps;
     for (let i = 0; i < steps; i++) {
       const telemetry = scripted ? c.drift : stepDriftCar(c, input, step, M5_DRIFT, c.drift);
+      const beforeX = c.position.x, beforeZ = c.position.z;
       this.resolveHorizontalCollision(c.position, 1.35, c);
+      // The drift circle hit something solid: the slide is over, the physics takes the car from here
+      if (c.donut && Math.hypot(c.position.x - beforeX, c.position.z - beforeZ) > DONUT_BLOCKED) {
+        c.donut = null;
+        c.donutBlocked = true;
+      }
 
       // Squat under power, dive under braking, lean out of the corner; collisions kick the same springs
       const targetPitch = -Math.max(-1, Math.min(1, c.longAccel / 9)) * 0.03;
