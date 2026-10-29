@@ -202,7 +202,7 @@ function populationContext() {
     Math: Object.assign(Object.create(Math), { random: () => 0.5 }),
     clamp: (x, lo, hi) => Math.max(lo, Math.min(hi, x)),
     hasView: true, camX: 0, camY: 10, camZ: 0, visible: () => true,
-    focusX: 0, focusZ: 0, player: { active: false },
+    focusX: 0, focusZ: 0, player: { active: false }, clearZone: null,
     clock: 0,
     VEHICLE_SPAWN_DISTANCE: 250, PED_SPAWN_DISTANCE: 150, NEAR_RADIUS: 350, PED_AVOID_INTERVAL: 0.12,
     nearEdges: [], nearSignals: [], track: {}, KERB: 1.6, QUEUE_GAP: 0.62,
