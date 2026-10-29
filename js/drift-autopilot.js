@@ -7,10 +7,13 @@ import { M5_DRIFT } from './drift-physics.js';
 const RAD = Math.PI / 180;
 const GRAVITY = 9.81;
 const LEAD_STEPS = 4; // steps the steering's look at the move ahead is flown in
+const DRIFT_SPEED_MARGIN = 1.2; // share over the corner speed a drift may carry before it lifts
+const TURN_GRIP = 9.5; // m/s²: the lateral grip a drifted corner is planned with
+const ALONG_STREET = 15 * RAD; // travelling this close to the street's direction counts as running along it
 
 const AUTOPILOT = {
   cruiseSpeed: 38, // m/s on the straights (85 mph)
-  cornerSpeed: 13, // m/s into a drifted 90° corner
+  cornerSpeed: 9, // m/s into a drifted 90° corner: slow enough that a 45° slide stays inside a Manhattan crossing
   braking: 7.5, // m/s² it plans to brake at before a corner
   sharpTurn: 40 * RAD, // corners sharper than this are drifted
   kickTime: 0.32, // s of handbrake to break the rear loose
@@ -306,18 +309,25 @@ class DriftAutopilot {
     }
     const plan = this.plan;
     const goal = sharp && toCorner < 30 ? 0 : this.targetOffset;
-    // The move across the street the plan was made with, flown forward; the wheel aims where that move will have the
-    // car by the time it reaches the aim point (so the steering leads the move rather than chasing it)
-    this.refVel = slideAcross(this.refLat, this.refVel, goal, dt, o.lateralAccel, this.lateralSpeed);
-    this.refLat += this.refVel * dt;
     const reach = o.lookahead + o.lookaheadTime * Math.abs(u);
-    const lead = reach / Math.max(5, Math.abs(u));
-    let aheadLat = this.refLat, aheadVel = this.refVel;
-    for (let i = 0; i < LEAD_STEPS; i++) {
-      aheadVel = slideAcross(aheadLat, aheadVel, goal, lead / LEAD_STEPS, o.lateralAccel, this.lateralSpeed);
-      aheadLat += aheadVel * lead / LEAD_STEPS;
+    // Running along the street, the move across it the plan was made with is flown forward, and the wheel aims where
+    // that move will have the car by the time it reaches the aim point (so the steering leads the move rather than
+    // chasing it). Through a corner, and until the car runs along the new street, its sideways speed is the turn
+    // itself, not a lane change: it aims at the line.
+    const along = Math.abs(wrap(travelHeading(car) - Math.atan2(s.ux, s.uz))) < ALONG_STREET;
+    if (along && !this.cornering) {
+      this.refVel = slideAcross(this.refLat, this.refVel, goal, dt, o.lateralAccel, this.lateralSpeed);
+      this.refLat += this.refVel * dt;
+      const lead = reach / Math.max(5, Math.abs(u));
+      let aheadLat = this.refLat, aheadVel = this.refVel;
+      for (let i = 0; i < LEAD_STEPS; i++) {
+        aheadVel = slideAcross(aheadLat, aheadVel, goal, lead / LEAD_STEPS, o.lateralAccel, this.lateralSpeed);
+        aheadLat += aheadVel * lead / LEAD_STEPS;
+      }
+      this.offset = aheadLat;
+    } else {
+      this.offset = goal;
     }
-    this.offset = aheadLat;
 
     // Speed: the plan's pedal, flown as planned (its acceleration fed straight to the pedals, so the car keeps to the
     // timing the gaps were picked with), capped by what the next corner allows
@@ -328,12 +338,16 @@ class DriftAutopilot {
       const cornerLimit = Math.sqrt(o.cornerSpeed ** 2 + 2 * o.braking * Math.max(0, toCorner - 8));
       if (cornerLimit < target) {
         target = cornerLimit;
-        feedForward = u > cornerLimit ? -o.braking : 0;
+        // Braking for the corner: at least the planned rate, more if it is late (the rate that still gets there)
+        const late = (u * u - o.cornerSpeed ** 2) / (2 * Math.max(2, toCorner - 6));
+        feedForward = u > cornerLimit ? -Math.max(o.braking, late) : 0;
       }
     }
 
     // Drift entry: a handbrake flick and full lock into the turn as the corner arrives
-    const entry = Math.max(10, Math.abs(u) * 0.85);
+    // Turn in about a turning radius before the corner (at ~1 g of grip: speed² / g, at the speed it will turn at), so
+    // the arc ends on the new street rather than across it
+    const entry = Math.max(10, o.cornerSpeed * o.cornerSpeed / TURN_GRIP);
     if (sharp && toCorner < entry && this.driftedCorner !== this.segment && u > 8) {
       this.driftedCorner = this.segment;
       this.kick = o.kickTime;
@@ -378,6 +392,9 @@ class DriftAutopilot {
       if (slipAbs > o.driftAngle + 8 * RAD) input.throttle = o.driftThrottle * 0.3;
       else if (slipAbs < o.driftAngle - 10 * RAD) input.throttle = o.driftThrottle * 1.3;
       else input.throttle = o.driftThrottle;
+      // ...but the gas holds the angle, not a faster car: past the corner speed it only keeps the rears turning, or
+      // the slide carries the car across the new street
+      if (u > o.cornerSpeed * DRIFT_SPEED_MARGIN) input.throttle = Math.min(input.throttle, o.driftThrottle * 0.5);
     } else {
       // The force the wanted acceleration takes, on top of drag and rolling resistance: positive is gas, negative brake
       const p = M5_DRIFT;
