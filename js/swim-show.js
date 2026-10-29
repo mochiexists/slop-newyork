@@ -43,6 +43,7 @@ const ESCAPE_ROUTE = [
 const BURNOUT_TIME = 2.6;
 const DONUT_TIME = 11; // s of drifting round the cop (a lap takes about six) before looking for the way out
 const EXIT_TIME = 0.7; // s straightening out of the circle before the escape
+const ESCAPE_MERGE = 24; // m down 7th Ave from the cop where the escape is back in the avenue's middle
 const CHASE_TIME = 14; // s the cop keeps up the chase before it gives up
 // The hand-over, like the opening of a racing game: a few seconds into the swim, at speed, the car is the player's
 const SWIM_TIME = 7; // s of swimming before it looks for a moment to hand over
@@ -386,7 +387,9 @@ class SwimShow {
         if (this.donut.exiting && this.time - this.exitAt > EXIT_TIME) {
           // The physics takes the car on at the speed and angle the circle left it with
           this.traffic.setClearZone(null);
-          const escape = [{ x: car.position.x, z: car.position.z }, ...ESCAPE_ROUTE.slice(1)];
+          // Off the circle (which reaches over the curb) straight back onto the avenue, then the run
+          const merge = { x: ESCAPE_ROUTE[0].x, z: ESCAPE_ROUTE[0].z + ESCAPE_MERGE };
+          const escape = [{ x: car.position.x, z: car.position.z }, merge, ...ESCAPE_ROUTE.slice(1)];
           this.pilot.setPath(escape, { corridors: routeCorridors(escape) });
           this.cruiser.chase(ESCAPE_ROUTE.slice(1));
           this.setPhase('escape');
