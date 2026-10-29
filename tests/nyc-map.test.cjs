@@ -46,6 +46,7 @@ for (const [width, height, dpr] of [[500, 300, 1], [320, 180, 1.5], [1920, 1080,
       viewCenterX: 200,
       viewCenterZ: -300,
       viewZoom: 0.5,
+      overlayRoutes: [],
       controllerManager: { getActiveEntity: () => ({ position: { x: 200, z: -300 }, heading: 0 }) },
       renderFullMapStatic: (_context, viewport) => { view = viewport; }
     });

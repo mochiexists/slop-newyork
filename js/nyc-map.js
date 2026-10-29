@@ -423,6 +423,30 @@ function drawWaypoint(ctx, x, y, r) {
   ctx.fill();
 }
 
+// A fixed route over the map (the swimming clip's drive): a dashed line on a dark casing, its start a ring
+function drawOverlayRoute(ctx, route, toX, toY, width) {
+  if (route.points.length < 2) return;
+  ctx.save();
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  route.points.forEach((p, i) => (i ? ctx.lineTo(toX(p.x), toY(p.z)) : ctx.moveTo(toX(p.x), toY(p.z))));
+  ctx.strokeStyle = MAP.halo;
+  ctx.lineWidth = width + 3;
+  ctx.stroke();
+  ctx.setLineDash([width * 2.4, width * 1.4]);
+  ctx.strokeStyle = route.color;
+  ctx.lineWidth = width;
+  ctx.stroke();
+  ctx.setLineDash([]);
+  const start = route.points[0];
+  ctx.beginPath();
+  ctx.arc(toX(start.x), toY(start.z), width + 2.5, 0, Math.PI * 2);
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.restore();
+}
+
 const overlaps = (boxes, b) => boxes.some((o) => b[0] < o[2] && b[2] > o[0] && b[1] < o[3] && b[3] > o[1]);
 
 class NYCMapSystem {
@@ -475,6 +499,8 @@ class NYCMapSystem {
     // Start with a waypoint at Times Square / Broadway.
     const ts = NYC_LANDMARKS.find((l) => l.id === 'timessquare') || { x: 0, z: 0 };
     this.waypoint = { x: ts.x, z: ts.z, name: 'Times Square & 42nd St' };
+    // Fixed routes drawn over both maps: { points: [{ x, z }], color }
+    this.overlayRoutes = [];
 
     // Street names measured before the web font arrived would be spaced for the fallback font: measure & draw again
     if (document.fonts) {
@@ -1034,6 +1060,8 @@ class NYCMapSystem {
       }
     }
 
+    for (const route of this.overlayRoutes) drawOverlayRoute(ctx, route, toX, toY, 2.5);
+
     // GPS route to the active waypoint
     if (this.waypoint) {
       const wx = toX(this.waypoint.x);
@@ -1123,6 +1151,8 @@ class NYCMapSystem {
     v.screen(ctx);
     const toX = (wx) => v.toX(wx);
     const toY = (wz) => v.toY(wz);
+
+    for (const route of this.overlayRoutes) drawOverlayRoute(ctx, route, toX, toY, 3.5);
 
     // GPS route on the full map
     if (this.waypoint) {

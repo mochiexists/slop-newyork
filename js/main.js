@@ -19,6 +19,7 @@ import { LightingSystem } from './lighting.js';
 import { NYCMapSystem } from './nyc-map.js';
 import { setupSceneCulling, updateSceneCulling } from './scene-culling.js';
 import { CityAudioSystem } from './audio-system.js';
+import { SwimDirector, SWIM_STARTS, SQUEEZE_ROUTE } from './swim-mode.js';
 
 // Application setup, shader warm-up and frame loop.
 
@@ -143,10 +144,12 @@ async function initApp() {
   const cameraSystem = new CameraSystem(renderer.domElement, controllerManager);
   const touchControls = new TouchControls(controllerManager);
   const soundButton = document.getElementById('btn-sound');
+  let swimDirector = null; // created once the audio system exists; the sound button mutes its music too
   const audioSystem = new CityAudioSystem({ controllerManager, trafficSystem, highwayTraffic, streetDetails }, {
     onStateChange: updateSoundButton
   });
   function updateSoundButton() {
+    swimDirector?.setMuted(!audioSystem.enabled);
     if (!soundButton) return;
     soundButton.disabled = !audioSystem.supported;
     soundButton.setAttribute('aria-pressed', String(audioSystem.enabled));
@@ -155,6 +158,7 @@ async function initApp() {
     soundButton.querySelector('use').setAttribute('href', audioSystem.enabled ? '#i-sound' : '#i-sound-off');
   }
   soundButton?.addEventListener('click', () => audioSystem.setEnabled(!audioSystem.enabled));
+  swimDirector = new SwimDirector({ scene, controllerManager, audioSystem });
   updateSoundButton();
   // pagehide also covers navigation away on mobile; preserve the context across back-forward cache restores.
   window.addEventListener('pagehide', (event) => {
@@ -261,7 +265,7 @@ async function initApp() {
   const elControlsHint = document.getElementById('hud-controls-hint');
   const gamepadControls = new GamepadControls(controllerManager, cameraSystem, {
     onCycleMode: (step) => {
-      const modes = ['person', 'car', 'cyclist', 'helicopter'];
+      const modes = ['person', 'car', 'cyclist', 'helicopter', 'swim'];
       selectMode(modes[(modes.indexOf(controllerManager.activeMode) + step + modes.length) % modes.length]);
     },
     onCycleCamera: cycleCamera,
@@ -274,10 +278,12 @@ async function initApp() {
     person: [[['W', 'S'], 'Walk / Run'], [['A', 'D'], 'Turn'], [['Space'], 'Jump'], [['Drag'], 'Orbit']],
     car: [[['W', 'S'], 'Drive / Reverse'], [['A', 'D'], 'Steer'], [['B'], 'Horn'], [['Drag'], 'Orbit']],
     cyclist: [[['W', 'S'], 'Pedal / Brake'], [['A', 'D'], 'Lean & Turn'], [['Drag'], 'Orbit']],
-    helicopter: [[['W', 'S'], 'Pitch'], [['A', 'D'], 'Yaw'], [['Space', 'E'], 'Ascend'], [['Q', 'C'], 'Descend']]
+    helicopter: [[['W', 'S'], 'Pitch'], [['A', 'D'], 'Yaw'], [['Space', 'E'], 'Ascend'], [['Q', 'C'], 'Descend']],
+    swim: [[['W', 'S'], 'Gas / Brake'], [['A', 'D'], 'Steer'], [['Space'], 'Handbrake'], [['B'], 'Horn']]
   };
-  // Top speeds in mph (controllers.js caps them at 8.2, 36, 19 & 52 m/s): full scale of the speed meter
-  const topSpeedMph = { person: 18, car: 81, cyclist: 43, helicopter: 116 };
+  // Top speeds in mph (controllers.js & drift-physics.js cap them at 8.2, 36, 19, 52 & 85 m/s): full scale of the
+  // speed meter
+  const topSpeedMph = { person: 18, car: 81, cyclist: 43, helicopter: 116, swim: 190 };
 
   function renderControlHints(mode) {
     if (!elControlsHint) return;
@@ -314,6 +320,7 @@ async function initApp() {
       btn.classList.toggle('active', btn.getAttribute('data-mode') === mode);
     });
     document.body.dataset.mode = mode;
+    swimDirector.setActive(mode === 'swim');
     placeModeIndicator();
     const ent = controllerManager.getActiveEntity();
     if (elMode) elMode.textContent = ent.label;
@@ -508,6 +515,18 @@ async function initApp() {
   const openMapBtn = document.getElementById('btn-open-map');
   if (openMapBtn) openMapBtn.addEventListener('click', () => mapSystem.toggleFullMap(true));
 
+  // The two reference clips: get in the M5 where each one starts. The map carries the Squeeze Benz drive.
+  document.querySelectorAll('[data-swim-start]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const start = SWIM_STARTS[btn.getAttribute('data-swim-start')];
+      if (!start) return;
+      selectMode('swim');
+      teleportTo(start.x, start.z, start.heading);
+      closePopovers();
+    });
+  });
+  mapSystem.overlayRoutes.push({ points: SQUEEZE_ROUTE, color: '#ff4fa3' });
+
   if (hudToggleBtn) {
     hudToggleBtn.addEventListener('click', () => {
       document.body.classList.toggle('hud-minimized');
@@ -519,7 +538,7 @@ async function initApp() {
     });
   }
 
-  // Global keyboard shortcuts for modes (1-4), cameras (V / 5-0), and HUD (H)
+  // Global keyboard shortcuts for modes (1-5), cameras (V / 6-0), and HUD (H)
   window.addEventListener('keydown', (e) => {
     if (isTypingInField(e)) return;
     switch (e.code) {
@@ -536,16 +555,16 @@ async function initApp() {
         selectMode('helicopter');
         break;
       case 'Digit5':
-        selectCamera('chase', true);
+        selectMode('swim');
         break;
       case 'Digit6':
-        selectCamera('action', true);
+        selectCamera('chase', true);
         break;
       case 'Digit7':
-        selectCamera('pov', true);
+        selectCamera('action', true);
         break;
       case 'Digit8':
-        selectCamera('fifthAve', true);
+        selectCamera('pov', true);
         break;
       case 'Digit9':
         selectCamera('timesSquare', true);
@@ -688,6 +707,7 @@ async function initApp() {
     gamepadControls.update(dt);
     controllerManager.update(dt, elapsed, cameraSystem.initialized ? cameraSystem.currentPos : null);
     cameraSystem.update(dt, elapsed);
+    swimDirector.update(dt, cameraSystem.camera);
     streetDetails.signalClock.value = elapsed;
     trafficSystem.update(
       dt,

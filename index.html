@@ -53,7 +53,9 @@
   <link rel="modulepreload" href="./js/traffic.js" />
   <link rel="modulepreload" href="./js/pedestrian-system.js" />
   <link rel="modulepreload" href="./js/pedestrian-routes.js" />
+  <link rel="modulepreload" href="./js/drift-physics.js" />
   <link rel="modulepreload" href="./js/controllers.js" />
+  <link rel="modulepreload" href="./js/swim-mode.js" />
   <link rel="modulepreload" href="./js/touch-controls.js" />
   <link rel="modulepreload" href="./js/gamepad-controls.js" />
   <link rel="modulepreload" href="./js/cameras.js" />
@@ -71,7 +73,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400..800&amp;family=Overpass:wght@600;700&amp;display=swap" />
-  <link rel="stylesheet" href="./css/style.css?v=20261022-repo-link" />
+  <link rel="stylesheet" href="./css/style.css?v=20261029-swimming" />
 </head>
 <body>
   <!-- Icon sprite (24 × 24 stroke icons, drawn in currentColor) -->
@@ -80,6 +82,7 @@
       <symbol id="i-walk" viewBox="0 0 24 24"><circle cx="13" cy="4.4" r="2"/><path d="M12.3 8.2 10.8 13.8M10.8 13.8 9.2 17.2 7.2 20.5M10.8 13.8l2.4 3 1.6 3.8M12.3 8.6 9.6 10.2l-.8 2.6M12.3 8.6l2.1 2.4 2.4.8"/></symbol>
       <symbol id="i-car" viewBox="0 0 24 24"><path d="M9.6 4.8V3.4a.6.6 0 0 1 .6-.6h3.6a.6.6 0 0 1 .6.6v1.4"/><path d="m5.2 10.5 1.4-4.1A2.2 2.2 0 0 1 8.7 4.8h6.6a2.2 2.2 0 0 1 2.1 1.6l1.4 4.1"/><rect x="3" y="10.5" width="18" height="6.5" rx="2"/><path d="M6 17v2.6M18 17v2.6M6.6 13.8h1.6M15.8 13.8h1.6"/></symbol>
       <symbol id="i-bike" viewBox="0 0 24 24"><circle cx="5.5" cy="16.5" r="3.6"/><circle cx="18.5" cy="16.5" r="3.6"/><path d="M5.5 16.5 9.3 9.6h6.3M11.6 16.5 9.3 9.6M11.6 16.5l4-6.9M5.5 16.5h6.1M15.6 9.6l2.9 6.9M15.6 9.6 14.8 7h2.4M8 8.4h2.8"/></symbol>
+      <symbol id="i-m5" viewBox="0 0 24 24"><path d="M2.5 15.6v-1.7c0-.9.6-1.6 1.5-1.8l4.4-.9 3-2.6c.5-.4 1.1-.6 1.7-.6h3.4c.7 0 1.3.3 1.7.8l2.2 2.5 1.3.3c.8.2 1.3.9 1.3 1.7v2.3h-1.4M4.5 15.6h-2M8.6 15.6h6.8M9.3 11.4h10.6"/><circle cx="6.5" cy="15.6" r="2"/><circle cx="17.4" cy="15.6" r="2"/></symbol>
       <symbol id="i-heli" viewBox="0 0 24 24"><path d="M3.5 4h15M11 4v3.2"/><path d="M6 12.2a5 5 0 0 1 5-5h1.6a4.4 4.4 0 0 1 4.4 4.4V15H8.8A2.8 2.8 0 0 1 6 12.2z"/><path d="M17 11h4.2M21.2 8.8v4.4M7 19h10.5M9.5 15v4M15 15v4"/></symbol>
       <symbol id="i-golden" viewBox="0 0 24 24"><path d="M3 17.5h18M7 17.5a5 5 0 0 1 10 0M12 5v3M5.6 9.6l2 1.6M18.4 9.6l-2 1.6M7.5 21h9"/></symbol>
       <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.8v2.1M12 19.1v2.1M2.8 12h2.1M19.1 12h2.1M5.5 5.5 7 7M17 17l1.5 1.5M5.5 18.5 7 17M17 7l1.5-1.5"/></symbol>
@@ -176,7 +179,40 @@
     <button id="tp-flatiron" class="pop-item tp-btn" data-teleport="flatiron" type="button"><span class="pop-name">Flatiron Building</span><span class="pop-sub">5th Ave · Flatiron District</span></button>
     <button id="tp-centralpark" class="pop-item tp-btn" data-teleport="centralpark" type="button"><span class="pop-name">Central Park</span><span class="pop-sub">6th Ave · Central Park South</span></button>
     <button id="tp-owtc" class="pop-item tp-btn" data-teleport="owtc" type="button"><span class="pop-name">One World Trade Center</span><span class="pop-sub">Vesey St · Financial District</span></button>
+    <div class="pop-title">Swimming · BMW M5</div>
+    <button id="swim-start-squeeze" class="pop-item tp-btn" data-swim-start="squeeze" type="button"><span class="pop-name">Times Square swim</span><span class="pop-sub">Squeeze Benz clip · 7th Ave &amp; W 47th St</span></button>
+    <button id="swim-start-donuts" class="pop-item tp-btn" data-swim-start="donuts" type="button"><span class="pop-name">NYPD donuts</span><span class="pop-sub">BMW short · 11th Ave &amp; W 42nd St</span></button>
   </div>
+
+  <!-- Swimming: drift score (top centre) and the Careless Whisper card (YouTube's player, top left) -->
+  <section id="swim-hud" class="hud hud-top-center swim-only" aria-label="Drift score" aria-live="off">
+    <div class="panel swim-score">
+      <div class="swim-angle-block">
+        <span id="swim-angle" class="swim-angle">0°</span>
+        <span class="swim-caption">Drift angle</span>
+      </div>
+      <div class="swim-points-block">
+        <span id="swim-points" class="swim-points">—</span>
+        <span class="swim-caption">Swim <span id="swim-chain" class="swim-chain"></span></span>
+      </div>
+      <div class="swim-totals">
+        <span><span class="swim-caption">Total</span> <span id="swim-total">0</span></span>
+        <span><span class="swim-caption">Best</span> <span id="swim-best">0</span></span>
+      </div>
+    </div>
+    <div id="swim-flash" class="swim-flash" aria-live="polite"></div>
+  </section>
+  <aside id="swim-radio" class="panel swim-radio swim-only" data-status="loading" aria-label="Now playing" hidden>
+    <div class="swim-radio-video"><div id="swim-radio-player"></div></div>
+    <div class="swim-radio-meta">
+      <div class="swim-radio-title">Careless Whisper</div>
+      <div class="swim-radio-artist">George Michael · via YouTube</div>
+      <div class="swim-radio-buttons">
+        <button class="tool-btn swim-radio-play" data-swim-radio="play" type="button">Play</button>
+        <button class="tool-btn swim-radio-pause" data-swim-radio="pause" type="button">Pause</button>
+      </div>
+    </div>
+  </aside>
 
   <!-- Bottom-Left: Street-Name Signs & Live GPS Radar Minimap -->
   <div class="hud hud-bottom-left">
@@ -204,6 +240,9 @@
       </button>
       <button id="mode-helicopter" class="mode-btn" data-mode="helicopter" type="button" title="Helicopter [4]">
         <svg class="icon" aria-hidden="true"><use href="#i-heli"/></svg><span class="mode-label">Fly</span><kbd>4</kbd>
+      </button>
+      <button id="mode-swim" class="mode-btn" data-mode="swim" type="button" title="Swimming · BMW M5 [5]">
+        <svg class="icon" aria-hidden="true"><use href="#i-m5"/></svg><span class="mode-label">Swimming</span><kbd>5</kbd>
       </button>
     </nav>
   </footer>
@@ -256,12 +295,12 @@
   <!-- All Cameras: 3 Follow Cameras + 7 Iconic NYC Vantage Cameras + Auto-Director Drone -->
   <div id="camera-popover" class="popover" popover data-side="above" data-anchor="hud-cluster" data-align="hud-cluster" aria-label="Multiple Camera Angles">
     <div class="pop-title">Follow</div>
-    <button id="cam-chase" class="pop-item cam-btn active" data-camera="chase" type="button"><span class="pop-name">3rd-Person Chase</span><kbd>5</kbd></button>
-    <button id="cam-action" class="pop-item cam-btn" data-camera="action" type="button"><span class="pop-name">Low-Angle Action</span><kbd>6</kbd></button>
-    <button id="cam-pov" class="pop-item cam-btn" data-camera="pov" type="button"><span class="pop-name">First-Person / Cockpit</span><kbd>7</kbd></button>
+    <button id="cam-chase" class="pop-item cam-btn active" data-camera="chase" type="button"><span class="pop-name">3rd-Person Chase</span><kbd>6</kbd></button>
+    <button id="cam-action" class="pop-item cam-btn" data-camera="action" type="button"><span class="pop-name">Low-Angle Action</span><kbd>7</kbd></button>
+    <button id="cam-pov" class="pop-item cam-btn" data-camera="pov" type="button"><span class="pop-name">First-Person / Cockpit</span><kbd>8</kbd></button>
     <div class="pop-title">Scenic</div>
     <button id="cam-centralPark" class="pop-item cam-btn" data-camera="centralPark" type="button"><span class="pop-name">Central Park Oasis</span></button>
-    <button id="cam-fifthAve" class="pop-item cam-btn" data-camera="fifthAve" type="button"><span class="pop-name">5th Ave &amp; Empire State</span><kbd>8</kbd></button>
+    <button id="cam-fifthAve" class="pop-item cam-btn" data-camera="fifthAve" type="button"><span class="pop-name">5th Ave &amp; Empire State</span></button>
     <button id="cam-timesSquare" class="pop-item cam-btn" data-camera="timesSquare" type="button"><span class="pop-name">Times Square Crossroads</span><kbd>9</kbd></button>
     <button id="cam-chryslerGCT" class="pop-item cam-btn" data-camera="chryslerGCT" type="button"><span class="pop-name">42nd St · Chrysler &amp; GCT</span><kbd>0</kbd></button>
     <button id="cam-observatory" class="pop-item cam-btn" data-camera="observatory" type="button"><span class="pop-name">Empire State 86th Deck</span></button>
