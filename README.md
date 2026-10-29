@@ -29,14 +29,31 @@ never committed: recordings of a tuned M3 (`tools/fetch-m3-sound.sh`), the decod
 of them it finds and falls back to the minimal version's car and sound for the rest. `tools/build-variants.sh` builds
 both into `dist/minimal` and `dist/full`.
 
+For the car, download [the model](https://skfb.ly/pNwqZ) from Sketchfab as glTF and run
+`zsh tools/prepare-m3-model.sh ~/Downloads/bmw_m3_competition__hassan_visuals_3d.zip`: it bakes, simplifies and
+compresses it into `assets/models/m3.glb` (about 3 MB, gitignored).
+
 ## Make it your own
 
 Fork it, remix it, improve it, break it. Make games, animations, films, experiments, or something completely different. Use it as a starting point and take it wherever you want. Have fun!
 
 Explore other cities and community remixes in [Slop Cities](https://github.com/zz85/slop-cities).
 
+## Full build
+
+The repository is the minimal build: a procedural swimming car and streamed music. The full build adds local assets
+that are never committed (`assets/` is gitignored). For the real BMW M3 Competition in swimming mode, download
+[the model](https://skfb.ly/pNwqZ) from Sketchfab as glTF and run
+
+    zsh tools/prepare-m3-model.sh ~/Downloads/bmw_m3_competition__hassan_visuals_3d.zip
+
+which bakes, simplifies and compresses it into `assets/models/m3.glb` (about 3 MB). The page uses it when it is
+there and falls back to the procedural car when it isn't.
+
 ## License and data
 
 The project code is available under the [MIT License](LICENSE).
 
 Geographic data: NYC Open Data (including [building footprints and heights](https://data.cityofnewyork.us/City-Government/BUILDING/5zhs-2jue) and [tree locations](https://data.cityofnewyork.us/Environment/Forestry-Tree-Points/hn5i-inap)), [MTA subway entrances](https://data.ny.gov/Transportation/MTA-Subway-Entrances-and-Exits-2024/i9wp-a4ja), and © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright) (ODbL). Third-party data and dependencies retain their respective licenses.
+
+BMW M3 Competition model by [Hassan Visuals 3D](https://sketchfab.com/HassanVisuals3D) ([Sketchfab](https://skfb.ly/pNwqZ), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)), baked, simplified and compressed for the full build.
