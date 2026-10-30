@@ -1385,7 +1385,13 @@ class ThirdPersonControllerManager {
     if (dt <= 0) return;
     const c = this.entities.swim;
     const driver = this.swimDriver ??= new KeyboardDriver();
-    const input = driver.update(c, c.drift, this.keys, dt);
+    const keys = this._swimKeys ??= { forward: 0, backward: 0, left: 0, right: 0, handbrake: 0 };
+    keys.forward = this.keys.forward;
+    keys.backward = this.keys.backward;
+    keys.left = this.keys.left;
+    keys.right = this.keys.right;
+    keys.handbrake = this.keys.up;
+    const input = driver.update(c, keys, dt);
 
     const prevX = c.position.x;
     const prevZ = c.position.z;

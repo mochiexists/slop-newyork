@@ -12,7 +12,7 @@ const STEPS = 4;
 const RAD = Math.PI / 180;
 
 function keys(pressed = {}) {
-  return { forward: 0, backward: 0, left: 0, right: 0, up: 0, ...pressed };
+  return { forward: 0, backward: 0, left: 0, right: 0, handbrake: 0, ...pressed };
 }
 
 // Drives `seconds` of keys (a function of time) from a car rolling at `speed`; returns the extremes, the time spent
@@ -23,7 +23,7 @@ function drive(speed, seconds, keysAt) {
   const driver = new KeyboardDriver();
   const result = { car, maxSlip: 0, maxSpin: 0, maxSteer: 0, sliding: 0, slideGears: new Set(), limiter: 0 };
   for (let t = 0; t < seconds; t += FRAME) {
-    const input = driver.update(car, telemetry, keysAt(t), FRAME);
+    const input = driver.update(car, keysAt(t), FRAME);
     result.maxSteer = Math.max(result.maxSteer, Math.abs(input.steer));
     for (let i = 0; i < STEPS; i++) stepDriftCar(car, input, FRAME / STEPS, M5_DRIFT, telemetry);
     result.maxSlip = Math.max(result.maxSlip, Math.abs(telemetry.slipAngle));
@@ -57,7 +57,7 @@ test('steering winds on while A is held: a tap nudges the wheel, a long hold rea
   const driver = new KeyboardDriver();
   const hold = (seconds, pressed) => {
     let input;
-    for (let t = 0; t < seconds - 1e-9; t += FRAME) input = driver.update(car, { slipAngle: 0 }, keys(pressed), FRAME);
+    for (let t = 0; t < seconds - 1e-9; t += FRAME) input = driver.update(car, keys(pressed), FRAME);
     return input.steer;
   };
   const tap = hold(0.1, { left: 1 });
@@ -71,11 +71,11 @@ test('steering winds on while A is held: a tap nudges the wheel, a long hold rea
   assert.ok(hold(1, { left: 1 }) < 0.8, 'slower at speed');
 
   const pedal = new KeyboardDriver();
-  assert.ok(pedal.update(car, { slipAngle: 0 }, keys({ forward: 1 }), FRAME).throttle < 0.1, 'the pedal is pressed');
+  assert.ok(pedal.update(car, keys({ forward: 1 }), FRAME).throttle < 0.1, 'the pedal is pressed');
 });
 
 test('the handbrake with gas at 15 m/s slides the car', () => {
-  const run = drive(15, 2, (t) => keys({ forward: 1, left: t < 0.8 ? 1 : 0, up: t < 0.4 ? 1 : 0 }));
+  const run = drive(15, 2, (t) => keys({ forward: 1, left: t < 0.8 ? 1 : 0, handbrake: t < 0.4 ? 1 : 0 }));
   assert.ok(run.maxSlip > 25 * RAD, `slide ${(run.maxSlip / RAD).toFixed(1)}°`);
 });
 
@@ -110,7 +110,7 @@ test('the traction control launches an M3 Competition in its 0-60 time', () => {
   const driver = new KeyboardDriver();
   let t = 0;
   while (car.speed < 60 * 0.44704 && t < 10) {
-    const input = driver.update(car, telemetry, keys({ forward: 1 }), FRAME);
+    const input = driver.update(car, keys({ forward: 1 }), FRAME);
     for (let i = 0; i < STEPS; i++) stepDriftCar(car, input, FRAME / STEPS, M5_DRIFT, telemetry);
     t += FRAME;
   }
@@ -120,7 +120,8 @@ test('the traction control launches an M3 Competition in its 0-60 time', () => {
 test('reset clears the held state between teleports', () => {
   const car = { position: { x: 0, z: 0 }, heading: 0, speed: 10, vx: 0, vz: 0, angularVel: 0, steerAngle: 0 };
   const driver = new KeyboardDriver();
-  for (let i = 0; i < 60; i++) driver.update(car, { slipAngle: -0.5 }, keys({ forward: 1, left: 1 }), FRAME);
+  car.vx = -5.5; // sliding right at about 29°: a left drift
+  for (let i = 0; i < 60; i++) driver.update(car, keys({ forward: 1, left: 1 }), FRAME);
   assert.equal(driver.commit, 1);
   driver.reset();
   assert.equal(driver.commit, 0);

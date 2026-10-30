@@ -419,17 +419,21 @@ class KeyboardDriver {
   }
 
   /**
-   * One frame of keys (forward, backward, left, right, up = handbrake; 0..1 each) to the drift model's input.
-   * telemetry is the car's last step (slipAngle). Returns the same input object each call.
+   * The one way to drive the car, for the player and the AI alike: a frame of keys (forward, backward, left, right,
+   * handbrake; each pressed or not) to stepDriftCar's input. Call once per frame, then step the physics with the
+   * returned input (the same object each call). Everything it remembers lives on the driver, one per car.
    */
-  update(car, telemetry, keys, dt) {
+  update(car, keys, dt) {
     const p = this.params;
     const input = this.input;
     const forward = Number(keys.forward) || 0;
     const backward = Number(keys.backward) || 0;
     const steerKeys = (Number(keys.left) || 0) - (Number(keys.right) || 0);
-    const handbrake = Number(keys.up) || 0;
+    const handbrake = Number(keys.handbrake) || 0;
     const speed = Math.abs(car.speed);
+    // The drift angle the driver feels: the car's sideways velocity against its heading
+    const lateral = car.vx * Math.cos(car.heading) - car.vz * Math.sin(car.heading);
+    const slip = speed > 2 ? Math.atan2(lateral, speed) : 0;
 
     // Pedals: S brakes, then reverses from a stop; W brakes a car rolling backwards; both at a stop is a burnout
     const rollingBack = car.speed < -0.5;
@@ -465,7 +469,7 @@ class KeyboardDriver {
     const controlled = full > 0 ? Math.min(1, share * grip * loadRear / full) : 1;
 
     // The driver commits by holding gas and lock (a power-over), pulling the handbrake, or already being sideways
-    const sliding = Math.abs(telemetry.slipAngle || 0) > p.slideSlip;
+    const sliding = Math.abs(slip) > p.slideSlip;
     const lockDirection = Math.sign(steerKeys);
     this.lockHeld = forward > 0 && lockDirection !== 0 && lockDirection === this.lockDirection ? this.lockHeld + dt : 0;
     this.lockDirection = forward > 0 ? lockDirection : 0;
@@ -474,7 +478,6 @@ class KeyboardDriver {
     input.throttle = this.throttle * Math.min(1, controlled + (1 - controlled) * this.commit);
 
     // In a slide, the throttle for the angle: the tail is out to the side opposite the turn (a left drift slides right)
-    const slip = telemetry.slipAngle || 0;
     this.slipRate += ((Math.abs(slip) - this.slip) / dt - this.slipRate) * Math.min(1, dt * 20);
     this.slip = Math.abs(slip);
     if (sliding && !handbrake) {
