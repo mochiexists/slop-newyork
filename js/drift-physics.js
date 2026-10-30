@@ -423,7 +423,8 @@ const KEYBOARD_DRIVER = {
   tractionShare: 0.9, // share of the rear tires' traction the traction control gives the engine going straight
   cornerShare: 0.6, // ... and at full lock, keeping the rest of the friction circle for cornering
   xDriveLock: 0.3, // share of the lock by which xDrive's centre clutch has opened all the way (rear drive)
-  commitDelay: 0.4, // s of gas and lock held before the traction control lets the rears spin: a power-over
+  commitDelay: 0.1, // s of gas and lock held before the traction control lets the rears spin: a power-over,
+  commitLock: 0.5, // with the wheel wound past this share of its lock (a 0.35 s flick at 35 m/s reaches 0.36)
   commitTime: 0.25, // s over which it lets go (and takes over again)
   slideSlip: 10 * RAD, // body slip that counts as a slide under way: the throttle may hold it
   // In a slide W is the player's: the driver only lifts once the angle runs past what the keys ask for. Steering into
@@ -528,7 +529,9 @@ class KeyboardDriver {
     // The driver commits by holding gas and lock (a power-over), pulling the handbrake, or already being sideways
     const sliding = Math.abs(slip) > p.slideSlip;
     const lockDirection = Math.sign(steerKeys);
-    this.lockHeld = forward > 0 && lockDirection !== 0 && lockDirection === this.lockDirection ? this.lockHeld + dt : 0;
+    // (only with the lock wound well on: a quick flick across a lane never commits the car to a slide)
+    const wound = Math.abs(this.steer) > p.commitLock;
+    this.lockHeld = forward > 0 && wound && lockDirection !== 0 && lockDirection === this.lockDirection ? this.lockHeld + dt : 0;
     this.lockDirection = forward > 0 ? lockDirection : 0;
     // A slide that ends with the counter-steer held on (not a tap to unwind the wheel) is a save: the traction control
     // comes back, and the held key unwinds the wheel for a moment instead of throwing the car into a slide the other way
