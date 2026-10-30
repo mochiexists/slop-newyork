@@ -188,7 +188,7 @@ test('the clips the voice loads are the ones tools/fetch-m3-sound.sh cuts, and t
   assert.match(read('.gitignore'), /^assets\/audio\/$/m);
 });
 
-test('missing clips resolve to no bank after a single request, never an error', async () => {
+test('missing clips resolve to no bank after a single try (compressed copy, then WAV), never an error', async () => {
   const requests = [];
   const context = { decodeAudioData: async () => { throw new Error('nothing to decode'); } };
   const bank = await audio.loadSwimEngineClips(context, audio.M3_CLIPS, async (url) => {
@@ -196,7 +196,7 @@ test('missing clips resolve to no bank after a single request, never an error', 
     return { ok: false, status: 404 };
   });
   assert.equal(bank, null);
-  assert.deepEqual(requests, ['assets/audio/m3/idle.wav']);
+  assert.deepEqual(requests, ['assets/audio/m3/idle.flac', 'assets/audio/m3/idle.wav']);
   const offline = await audio.loadSwimEngineClips(context, audio.M3_CLIPS, async () => { throw new TypeError('offline'); });
   assert.equal(offline, null);
 });
@@ -247,7 +247,7 @@ test('the sound mod clips the voice loads are the ones tools/extract-m5-mod-soun
   assert.match(script, /os\.path\.join\(out, 'engine', /);
 });
 
-test('missing sound mod clips resolve to no layer after a single request', async () => {
+test('missing sound mod clips resolve to no layer after a single try (compressed copy, then WAV)', async () => {
   const requests = [];
   const context = { decodeAudioData: async () => { throw new Error('nothing to decode'); } };
   const shots = await audio.loadM5ModShots(context, audio.M5_MOD_SHOTS, async (url) => {
@@ -255,7 +255,7 @@ test('missing sound mod clips resolve to no layer after a single request', async
     return { ok: false, status: 404 };
   });
   assert.equal(shots, null);
-  assert.deepEqual(requests, ['assets/audio/m5mod/pop-1.wav']);
+  assert.deepEqual(requests, ['assets/audio/m5mod/pop-1.webm', 'assets/audio/m5mod/pop-1.wav']);
   const offline = await audio.loadM5ModShots(context, audio.M5_MOD_SHOTS, async () => { throw new TypeError('offline'); });
   assert.equal(offline, null);
 });
@@ -264,7 +264,7 @@ test('loaded sound mod clips are grouped and levelled, and a broken one is left 
   const buffers = new Map();
   const context = { decodeAudioData: async (bytes) => buffers.get(bytes) };
   const shots = await audio.loadM5ModShots(context, audio.M5_MOD_SHOTS, async (url) => {
-    if (url.endsWith('burble-3.wav')) return { ok: false, status: 404 };
+    if (/burble-3\.(webm|wav)$/.test(url)) return { ok: false, status: 404 };
     const bytes = { url };
     const data = Float32Array.from({ length: 800 }, (_, i) => Math.sin(i * 0.4) * (url.includes('bang') ? 0.2 : 0.7));
     buffers.set(bytes, { getChannelData: () => data, duration: 0.025 });
@@ -277,6 +277,45 @@ test('loaded sound mod clips are grouped and levelled, and a broken one is left 
     const peak = Math.max(...buffer.getChannelData(0).map(Math.abs));
     assert.ok(peak > 0.85 && peak <= 0.95, `peak ${peak}`);
   }
+});
+
+test('clips load from their compressed copy, and from the WAV when the copy is missing or will not decode', async () => {
+  const requests = [];
+  const data = Float32Array.from({ length: 1000 }, (_, i) => Math.sin(i * 0.2) * 0.5);
+  // The M3's idle loop has no FLAC, its low loop's FLAC won't decode (an old browser), the rest have theirs
+  const context = { decodeAudioData: async (bytes) => {
+    if (bytes.url.endsWith('low.flac')) throw new Error('EncodingError');
+    return { getChannelData: () => data, duration: 0.03 };
+  } };
+  const fetchFile = async (url) => {
+    requests.push(url);
+    if (url.endsWith('idle.flac')) return { ok: false, status: 404 };
+    return { ok: true, arrayBuffer: async () => ({ url }) };
+  };
+  const bank = await audio.loadSwimEngineClips(context, audio.M3_CLIPS, fetchFile);
+  assert.equal(bank.loops.length, 3);
+  assert.ok(bank.crackle);
+  assert.deepEqual(requests, ['assets/audio/m3/idle.flac', 'assets/audio/m3/idle.wav', 'assets/audio/m3/low.flac',
+    'assets/audio/m3/high.flac', 'assets/audio/m3/low.wav', 'assets/audio/m3/crackle.webm']);
+  requests.length = 0;
+  const shots = await audio.loadM5ModShots(context, audio.M5_MOD_SHOTS, fetchFile);
+  assert.equal(shots.pops.length, audio.M5_MOD_SHOTS.pops.length);
+  assert.ok(requests.every((url) => url.endsWith('.webm')), 'one-shots load as Opus');
+});
+
+test('tools/encode-sounds.sh encodes the clips the voice plays, in the formats it asks for', () => {
+  const script = read('tools/encode-sounds.sh');
+  const loops = script.match(/^loops=\((.*)\)$/m)[1];
+  const shots = script.match(/^shots=\((.*)\)$/m)[1];
+  const m3Loops = audio.M3_CLIPS.loops.map((loop) => loop.file.replace(/\.wav$/, '')).join(',');
+  assert.ok(loops.includes(`$audio/m3/{${m3Loops}}.wav`), 'the M3 loops');
+  assert.ok(loops.includes(`$audio/${audio.M5_MOD_ENGINE_CLIPS.folder.replace('assets/audio/', '')}*.wav`), 'the mod engine loops');
+  assert.ok(shots.includes(`$audio/m3/${audio.M3_CLIPS.crackle}`), 'the crackle');
+  assert.ok(shots.includes('$audio/m5mod/{pop,burble,bang}-*.wav'), 'the mod one-shots');
+  assert.match(script, new RegExp(`encode "\\$wav" "\\$\\{wav:r\\}\\.${audio.ENCODED_FORMATS.loop}" loop`));
+  assert.match(script, new RegExp(`encode "\\$wav" "\\$\\{wav:r\\}\\.${audio.ENCODED_FORMATS.shot}" shot`));
+  // Loops are lossless: a lossy codec's padding would click at every loop
+  assert.equal(audio.ENCODED_FORMATS.loop, 'flac');
 });
 
 test('the mod engine maps the model from idle to limiter onto its loops; the M3 plays the model as it is', () => {
@@ -319,7 +358,7 @@ test('a bank with accel and decel loops loads both sets, fetching a shared loop 
   assert.equal(bank.loops.length, audio.M5_MOD_ENGINE_CLIPS.loops.length);
   assert.equal(bank.decelLoops.length, audio.M5_MOD_ENGINE_CLIPS.decelLoops.length);
   assert.equal(bank.loops[0].buffer, bank.decelLoops[0].buffer, 'the idle loop is shared');
-  assert.equal(requests.filter((url) => url.endsWith('/idle.wav')).length, 1);
+  assert.deepEqual(requests.filter((url) => url.includes('/idle.')), ['assets/audio/m5mod/engine/idle.flac']);
   assert.deepEqual(JSON.parse(JSON.stringify(bank.pitchRange)), [...audio.M5_MOD_ENGINE_CLIPS.pitchRange]);
   const rms = Math.sqrt(bank.loops[0].buffer.getChannelData(0).reduce((sum, v) => sum + v * v, 0) / 1000);
   assert.ok(Math.abs(rms - 0.16) < 1e-3, `levelled once, not twice: ${rms}`);
