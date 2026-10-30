@@ -8,7 +8,7 @@ import {
   streetZ,
   TELEPORT_LOCATIONS
 } from './city-config.js';
-import { M5_DRIFT, stepDriftCar } from './drift-physics.js';
+import { M5_DRIFT, KeyboardDriver, stepDriftCar } from './drift-physics.js';
 import { DriftCircle } from './drift-autopilot.js';
 import { cityUniforms, createCarPaintMaterial, createContactShadowMaterial } from './tsl-materials.js';
 import {
@@ -45,9 +45,6 @@ const CAR_DRIVE = {
 };
 const M5_PAINT = 0x1b4fa8; // BMW Marina Bay Blue metallic
 const SWIM_STEPS_PER_SECOND = 240; // the drift model wants short steps: slip angles change fast in a slide
-const BURNOUT_SPEED = 3; // m/s below which gas + brake together is a burnout
-const DONUT_SPEED = 16; // m/s over the ground below which gas + full lock in a slide becomes a drift circle
-const DONUT_SLIP = 15 * Math.PI / 180; // drift angle that counts as already sliding
 const BICYCLE_DRIVE = {
   speed: 19, reverseSpeed: 4.5, acceleration: 9,
   rolling: 0.08, drag: 0.004, coast: 0.2, brake: 7.5 // Backward input is scaled to 0.6, giving 4.5 m/s² braking.
@@ -386,6 +383,9 @@ class ThirdPersonControllerManager {
         ent.longAccel = 0;
         ent.cameraYaw = ent.heading;
         ent.drift.slipAngle = ent.drift.rearSlide = ent.drift.wheelspin = 0;
+        ent.wheelSlip = 0;
+        ent.donut = null;
+        this.swimDriver?.reset();
       }
       ent.pitchVel = ent.rollVel = ent.heaveY = ent.heaveVel = 0;
       ent.chassisPivot.rotation.x = ent.chassisPivot.rotation.z = 0;
@@ -1373,22 +1373,14 @@ class ThirdPersonControllerManager {
     }
   }
 
-  // Swimming: the M5 on the drift model. W throttle, S brakes then reverses, A/D steer, Space/E handbrake.
+  // Swimming: the M5 on the drift model. W throttle, S brakes then reverses, A/D steer, Space/E handbrake; W and S
+  // together at a stop is a burnout. The keyboard driver turns the on/off keys into a driver's hands and feet (see
+  // the keyboard driver in drift-physics.js), so a tap of A is a grip turn and a slide takes a deliberate input.
   updateSwim(dt) {
     if (dt <= 0) return;
     const c = this.entities.swim;
-    const forward = Number(this.keys.forward) || 0;
-    const backward = Number(this.keys.backward) || 0;
-    const input = this._swimInput ??= { throttle: 0, brake: 0, reverse: 0, steer: 0, handbrake: 0, burnout: 0, assist: 1 };
-    const rollingBack = c.speed < -0.5;
-    // Gas and brake together near a standstill is a burnout: line lock holds the fronts, the rears spin
-    const burnout = forward > 0 && backward > 0 && Math.abs(c.speed) < BURNOUT_SPEED;
-    input.burnout = burnout ? 1 : 0;
-    input.throttle = rollingBack ? 0 : forward;
-    input.brake = burnout ? 0 : rollingBack ? forward : c.speed > 0.5 ? backward : 0;
-    input.reverse = !burnout && c.speed <= 0.5 ? backward : 0;
-    input.steer = (Number(this.keys.left) || 0) - (Number(this.keys.right) || 0);
-    input.handbrake = Number(this.keys.up) || 0;
+    const driver = this.swimDriver ??= new KeyboardDriver();
+    const input = driver.update(c, c.drift, this.keys, dt);
 
     const prevX = c.position.x;
     const prevZ = c.position.z;
@@ -1397,16 +1389,13 @@ class ThirdPersonControllerManager {
     // The AI driver (swim-mode.js) either rewrites the input, or flies a choreographed move itself ('scripted')
     let scripted = this.swimPilot?.(c, dt, input) === 'scripted';
     // Player donuts are drift circles: a keyboard only has full lock and full gas, which the counter-steer assist
-    // straightens into a sideways run, so gas and full lock with the rears spinning (or sliding, or on the handbrake)
-    // below DONUT_SPEED hand the car to the drift circle the AI show uses. Space tightens it; letting go of either key
-    // drives out at the circle's speed and angle.
-    const spinning = input.throttle > 0.5 && Math.abs(input.steer) > 0.9;
-    const loose = c.drift.wheelspin > 0.3 || Math.abs(c.drift.slipAngle) > DONUT_SLIP || input.handbrake > 0;
-    const starting = loose && Math.hypot(c.speed, c.vx, c.vz) < DONUT_SPEED;
-    const donut = !this.swimPilot && spinning && (c.donut || starting);
+    // straightens into a sideways run, so a slide held at full lock and full gas at low speed hands the car to the
+    // drift circle the AI show uses. Space tightens it; letting go of either key drives out at the circle's speed and
+    // angle.
+    const donut = !this.swimPilot && driver.driftCircle;
     if (donut) {
       input.burnout = 0;
-      const direction = Math.sign(input.steer);
+      const direction = driver.lockDirection;
       if (!c.donut || c.donut.direction !== direction) c.donut = DriftCircle.from(c, { direction });
       c.donut.tight = input.handbrake > 0;
       c.donut.update(c, dt, c.drift);
