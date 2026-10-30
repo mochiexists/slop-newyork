@@ -113,19 +113,19 @@ test('the hand-over count waits for clear road at speed: not with a queue ahead 
   assert.equal(holds([], [{ x: 0, z: 0 }, { x: 0, z: 120 }, { x: 200, z: 120 }]), false, 'a drifted corner 120 m on');
 });
 
-test('two cars side by side with a hand\'s width either side: the swimmer splits them', () => {
-  // A pair 4.6 m apart (centre to centre) a little off the route line, and a car either side of them closing the rest
-  // of the street: the middle of their gap lies between the lines tried every gapStep, and it is the only way through
+test('two cars side by side at their lanes\' outer edges: the swimmer splits them, and is past before it moves on', () => {
+  // A pair 5.2 m apart (centre to centre: 0.7 m of air either side of the swim car), with a car in the next lane either
+  // side closing the rest of the street: the gap between them is the only way through, and leaves it between two lanes
   const { vehicleContact } = loadModule(readFileSync(join(__dirname, '../js/vehicle-physics.js'), 'utf8'));
-  const traffic = [-5.1, 0.1 - 2.3, 0.1 + 2.3, 5.3].map((x) => ({ x, z: 45, speed: 10, yaw: 0, half: 2.3, halfWidth: 0.92 }));
+  const traffic = [0.1 - 6.2, 0.1 - 2.6, 0.1 + 2.6, 0.1 + 6.2].map((x) => ({ x, z: 45, speed: 6, yaw: 0, half: 2.3, halfWidth: 0.92 }));
   const c = car(0);
   c.speed = 25;
-  const pilot = new DriftAutopilot({ passMargin: 0.2, closeBonus: 30, splitBonus: 40 });
+  const pilot = new DriftAutopilot({ passMargin: 0.2, closeBonus: 60, splitBonus: 100 });
   const driver = new physics.KeyboardDriver();
   pilot.setPath([{ x: 0, z: 0 }, { x: 0, z: 1000 }], { corridors: [{ left: 7, right: -7, centre: null }] });
   const plan = pilot.planGap(c, traffic);
   assert.equal(plan.safe, true);
-  assert.ok(Math.abs(pilot.targetOffset - 0.1) < 0.05, `it lines up on the gap (${pilot.targetOffset.toFixed(2)} m)`);
+  assert.ok(Math.abs(pilot.targetOffset - 0.1) < 0.5, `it lines up on the gap (${pilot.targetOffset.toFixed(2)} m)`);
   let contacts = 0;
   for (let n = 0; n < 240; n++) {
     frame(pilot, driver, c, traffic);

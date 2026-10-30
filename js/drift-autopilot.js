@@ -59,7 +59,8 @@ const AUTOPILOT = {
   closeSpeed: 8, // m/s at least it passes it by,
   splitWindow: 0.8, // s between close calls on either side that make a split (threading two cars)
   splitBonus: 4, // score for a split, on top of its two close calls
-  splitAlong: 5, // m apart along the street at most that two cars count as side by side, a gap to split
+  splitAlong: 5, // m apart along the street at most that two cars count as side by side, a gap to split,
+  splitRoom: 0.4, // m of room at least it leaves beyond its margins (on the keys it can't hold a line to the centimetre)
   keepSpeedWeight: 12, // score per m/s a plan slows below keepSpeed (set while the show counts down the hand-over)
   brakeSteerLoss: 0.6, // share of the sideways grip lost to the brake key held down (all or nothing: 1.05 g)
   hitCost: 200, // score against a plan that touches a car
@@ -215,6 +216,7 @@ class DriftAutopilot {
       entry.vAlong = vx * s.ux + vz * s.uz;
       entry.vLateral = vx * lx + vz * lz;
       entry.length = inside ? Math.max(extentAlong + egoAlong, Math.abs(along) - 0.2) : length;
+      entry.across = extentAcross;
       entry.reach = inside ? Math.max(extentAcross + egoAcross, Math.min(reach, Math.abs(lateral - carLat) - 0.05)) : reach;
       count++;
     }
@@ -228,117 +230,141 @@ class DriftAutopilot {
     const passedAt = this._passedAt ??= [];
     const aimReach = o.lookahead + o.lookaheadTime * u; // how far down the street the wheel aims (decide)
     const overshoot = carLatVel * Math.abs(carLatVel) / (2 * o.lateralAccel); // where its sideways speed carries it
+    const cornerBrake = o.braking; // m/s² the executor brakes for a corner at (decide)
+    const brakingSideways = o.lateralAccel * (1 - o.brakeSteerLoss * Math.min(1, cornerBrake / (this.model.brakeGrip * GRAVITY)));
     // The lines it tries across the street: one every gapStep, and the middle of every gap between two cars side by
-    // side that it fits through (a split: the steps can miss a gap that leaves a hand's width either side)
+    // side that it fits through (a split: the steps can miss a gap that leaves a hand's width either side). A split
+    // leaves it straddling two lanes, so it is flown as two moves: through the gap, and once past the pair (`clear`:
+    // where the pair's tails are, and how fast that moves) on to each of the other lines.
     const lines = this._lines ??= [];
+    const clear = this._clear ??= [];
+    const clearSpeed = this._clearSpeed ??= [];
     let lineCount = 0;
     for (let y = band.right; y <= band.left + 1e-6; y += o.gapStep) lines[lineCount++] = y;
+    const gridCount = lineCount;
     for (let i = 0; i < count; i++) {
       for (let j = 0; j < count; j++) {
         const rightCar = seen[i], leftCar = seen[j];
         if (leftCar.lateral <= rightCar.lateral || Math.abs(leftCar.along - rightCar.along) > o.splitAlong) continue;
         const from = rightCar.lateral + rightCar.reach, to = leftCar.lateral - leftCar.reach;
         const y = (from + to) / 2;
-        if (to >= from && y >= band.right && y <= band.left) lines[lineCount++] = y;
+        // (only pairs still ahead; a gap with more than a close call's air either side is just road, which the steps
+        // already cover)
+        const air = (leftCar.lateral - rightCar.lateral - leftCar.across - rightCar.across) / 2 - o.carHalfWidth;
+        if (to - from < o.splitRoom || air > o.closeGap || rightCar.along < 0 || y < band.right || y > band.left) continue;
+        clear[lineCount] = Math.max(rightCar.along + rightCar.length, leftCar.along + leftCar.length);
+        clearSpeed[lineCount] = Math.max(rightCar.vAlong, leftCar.vAlong);
+        lines[lineCount++] = y;
       }
     }
     for (let line = 0; line < lineCount; line++) {
       const y = lines[line];
-      // Only the cars this move could come near: across the street, the move spans the car's line to y (plus any
-      // overshoot); a car spans where it drifts to over the look-ahead, plus the passing reach
-      const low = Math.min(carLat, y, carLat + overshoot), high = Math.max(carLat, y, carLat + overshoot);
-      let nearCount = 0;
-      for (let i = 0; i < count; i++) {
-        const ob = seen[i];
-        const drift = ob.vLateral * o.planTime;
-        if (ob.lateral + Math.max(0, drift) + ob.reach > low && ob.lateral + Math.min(0, drift) - ob.reach < high) {
-          near[nearCount++] = ob;
-        }
-      }
-      for (const accel of o.pedals) {
-        // Fly the plan: speed eases toward the pedal's, position slides across at the flick rate. The brake key is all
-        // or nothing, and the frames it is down leave the front tires little to turn with: the harder the plan brakes,
-        // the slower it can move across.
-        const braking = accel < 0 ? Math.min(1, -accel / (this.model.brakeGrip * GRAVITY)) : 0;
-        const sideways = o.lateralAccel * (1 - o.brakeSteerLoss * braking);
-        let travelled = 0, speed = u, lat = carLat, latVel = carLatVel, hitAt = Infinity;
-        for (let i = 0; i < nearCount; i++) {
-          air[i] = Infinity;
-          passedAt[i] = Infinity;
-        }
-        for (let step = 1; step * o.planStep <= o.planTime && hitAt === Infinity; step++) {
-          const t = step * o.planStep;
-          // A punch (or a brake) into the gap, then holding that speed through it
-          if (t <= o.pedalTime) speed = clamp(speed + accel * o.planStep, 0, o.cruiseSpeed);
-          travelled += speed * o.planStep;
-          // (a car only moves across as it rolls: at a crawl it can't step sideways round the car in front)
-          latVel = slideAcross(lat, latVel, y, o.planStep, sideways, Math.min(lateralSpeed, speed * o.crawlAcross));
-          lat += latVel * o.planStep;
-          for (let i = 0; i < nearCount; i++) {
-            const ob = near[i];
-            const ahead = ob.along + ob.vAlong * t - travelled;
-            const across = ob.lateral + ob.vLateral * t - lat;
-            const gapAlong = Math.abs(ahead) - ob.length;
-            const gapAcross = Math.abs(across) - ob.reach;
-            if (gapAlong < 0 && gapAcross < 0) {
-              hitAt = t;
-              break;
-            }
-            // A close call, as the swim mode scores it: the air beside the car while alongside it, then passing it
-            if (gapAlong + o.followMargin < 0) {
-              air[i] = Math.min(air[i], gapAcross + o.passMargin);
-              side[i] = Math.sign(across);
-            } else if (ahead < 0 && air[i] < Infinity && passedAt[i] === Infinity && speed - ob.vAlong > o.closeSpeed) {
-              passedAt[i] = t;
-            }
+      const split = line >= gridCount;
+      for (let next = 0; next < (split ? gridCount : 1); next++) {
+        const then = split ? lines[next] : y; // the line it moves on to once past a split pair
+        // Only the cars this move could come near: across the street, the move spans the car's line to y (plus any
+        // overshoot); a car spans where it drifts to over the look-ahead, plus the passing reach
+        const low = Math.min(carLat, y, then, carLat + overshoot), high = Math.max(carLat, y, then, carLat + overshoot);
+        let nearCount = 0;
+        for (let i = 0; i < count; i++) {
+          const ob = seen[i];
+          const drift = ob.vLateral * o.planTime;
+          if (ob.lateral + Math.max(0, drift) + ob.reach > low && ob.lateral + Math.min(0, drift) - ob.reach < high) {
+            near[nearCount++] = ob;
           }
         }
-        // Ground covered, less the swerving it takes; a near pass is a small bonus (it's a swim, not a cruise), the
-        // oncoming half a cost. A plan that meets a car is only taken when every plan does: then the one that meets it
-        // latest, slowest, wins (time to brake or for the next move to find a way).
-        let score = travelled;
-        let open = 0;
-        if (hitAt === Infinity) {
-          // Where the plan leaves it matters as much as the ground it covers: open road ahead in the lane it ends in,
-          // and the speed it carries into it. And a plan is only safe if it ends with room to brake to the speed of the car ahead in its lane: otherwise
-          // it is a trap a step past the look-ahead (closing at 30 mph on a queue)
-          open = o.scanAhead;
-          let trapped = false;
+        for (const accel of o.pedals) {
+          // Fly the plan: speed eases toward the pedal's, position slides across at the flick rate. The brake key is all
+          // or nothing, and the frames it is down leave the front tires little to turn with: the harder the plan brakes,
+          // the slower it can move across.
+          const braking = accel < 0 ? Math.min(1, -accel / (this.model.brakeGrip * GRAVITY)) : 0;
+          const sideways = o.lateralAccel * (1 - o.brakeSteerLoss * braking);
+          let travelled = 0, speed = u, lat = carLat, latVel = carLatVel, hitAt = Infinity;
           for (let i = 0; i < nearCount; i++) {
-            const ob = near[i];
-            const ahead = ob.along + ob.vAlong * o.planTime - travelled - ob.length;
-            if (ahead > -1 && Math.abs(ob.lateral + ob.vLateral * o.planTime - lat) < ob.reach) {
-              open = Math.min(open, Math.max(0, ahead));
-              const closing = speed - ob.vAlong;
-              if (closing > 0 && ahead < closing * closing / (2 * o.braking)) trapped = true;
+            air[i] = Infinity;
+            passedAt[i] = Infinity;
+          }
+          for (let step = 1; step * o.planStep <= o.planTime && hitAt === Infinity; step++) {
+            const t = step * o.planStep;
+            // A punch (or a brake) into the gap, then holding that speed through it
+            if (t <= o.pedalTime) speed = clamp(speed + accel * o.planStep, 0, o.cruiseSpeed);
+            // ...but no faster than the drifted corner ahead allows: the executor brakes for it whatever the pedal
+            // (decide), on the brake key, which leaves less grip to move across with
+            const cornerLimit = Math.sqrt(o.cornerSpeed ** 2 + 2 * o.braking * Math.max(0, this.cornerAhead - 8 - travelled));
+            const cornerBraking = speed > cornerLimit;
+            if (cornerBraking) speed = Math.max(cornerLimit, speed - cornerBrake * o.planStep);
+            travelled += speed * o.planStep;
+            // (a car only moves across as it rolls: at a crawl it can't step sideways round the car in front)
+            const goal = split && travelled > clear[line] + clearSpeed[line] * t ? then : y;
+            const across = cornerBraking ? Math.min(sideways, brakingSideways) : sideways;
+            latVel = slideAcross(lat, latVel, goal, o.planStep, across, Math.min(lateralSpeed, speed * o.crawlAcross));
+            lat += latVel * o.planStep;
+            for (let i = 0; i < nearCount; i++) {
+              const ob = near[i];
+              const ahead = ob.along + ob.vAlong * t - travelled;
+              const across = ob.lateral + ob.vLateral * t - lat;
+              const gapAlong = Math.abs(ahead) - ob.length;
+              const gapAcross = Math.abs(across) - ob.reach;
+              if (gapAlong < 0 && gapAcross < 0) {
+                hitAt = t;
+                break;
+              }
+              // A close call, as the swim mode scores it: the air beside the car while alongside it, then passing it
+              if (gapAlong + o.followMargin < 0) {
+                air[i] = Math.min(air[i], gapAcross + o.passMargin);
+                side[i] = Math.sign(across);
+              } else if (ahead < 0 && air[i] < Infinity && passedAt[i] === Infinity && speed - ob.vAlong > o.closeSpeed) {
+                passedAt[i] = t;
+              }
             }
           }
-          if (trapped) hitAt = o.planTime;
-          score += o.openWeight * open + o.speedWeight * speed;
-        }
-        score -= Math.abs(y - carLat) * o.moveCost;
-        if (this.lineUp) score -= Math.abs(y) * o.lineUpCost;
-        score += this.closeCallScore(nearCount);
-        if (y > oncoming) score -= o.oncomingCost;
-        // Keeping to the line already chosen wins ties: changing its mind takes a clearly better gap
-        if (Math.abs(y - this.targetOffset) < o.gapStep * 0.5) score += o.commitBonus;
-        // Holding a speed (the hand-over count): a plan that slows below it is worth less the more it loses. A move far
-        // across aims the wheel far off the street, and the executor slows for that (offLine, in decide)
-        let slowest = Math.min(u, speed);
-        const swerve = Math.atan2(Math.abs(y - carLat), aimReach);
-        if (swerve > o.offLine) slowest = Math.min(slowest, Math.max(8, Math.sqrt(9.5 * aimReach / (2 * Math.sin(swerve)))));
-        if (this.keepSpeed > 0) score -= o.keepSpeedWeight * Math.max(0, this.keepSpeed - slowest);
-        // Unsafe plans rank by how late they meet trouble, then by how slow they are by then
-        if (hitAt !== Infinity) score = -o.hitCost * (o.planTime - hitAt) - speed;
-        const safe = hitAt === Infinity;
-        if (!best || (safe && !best.safe) || (safe === best.safe && score > best.score)) {
-          best = this._best ??= {};
-          best.score = score;
-          best.safe = safe;
-          best.y = y;
-          best.accel = accel;
-          best.slowest = slowest;
-          best.open = open;
+          // Ground covered, less the swerving it takes; a near pass is a small bonus (it's a swim, not a cruise), the
+          // oncoming half a cost. A plan that meets a car is only taken when every plan does: then the one that meets it
+          // latest, slowest, wins (time to brake or for the next move to find a way).
+          let score = travelled;
+          let open = 0;
+          if (hitAt === Infinity) {
+            // Where the plan leaves it matters as much as the ground it covers: open road ahead in the lane it ends in,
+            // and the speed it carries into it. And a plan is only safe if it ends with room to brake to the speed of the car ahead in its lane: otherwise
+            // it is a trap a step past the look-ahead (closing at 30 mph on a queue)
+            open = o.scanAhead;
+            let trapped = false;
+            for (let i = 0; i < nearCount; i++) {
+              const ob = near[i];
+              const ahead = ob.along + ob.vAlong * o.planTime - travelled - ob.length;
+              if (ahead > -1 && Math.abs(ob.lateral + ob.vLateral * o.planTime - lat) < ob.reach) {
+                open = Math.min(open, Math.max(0, ahead));
+                const closing = speed - ob.vAlong;
+                if (closing > 0 && ahead < closing * closing / (2 * o.braking)) trapped = true;
+              }
+            }
+            if (trapped) hitAt = o.planTime;
+            score += o.openWeight * open + o.speedWeight * speed;
+          }
+          score -= (Math.abs(y - carLat) + Math.abs(then - y)) * o.moveCost;
+          if (this.lineUp) score -= Math.abs(y) * o.lineUpCost;
+          score += this.closeCallScore(nearCount);
+          if (Math.max(y, then) > oncoming) score -= o.oncomingCost;
+          // Keeping to the line already chosen wins ties: changing its mind takes a clearly better gap
+          if (Math.abs(y - this.targetOffset) < o.gapStep * 0.5) score += o.commitBonus;
+          // Holding a speed (the hand-over count): a plan that slows below it is worth less the more it loses. A move far
+          // across aims the wheel far off the street, and the executor slows for that (offLine, in decide)
+          let slowest = Math.min(u, speed);
+          const swerve = Math.atan2(Math.abs(y - carLat), aimReach);
+          if (swerve > o.offLine) slowest = Math.min(slowest, Math.max(8, Math.sqrt(9.5 * aimReach / (2 * Math.sin(swerve)))));
+          if (this.keepSpeed > 0) score -= o.keepSpeedWeight * Math.max(0, this.keepSpeed - slowest);
+          // Unsafe plans rank by how late they meet trouble, then by how slow they are by then
+          if (hitAt !== Infinity) score = -o.hitCost * (o.planTime - hitAt) - speed;
+          const safe = hitAt === Infinity;
+          if (!best || (safe && !best.safe) || (safe === best.safe && score > best.score)) {
+            best = this._best ??= {};
+            best.score = score;
+            best.safe = safe;
+            best.y = y;
+            best.accel = accel;
+            best.slowest = slowest;
+            best.open = open;
+          }
         }
       }
     }
@@ -472,6 +498,7 @@ class DriftAutopilot {
     // corner, unless a car is in the way there: traffic queues at the edge of a corner the show holds clear)
     // A driver decides a few times a second, not every frame: between decisions it flies the last plan
     this.lineUp = sharp && toCorner < o.lineUpDistance;
+    this.cornerAhead = sharp ? toCorner : Infinity; // m to the drifted corner ahead, which caps the plans' speed
     this.sincePlan = (this.sincePlan ?? Infinity) + dt;
     if (this.sincePlan >= o.replanInterval || !this.plan) {
       this.plan = this.planGap(car, obstacles);
