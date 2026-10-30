@@ -5,6 +5,15 @@
 // The state matches the player car in controllers.js: `speed` is the velocity along the heading, `vx`/`vz` the
 // sideways part in world space, `angularVel` the yaw rate (+ turns left) and `heading` 0 faces +z. The car's left is
 // (cos h, -sin h) in world space, so a positive lateral velocity slides to the left.
+//
+// Driving it, for the player and the AI alike (nobody passes analog inputs):
+//   const driver = new KeyboardDriver(KEYBOARD_DRIVER, params); // one per car; params M5_DRIFT, or the cop's
+//   each 60 Hz frame:
+//     const input = driver.update(car, keys, dt); // keys { forward, backward, left, right, handbrake }, each 0 or 1
+//     for each of n sub-steps (240 Hz): stepDriftCar(car, input, dt / n, params, car.drift);
+//   driver.reset() after a teleport.
+// The gearbox lives on the car: car.gear (1-8, -1 reversing), car.rpm, car.manual (shiftUp/shiftDown/toggleManual),
+// and each step's telemetry carries rpm, gear and limiter (the fuel cut is on).
 
 const GRAVITY = 9.81;
 const RAD = Math.PI / 180;
@@ -36,7 +45,11 @@ const M5_DRIFT = {
   maxSteer: 0.62, // rad of front-wheel lock at parking speeds
   highSpeedSteer: 0.12, // rad left of the driver's own lock at full speed (the assist can add more)
   steerRate: 3.2, // rad/s the wheels turn toward the target
-  counterSteer: 0.9, // assist: front wheels follow the slide by this share of the body slip angle
+  counterSteer: 0.9, // assist: front wheels follow the slide by this share of the body slip angle past assistFrom
+  // Body slip the assist leaves alone (a tire at its cornering limit has ~4° anyway). 5° gives a sharper turn-in at
+  // speed (1.1 g instead of ~0.85 g at 40 m/s), but the autopilot's 85 mph weave counts on the assist's catch: 0 until
+  // the AI drives through the keyboard driver and is tuned on it.
+  assistFrom: 0,
   slideFrom: 6 * RAD, // body slip where the drift steering starts taking over from the grip steering,
   slideBlend: 10 * RAD, // all of it this much further on
   slideSteer: 10 * RAD, // front slip the driver's full lock asks for in a slide (the tire's peak is at 8°)
@@ -201,7 +214,8 @@ function stepDriftCar(car, input, dt, params = M5_DRIFT, out = stepDriftCar.tele
   const speedAbs = Math.abs(u);
   const driverLock = params.highSpeedSteer + (params.maxSteer - params.highSpeedSteer) / (1 + (speedAbs / 14) ** 2);
   const bodySlip = speedAbs > 1 ? Math.atan2(v, speedAbs) : 0;
-  const grip = input.steer * driverLock + (u > 3 ? params.counterSteer * bodySlip * assistLevel : 0);
+  const catching = Math.sign(bodySlip) * Math.max(0, Math.abs(bodySlip) - params.assistFrom);
+  const grip = input.steer * driverLock + (u > 3 ? params.counterSteer * catching * assistLevel : 0);
   const slide = u > 3 ? Math.max(0, Math.min(1, (Math.abs(bodySlip) - params.slideFrom) / params.slideBlend)) * assistLevel : 0;
   const frontPath = Math.atan2(v + a * r, Math.max(speedAbs, params.minSlipSpeed));
   const drifting = frontPath + input.steer * params.slideSteer;
@@ -419,17 +433,21 @@ class KeyboardDriver {
   }
 
   /**
-   * One frame of keys (forward, backward, left, right, up = handbrake; 0..1 each) to the drift model's input.
-   * telemetry is the car's last step (slipAngle). Returns the same input object each call.
+   * The one way to drive the car, for the player and the AI alike: a frame of keys (forward, backward, left, right,
+   * handbrake; each pressed or not) to stepDriftCar's input. Call once per frame, then step the physics with the
+   * returned input (the same object each call). Everything it remembers lives on the driver, one per car.
    */
-  update(car, telemetry, keys, dt) {
+  update(car, keys, dt) {
     const p = this.params;
     const input = this.input;
     const forward = Number(keys.forward) || 0;
     const backward = Number(keys.backward) || 0;
     const steerKeys = (Number(keys.left) || 0) - (Number(keys.right) || 0);
-    const handbrake = Number(keys.up) || 0;
+    const handbrake = Number(keys.handbrake) || 0;
     const speed = Math.abs(car.speed);
+    // The drift angle the driver feels: the car's sideways velocity against its heading
+    const lateral = car.vx * Math.cos(car.heading) - car.vz * Math.sin(car.heading);
+    const slip = speed > 2 ? Math.atan2(lateral, speed) : 0;
 
     // Pedals: S brakes, then reverses from a stop; W brakes a car rolling backwards; both at a stop is a burnout
     const rollingBack = car.speed < -0.5;
@@ -465,7 +483,7 @@ class KeyboardDriver {
     const controlled = full > 0 ? Math.min(1, share * grip * loadRear / full) : 1;
 
     // The driver commits by holding gas and lock (a power-over), pulling the handbrake, or already being sideways
-    const sliding = Math.abs(telemetry.slipAngle || 0) > p.slideSlip;
+    const sliding = Math.abs(slip) > p.slideSlip;
     const lockDirection = Math.sign(steerKeys);
     this.lockHeld = forward > 0 && lockDirection !== 0 && lockDirection === this.lockDirection ? this.lockHeld + dt : 0;
     this.lockDirection = forward > 0 ? lockDirection : 0;
@@ -474,7 +492,6 @@ class KeyboardDriver {
     input.throttle = this.throttle * Math.min(1, controlled + (1 - controlled) * this.commit);
 
     // In a slide, the throttle for the angle: the tail is out to the side opposite the turn (a left drift slides right)
-    const slip = telemetry.slipAngle || 0;
     this.slipRate += ((Math.abs(slip) - this.slip) / dt - this.slipRate) * Math.min(1, dt * 20);
     this.slip = Math.abs(slip);
     if (sliding && !handbrake) {
