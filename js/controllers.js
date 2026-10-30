@@ -8,8 +8,7 @@ import {
   streetZ,
   TELEPORT_LOCATIONS
 } from './city-config.js';
-import { M5_DRIFT, KeyboardDriver, stepDriftCar } from './drift-physics.js';
-import { DriftCircle } from './drift-autopilot.js';
+import { M5_DRIFT, KeyboardDriver, shiftDown, shiftUp, stepDriftCar, toggleManual } from './drift-physics.js';
 import { cityUniforms, createCarPaintMaterial, createContactShadowMaterial } from './tsl-materials.js';
 import {
   BODY_SPECS,
@@ -384,7 +383,7 @@ class ThirdPersonControllerManager {
         ent.cameraYaw = ent.heading;
         ent.drift.slipAngle = ent.drift.rearSlide = ent.drift.wheelspin = 0;
         ent.wheelSlip = 0;
-        ent.donut = null;
+        ent.gear = 0; // the automatic picks the gear for the speed again
         this.swimDriver?.reset();
       }
       ent.pitchVel = ent.rollVel = ent.heaveY = ent.heaveVel = 0;
@@ -723,7 +722,13 @@ class ThirdPersonControllerManager {
       lastCollisionSpark: null,
       steerAngle: 0,
       wheelSpin: 0,
-      drift: { slipAngle: 0, rearSlide: 0, wheelspin: 0, steer: 0, loadFront: 0, loadRear: 0, lateralAccel: 0 },
+      gear: 1, // the gearbox (drift-physics.js): 1-8, -1 reversing; manual holds it until the driver shifts
+      rpm: 800,
+      manual: false,
+      drift: {
+        slipAngle: 0, rearSlide: 0, wheelspin: 0, rpm: 800, gear: 1, limiter: false, steer: 0, loadFront: 0, loadRear: 0,
+        lateralAccel: 0
+      },
       cameraTargetOffset: new THREE.Vector3(0, 0.92, 0),
       chaseDistance: 7.6,
       chaseHeight: 2.05
@@ -1387,22 +1392,7 @@ class ThirdPersonControllerManager {
     c.prevX = prevX;
     c.prevZ = prevZ;
     // The AI driver (swim-mode.js) either rewrites the input, or flies a choreographed move itself ('scripted')
-    let scripted = this.swimPilot?.(c, dt, input) === 'scripted';
-    // Player donuts are drift circles: a keyboard only has full lock and full gas, which the counter-steer assist
-    // straightens into a sideways run, so a slide held at full lock and full gas at low speed hands the car to the
-    // drift circle the AI show uses. Space tightens it; letting go of either key drives out at the circle's speed and
-    // angle.
-    const donut = !this.swimPilot && driver.driftCircle;
-    if (donut) {
-      input.burnout = 0;
-      const direction = driver.lockDirection;
-      if (!c.donut || c.donut.direction !== direction) c.donut = DriftCircle.from(c, { direction });
-      c.donut.tight = input.handbrake > 0;
-      c.donut.update(c, dt, c.drift);
-      scripted = true;
-    } else if (c.donut) {
-      c.donut = null;
-    }
+    const scripted = this.swimPilot?.(c, dt, input) === 'scripted';
     const steps = Math.ceil(dt * SWIM_STEPS_PER_SECOND);
     const step = dt / steps;
     for (let i = 0; i < steps; i++) {
@@ -1444,6 +1434,20 @@ class ThirdPersonControllerManager {
       w.tire.rotation.x = w.isFront ? c.wheelSpin : c.rearWheelSpin;
       if (w.isFront) w.steerPivot.rotation.y = c.steerAngle;
     }
+  }
+
+  // Swimming gearbox (an eight-speed automatic by default): manual mode holds the gear, so the revs sit on the limiter
+  // until the driver shifts; a downshift that would over-rev the engine is refused. Each returns whether it did it.
+  shiftSwimUp() {
+    return this.entities.swim.manual === true && shiftUp(this.entities.swim, M5_DRIFT);
+  }
+
+  shiftSwimDown() {
+    return this.entities.swim.manual === true && shiftDown(this.entities.swim, M5_DRIFT);
+  }
+
+  toggleSwimManual() {
+    return toggleManual(this.entities.swim);
   }
 
   updateCyclist(dt) {
