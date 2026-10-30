@@ -10,6 +10,8 @@ const { DriftAutopilot, DriftCircle } = loadModule(readFileSync(join(__dirname, 
 });
 
 const DT = 1 / 240;
+const FRAME = 1 / 60;
+const STEPS = 4;
 const RAD = Math.PI / 180;
 
 function car(heading = 0) {
@@ -26,15 +28,28 @@ function distanceToRoute(route, p) {
   return best;
 }
 
-test('the AI drives a city block loop, drifting the corners and weaving round traffic', () => {
+// The controllers' swim loop with the AI at the keys: one frame of keys at 60 Hz through the car's keyboard driver,
+// then the physics in 240 Hz steps. Returns the last step's telemetry and the frame's keys.
+function frame(pilot, driver, c, traffic) {
+  const keys = pilot.update(c, FRAME, traffic, driver);
+  for (const key of Object.values(keys)) assert.ok(key === 0 || key === 1, 'the AI only presses keys');
+  const input = driver.update(c, keys, FRAME);
+  let tel;
+  for (let i = 0; i < STEPS; i++) tel = physics.stepDriftCar(c, input, FRAME / STEPS);
+  return { tel, keys };
+}
+
+test('the AI drives a city block loop on the keys, drifting the corners and weaving round traffic', () => {
   const route = [{ x: 0, z: 0 }, { x: 0, z: 250 }, { x: 250, z: 250 }, { x: 250, z: 0 }];
   const traffic = [{ x: 0, z: 120 }, { x: 3.3, z: 160 }, { x: 0, z: 200 }];
   const pilot = new DriftAutopilot();
+  const driver = new physics.KeyboardDriver();
   pilot.setPath(route);
   const c = car();
-  let maxSlip = 0, maxDeviation = 0, topSpeed = 0, hits = 0, closestPass = Infinity, t = 0;
+  let maxSlip = 0, maxDeviation = 0, topSpeed = 0, hits = 0, closestPass = Infinity, t = 0, handbrake = 0;
   while (t < 45 && !pilot.finished) {
-    const tel = physics.stepDriftCar(c, pilot.update(c, DT, traffic), DT);
+    const { tel, keys } = frame(pilot, driver, c, traffic);
+    handbrake += keys.handbrake;
     maxSlip = Math.max(maxSlip, Math.abs(tel.slipAngle));
     maxDeviation = Math.max(maxDeviation, distanceToRoute(route, c.position));
     topSpeed = Math.max(topSpeed, c.speed);
@@ -46,9 +61,10 @@ test('the AI drives a city block loop, drifting the corners and weaving round tr
       if (Math.abs(dz) < along && Math.abs(dx) < across) hits++;
       if (Math.abs(dz) < along) closestPass = Math.min(closestPass, Math.abs(dx) - across);
     }
-    t += DT;
+    t += FRAME;
   }
   assert.ok(pilot.finished, 'reaches the end of the route');
+  assert.ok(handbrake > 0, 'flicks the handbrake into the corners');
   assert.equal(hits, 0, 'never touches the traffic it weaves through');
   assert.ok(closestPass < 1.5, `and passes it close, the way a swimmer does (${closestPass.toFixed(2)} m)`);
   assert.ok(maxSlip > 25 * RAD, `drifts the corners (${(maxSlip / RAD).toFixed(0)}°)`);
@@ -136,11 +152,11 @@ test('weaving staggered traffic at 85 mph, the swimmer allows for its own car tu
   const c = car(0);
   c.speed = 38;
   const pilot = new DriftAutopilot();
+  const driver = new physics.KeyboardDriver();
   pilot.setPath([{ x: 0, z: 0 }, { x: 0, z: 1000 }], { corridors: [{ left: 7, right: -7, centre: null }] });
   let contacts = 0;
-  for (let frame = 0; frame < 420; frame++) {
-    const input = pilot.update(c, 1 / 60, traffic);
-    for (let k = 0; k < 4; k++) physics.stepDriftCar(c, input, 1 / 240);
+  for (let n = 0; n < 420; n++) {
+    frame(pilot, driver, c, traffic);
     for (const o of traffic) {
       o.z += o.speed / 60;
       const a = { x: c.position.x, z: c.position.z, sin: Math.sin(c.heading), cos: Math.cos(c.heading), halfW: 0.97, halfL: 2.5 };
