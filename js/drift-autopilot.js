@@ -8,8 +8,6 @@ import { M5_DRIFT, fullDriveForce } from './drift-physics.js';
 
 const RAD = Math.PI / 180;
 const GRAVITY = 9.81;
-const DRIFT_SPEED_MARGIN = 1.2; // share over the corner speed a drift may carry before it lifts
-const TURN_GRIP = 9.5; // m/s²: the lateral grip a drifted corner is planned with
 const ALONG_STREET = 15 * RAD; // travelling this close to the street's direction counts as running along it
 const MIN_PEDAL = 0.05; // pedal below which the traction control's share of it isn't read
 const MIN_PASSED = 0.1; // least share of the pedal it reckons the traction control passes on
@@ -18,14 +16,25 @@ const COMMIT_CLEARANCE = 0.05; // share of the lock it keeps short of the keyboa
 
 const AUTOPILOT = {
   cruiseSpeed: 38, // m/s on the straights (85 mph)
-  cornerSpeed: 9, // m/s into a drifted 90° corner: slow enough that a 45° slide stays inside a Manhattan crossing
+  cornerSpeed: 15, // m/s it brakes to for a drifted 90° corner, by the point it turns in: the slide scrubs it to ~12
   braking: 7.5, // m/s² it plans to brake at before a corner
+  turnGrip: 10.5, // m/s²: the lateral grip a drifted corner is planned with (its radius, so where it turns in)
   sharpTurn: 40 * RAD, // corners sharper than this are drifted
   kickTime: 0.32, // s of handbrake to break the rear loose
   kickSteer: 0.25, // share of the lock the wheel is wound on to before the handbrake flick
-  driftAngle: 30 * RAD, // body slip it holds through a corner
-  driftAngleRange: 20 * RAD, // past the angle, the lock into the turn comes off over this much more slip
-  exitAlign: 12 * RAD, // travelling this close to the new street's direction ends the corner
+  driftAngle: 39 * RAD, // drift angle it holds through a corner (the yaw it carries out of the flick peaks ~6° past it)
+  angleGain: 1 / (10 * RAD), // share of the lock per radian of drift angle short of (into the turn) or past (counter-steer) it
+  slipLead: 0.15, // s ahead it reads the drift angle from how fast it is swinging
+  counterLock: 0.3, // share of the lock it counter-steers with at most: the wheel takes half a second to wind back into
+  // the turn from a full counter-steer, and by then the rears have gripped and the slide is over
+  slipRateFilter: 20, // 1/s: how quickly its feel for that swing follows the car
+  liftAngle: 20 * RAD, // read ahead this far past the angle it wants, it lifts off W
+  driftSpeed: 20, // m/s it holds a slide to: the gas comes off as the slide's ground speed rises to it (a faster slide is
+  // a wider one)
+  driftThrottleGain: 0.5, // share of the pedal per m/s under driftSpeed
+  exitTurn: 20 * RAD, // turn still to go below which it asks for less angle, down to none on the new street's line
+  exitSlip: 6 * RAD, // drift angle below which the corner is done (swimSlip: the swimming then keeps W down),
+  exitAlign: 20 * RAD, // ...travelling this close to the new street's direction
   tractionSlip: 5 * RAD, // slip it allows on the straights before easing off the gas
   offLine: 10 * RAD, // heading error beyond which it slows down to get back onto the route
   lookahead: 6, // m, plus lookaheadTime × speed
@@ -59,8 +68,10 @@ const AUTOPILOT = {
   yawDamping: 0.05, // s: wheel angle taken off per rad/s the car is turning, swimming (catches a flick as it arrives)
   steerLead: 0.15, // s ahead it reads the gap to its line from its sideways speed: the wheel's lag, swimming
   moveCost: 1.2, // score (m of ground) per metre moved across: it doesn't swerve for nothing
-  lineUpDistance: 30, // m before a drifted corner where it lines up on the route line for it,
+  lineUpDistance: 100, // m before a drifted corner where it lines up on its entry line (still moving across as it turns
+  // in, the slide runs wide),
   lineUpCost: 40, // score per metre off that line: whenever a plan there is safe, it takes it
+  entryMargin: 1.5, // m in from the street's outside edge that it lines up on for a drifted corner (the widest arc)
   holds: [0, 0.4], // s it tries holding its line before a move across: at once, or a late flick
   lateWindow: 1, // s: a move that starts within this of coming alongside the car on its line is a late flick,
   lateBonus: 8, // ...worth this much score (the swerve the player wants, not an early lane change)
@@ -266,6 +277,8 @@ class DriftAutopilot {
     const clearSpeed = this._clearSpeed ??= [];
     let lineCount = 0;
     for (let y = band.right; y <= band.left + 1e-6; y += o.gapStep) lines[lineCount++] = y;
+    // (lining up for a drifted corner, its entry line too: the steps may miss it)
+    if (this.lineUp) lines[lineCount++] = this.entryLine;
     const gridCount = lineCount;
     for (let i = 0; i < count; i++) {
       for (let j = 0; j < count; j++) {
@@ -322,7 +335,7 @@ class DriftAutopilot {
             if (t <= o.pedalTime) speed = clamp(speed + accel * o.planStep, 0, o.cruiseSpeed);
             // ...but no faster than the drifted corner ahead allows: the executor brakes for it whatever the pedal
             // (decide), on the brake key, which leaves less grip to move across with
-            const cornerLimit = Math.sqrt(o.cornerSpeed ** 2 + 2 * o.braking * Math.max(0, this.cornerAhead - 8 - travelled));
+            const cornerLimit = Math.sqrt(o.cornerSpeed ** 2 + 2 * o.braking * Math.max(0, this.cornerAhead - (this.brakeShort ?? 8) - travelled));
             const cornerBraking = speed > cornerLimit;
             if (cornerBraking) speed = Math.max(cornerLimit, speed - cornerBrake * o.planStep);
             travelled += speed * o.planStep;
@@ -384,7 +397,7 @@ class DriftAutopilot {
             score += o.openWeight * open + o.speedWeight * speed;
           }
           score -= (Math.abs(y - carLat) + Math.abs(then - y)) * o.moveCost;
-          if (this.lineUp) score -= Math.abs(y) * o.lineUpCost;
+          if (this.lineUp) score -= Math.abs(y - this.entryLine) * o.lineUpCost;
           score += this.closeCallScore(nearCount);
           // A late flick: the move starts within lateWindow of reaching the car on the line it held, and still clears it
           if (hold > 0 && heldUntil - hold < o.lateWindow) score += o.lateBonus;
@@ -542,6 +555,11 @@ class DriftAutopilot {
     // corner, unless a car is in the way there: traffic queues at the edge of a corner the show holds clear)
     // A driver decides a few times a second, not every frame: between decisions it flies the last plan
     this.lineUp = sharp && toCorner < o.lineUpDistance;
+    // It lines up on the outside of the turn, entryMargin in from the street's edge: the widest arc the street allows
+    if (this.lineUp) {
+      const band = this.corridor();
+      this.entryLine = turn < 0 ? band.left - o.entryMargin : band.right + o.entryMargin;
+    }
     this.cornerAhead = sharp ? toCorner : Infinity; // m to the drifted corner ahead, which caps the plans' speed
     this.sincePlan = (this.sincePlan ?? Infinity) + dt;
     if (this.sincePlan >= o.replanInterval || !this.plan) {
@@ -562,32 +580,36 @@ class DriftAutopilot {
     // (read where its sideways speed has it a moment from now: the wheel takes that long to swing the car)
     const coming = carLat + lateralVelocity(car, s.ux, s.uz) * o.steerLead;
     const across = this.cornering ? 0 : acrossSpeed(goal - coming, o.lateralAccel, moveSpeed, o.settleTime);
-    this.offset = this.cornering ? goal : carLat;
+    // (in a drifted corner it aims at the new street's line, wherever across the old one it turned in from)
+    this.offset = this.cornering ? 0 : carLat;
 
     // Speed: the plan's pedal, flown as planned (its acceleration fed straight to the pedals, so the car keeps to the
     // timing the gaps were picked with), capped by what the next corner allows
     const planned = clamp(plan.start + plan.accel * Math.min(this.sincePlan, o.pedalTime), 0, o.cruiseSpeed);
     let target = planned;
     let feedForward = this.sincePlan < o.pedalTime && planned > 0 && planned < o.cruiseSpeed ? plan.accel : 0;
+    // Drift entry, as a player does it on the keys: hold the lock into the turn, and once the wheel is wound on far
+    // enough, flick the handbrake. It flicks about a turning radius before the corner (speed² over the slide's grip, at
+    // the speed it will turn at), so the arc ends on the new street rather than across it; the lock goes on before that,
+    // for as long as the wheel takes to wind on at this speed. The braking for the corner ends where the lock goes on.
+    const kp = driver.params;
+    const windUp = o.kickSteer * (kp.steerTime + kp.steerTimePerSpeed * Math.abs(u));
+    const radius = Math.max(10, o.cornerSpeed * o.cornerSpeed / o.turnGrip);
+    const entry = radius + Math.abs(u) * windUp;
+    this.brakeShort = radius + o.cornerSpeed * windUp;
     if (sharp) {
-      const cornerLimit = Math.sqrt(o.cornerSpeed ** 2 + 2 * o.braking * Math.max(0, toCorner - 8));
+      const cornerLimit = Math.sqrt(o.cornerSpeed ** 2 + 2 * o.braking * Math.max(0, toCorner - this.brakeShort));
       if (cornerLimit < target) {
         target = cornerLimit;
         // Braking for the corner: at least the planned rate, more if it is late (the rate that still gets there)
-        const late = (u * u - o.cornerSpeed ** 2) / (2 * Math.max(2, toCorner - 6));
+        const late = (u * u - o.cornerSpeed ** 2) / (2 * Math.max(2, toCorner - this.brakeShort + 2));
         feedForward = u > cornerLimit ? -Math.max(o.braking, late) : 0;
       }
     }
-
-    // Drift entry, as a player does it on the keys: hold the lock into the turn, and once the wheel is wound on far
-    // enough, flick the handbrake. It flicks about a turning radius before the corner (at ~1 g of grip: speed² / g, at
-    // the speed it will turn at), so the arc ends on the new street rather than across it; the lock goes on before that,
-    // for as long as the wheel takes to wind on at this speed.
-    const kp = driver.params;
-    const windUp = o.kickSteer * (kp.steerTime + kp.steerTimePerSpeed * Math.abs(u));
-    const entry = Math.max(10, o.cornerSpeed * o.cornerSpeed / TURN_GRIP) + Math.abs(u) * windUp;
     if (sharp && toCorner < entry && this.driftedCorner !== this.segment && u > 8) {
       this.driftedCorner = this.segment;
+      this.cornerTurn = Math.sign(turn);
+      this.cornerExit = Math.atan2(next.ux, next.uz);
       this.turningIn = true;
       this.cornering = true;
     }
@@ -628,18 +650,26 @@ class DriftAutopilot {
     input.steer = kicking ? Math.sign(turn) : clamp(wheel / driverLock(u, this.model), -most, most);
     input.handbrake = this.kick > 0 ? 1 : 0;
     const slipAbs = Math.abs(slip);
+    // How fast the drift angle is growing, as a driver feels the tail swing (smoothed over a few frames)
+    const slipRate = this.lastSlip === undefined ? 0 : (slipAbs - this.lastSlip) / Math.max(dt, 1e-3);
+    this.slipRate = (this.slipRate ?? 0) + (slipRate - (this.slipRate ?? 0)) * Math.min(1, dt * o.slipRateFilter);
+    this.lastSlip = slipAbs;
+    // The turn still to go into the corner: from the way it's travelling round to the new street's direction
+    const into = this.cornerTurn || Math.sign(turn) || 1;
+    const toGo = Math.max(0, wrap((this.cornerExit ?? street) - travel) * into);
+    let angleWanted = 0;
     if (this.cornering && !kicking) {
-      // In the slide the lock into the turn asks for more angle (drift-physics.js): past the angle it wants, it takes
-      // the lock off, and counter-steers when the tail swings well past it
-      const into = Math.sign(turn) || 1;
-      const most = clamp(1 - (slipAbs - o.driftAngle) / o.driftAngleRange, 0, 1);
-      input.steer = into * Math.min(input.steer * into, most);
+      // In the slide it works the angle with the keys: the lock into the turn swings the tail further out, the
+      // counter-steer catches it (drift-physics.js). It wants driftAngle while there is turn to go, less as the
+      // car comes round onto the new street, and reads the angle a moment ahead from how fast it's swinging, so it
+      // catches the tail before it overshoots rather than after.
+      angleWanted = o.driftAngle * Math.min(1, toGo / o.exitTurn);
+      const ahead = slipAbs + this.slipRate * o.slipLead;
+      input.steer = into * clamp((angleWanted - ahead) * o.angleGain, -o.counterLock, 1);
     }
 
-    // The corner is done once the car is on the new street and either travelling along it or gripping again
-    const lineError = Math.abs(wrap(Math.atan2(s.ux, s.uz) - travel));
-    if (this.cornering && !kicking && this.segment > this.driftedCorner
-      && (lineError < o.exitAlign || (slipAbs < o.exitAlign && lineError < 3 * o.exitAlign))) {
+    // The corner is done once the car is travelling along the new street and the slide has all but ended
+    if (this.cornering && !kicking && slipAbs < o.exitSlip && toGo < o.exitAlign) {
       this.cornering = false;
     }
     if (this.turningIn) {
@@ -647,13 +677,17 @@ class DriftAutopilot {
       input.throttle = 0;
       input.brake = u > o.cornerSpeed ? clamp((u - o.cornerSpeed) * o.speedGain / (this.model.brakeGrip * GRAVITY), 0, 1) : 0;
     } else if (kicking) {
+      // The flick: off the gas (W down with the handbrake spins the rears up for its release and over-rotates the car)
       input.throttle = 0;
       input.brake = 0;
     } else if (this.cornering) {
-      // Hold the slide on the gas: the keyboard driver works the throttle for the angle while W is held. The gas holds
-      // the angle, not a faster car: past the corner speed it lifts, or the slide carries the car across the new street
+      // Hold the slide on the gas (the keyboard driver works the throttle for the angle while W is held), and lift
+      // when the tail swings well past the angle it wants (the rears bite and stop the swing) or the slide picks up
+      // speed: a faster slide is a wider one
       input.brake = 0;
-      input.throttle = u > o.cornerSpeed * DRIFT_SPEED_MARGIN ? 0 : 1;
+      const ahead = slipAbs + this.slipRate * o.slipLead;
+      const ground = Math.hypot(car.speed, car.vx, car.vz);
+      input.throttle = ahead > angleWanted + o.liftAngle ? 0 : clamp((o.driftSpeed - ground) * o.driftThrottleGain, 0, 1);
     } else {
       // The force the wanted acceleration takes, on top of drag and rolling resistance: positive is gas, negative brake
       // (the keyboard driver's traction control keeps the gas to what the rears can put down)
