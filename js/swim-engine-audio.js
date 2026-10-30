@@ -294,7 +294,6 @@ function createSwimEngineVoice(context, resources, output,
 
   const state = createEngineState(M3_ENGINE);
   const input = { speed: 0, throttle: 0, wheelspin: 0, slipAngle: 0, gear: 0, rpm: NaN, limiter: false };
-  const gearboxSeen = {};
   let layer = null;
   let synthesized = null;
   let retiring = [];
@@ -477,7 +476,7 @@ function createSwimEngineVoice(context, resources, output,
       input.wheelspin = entity.drift?.wheelspin || 0;
       input.slipAngle = entity.drift?.slipAngle || 0;
       input.throttle = controls()?.throttle || 0;
-      readGearbox(entity, input, gearboxSeen); // the car's own gear, revs and limiter, when it has them
+      readGearbox(entity, input); // the car's own gear, revs and limiter, when it has them
     } else {
       input.speed = input.throttle = input.wheelspin = input.slipAngle = 0;
       input.gear = 0;

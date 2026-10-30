@@ -19,7 +19,7 @@ function car(speed = 0) {
 }
 
 // Frames as the game runs them: the physics steps, then the sound reads the car and steps its engine
-function play(c, state, seconds, input, log = [], seen = {}) {
+function play(c, state, seconds, input, log = []) {
   const engineInput = { speed: 0, throttle: 0, wheelspin: 0, slipAngle: 0 };
   for (let t = 0; t < seconds - 1e-9; t += FRAME) {
     let telemetry;
@@ -28,7 +28,7 @@ function play(c, state, seconds, input, log = [], seen = {}) {
     engineInput.throttle = input.throttle;
     engineInput.wheelspin = telemetry.wheelspin;
     engineInput.slipAngle = telemetry.slipAngle;
-    readGearbox(c, engineInput, seen);
+    readGearbox(c, engineInput);
     stepEngine(state, engineInput, FRAME);
     log.push({ carGear: c.gear, carRpm: c.rpm, carLimiter: c.limiterTime > 0, gear: state.gear, rpm: state.rpm,
       cut: state.cut, upshift: state.upshift, downshift: state.downshift, gearbox: state.gearbox });
@@ -74,9 +74,8 @@ test('the physics limiter is the sound\'s fuel cut, frame for frame, in a burnou
   // A slide in a low gear: full throttle and steering with the handbrake flicked in
   const c = car(14);
   const state = createEngineState();
-  const seen = {};
-  play(c, state, 0.4, { ...pedals, throttle: 1, steer: 1, handbrake: 1 }, [], seen);
-  const drift = play(c, state, 3, { ...pedals, throttle: 1, steer: 1 }, [], seen);
+  play(c, state, 0.4, { ...pedals, throttle: 1, steer: 1, handbrake: 1 });
+  const drift = play(c, state, 3, { ...pedals, throttle: 1, steer: 1 });
   drift.forEach((frame) => assert.equal(frame.cut, frame.carLimiter));
   // A cut set by hand, too
   const manual = createEngineState();
@@ -90,27 +89,26 @@ test('the physics limiter is the sound\'s fuel cut, frame for frame, in a burnou
 test('manual shifts are heard; a refused downshift makes no sound', () => {
   const c = car();
   const state = createEngineState();
-  const seen = {};
-  play(c, state, 3, { ...pedals, throttle: 1 }, [], seen);
+  play(c, state, 3, { ...pedals, throttle: 1 });
   physics.toggleManual(c);
   const gear = c.gear;
   assert.equal(physics.shiftUp(c), true);
-  let [frame] = play(c, state, FRAME, { ...pedals, throttle: 1 }, [], seen);
+  let [frame] = play(c, state, FRAME, { ...pedals, throttle: 1 });
   assert.equal(frame.upshift, true);
   assert.equal(frame.gear, gear);
   // Two gears down from here at speed would over-rev: the first goes through, the second is refused
-  play(c, state, 0.5, { ...pedals, throttle: 1 }, [], seen);
+  play(c, state, 0.5, { ...pedals, throttle: 1 });
   assert.equal(physics.shiftDown(c), true);
-  [frame] = play(c, state, FRAME, { ...pedals, throttle: 1 }, [], seen);
+  [frame] = play(c, state, FRAME, { ...pedals, throttle: 1 });
   assert.equal(frame.downshift, true);
-  play(c, state, 0.5, { ...pedals, throttle: 1 }, [], seen);
+  play(c, state, 0.5, { ...pedals, throttle: 1 });
   const before = c.gear;
   while (physics.shiftDown(c)) { /* down to the lowest gear the speed allows */ }
   assert.ok(c.gear > 1, 'a refused downshift above first');
   const refusedAt = c.gear;
-  play(c, state, 0.2, { ...pedals, throttle: 1 }, [], seen); // the gears dropped so far are heard
+  play(c, state, 0.2, { ...pedals, throttle: 1 }); // the gears dropped so far are heard
   assert.equal(physics.shiftDown(c), false);
-  const after = play(c, state, 0.5, { ...pedals, throttle: 1 }, [], seen);
+  const after = play(c, state, 0.5, { ...pedals, throttle: 1 });
   assert.ok(after.every((step) => !step.downshift && !step.upshift), 'nothing heard for a refused shift');
   assert.equal(c.gear, refusedAt);
   assert.ok(before >= refusedAt);
@@ -130,37 +128,25 @@ test('without gearbox fields the model shifts on its own, exactly as before', ()
   assert.ok(plain.gear >= 3, `the model's own gear ${plain.gear + 1}`);
   // A car without a gearbox leaves the input without one
   const engineInput = { speed: 5, throttle: 1, gear: 3, rpm: 5000, limiter: true };
-  assert.equal(readGearbox(car(5), engineInput, {}), false);
+  assert.equal(readGearbox(car(5), engineInput), false);
   assert.equal(engineInput.gear, 0);
   assert.ok(Number.isNaN(engineInput.rpm));
   assert.equal(engineInput.limiter, false);
 });
 
-test('a car flown by a script (gearbox left standing while it moves) falls back to the model, then takes the gearbox back', () => {
+test('a car that gets its gearbox back (a reset clears car.gear) is taken over without a shift sound', () => {
   const c = car();
   const state = createEngineState();
-  const seen = {};
-  play(c, state, 1.5, { ...pedals, throttle: 1, burnout: 1 }, [], seen);
-  assert.equal(state.gearbox, true);
-  // The show's donuts: the car moves, the physics doesn't run (the script zeroes longAccel, so the first frame of it
-  // still looks like a physics step)
-  const engineInput = { speed: 0, throttle: 1, wheelspin: 1, slipAngle: 0.6 };
-  for (let i = 0; i < 60; i++) {
-    c.speed = 13 + Math.sin(i / 7) * 0.5;
-    c.longAccel = 0;
-    engineInput.speed = c.speed;
-    assert.equal(readGearbox(c, engineInput, seen), i === 0, `frame ${i}`);
-    stepEngine(state, engineInput, FRAME);
-  }
+  play(c, state, 6, { ...pedals, throttle: 1 });
+  c.gear = 0; // controllers.js on a reset: the automatic picks the gear for the speed again
+  const engineInput = { speed: c.speed, throttle: 1, wheelspin: 0, slipAngle: 0 };
+  assert.equal(readGearbox(c, engineInput), false);
+  stepEngine(state, engineInput, FRAME);
   assert.equal(state.gearbox, false);
-  assert.ok(state.limiting, 'the model bounces off its own limiter in the slide');
-  // Back on the physics: its gear is taken without a shift sound
-  const [frame] = play(c, state, FRAME, { ...pedals, throttle: 1 }, [], seen);
+  const [frame] = play(c, state, FRAME, { ...pedals, throttle: 1 });
   assert.equal(frame.gearbox, true);
+  assert.equal(frame.gear, frame.carGear - 1);
   assert.equal(frame.upshift || frame.downshift, false);
-  // Standing still with nothing changing keeps the last call
-  assert.equal(readGearbox(c, engineInput, seen), true);
-  assert.equal(readGearbox(c, engineInput, seen), true);
 });
 
 test('the gearbox reads stay inside the model\'s engine', () => {

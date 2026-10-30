@@ -88,30 +88,14 @@ function hasGearbox(input) {
 
 /**
  * Copies the car's gearbox (drift-physics.js writes car.gear, car.rpm and car.limiterTime every step) into an engine
- * input, or clears it from the input when the car has none or the physics isn't moving the car. A scripted move (the
- * show's donuts) flies the car itself and leaves the gearbox as the physics last left it: the car's speed changes
- * while its revs, limiter, wheel slip and longitudinal acceleration all stand still. `seen` is the caller's own
- * object, remembering the last frame between calls.
+ * input, or clears it from the input when the car has none. Returns whether it has one.
  */
-function readGearbox(car, input, seen) {
+function readGearbox(car, input) {
   const geared = hasGearbox(car);
-  if (geared) {
-    const stepped = car.rpm !== seen.rpm || car.gear !== seen.gear || car.limiterTime !== seen.limiterTime
-      || car.wheelSlip !== seen.wheelSlip || car.longAccel !== seen.longAccel;
-    // (standing still with nothing changing, either could be driving: keep the last call)
-    if (stepped || car.speed !== seen.speed) seen.live = stepped;
-  }
-  seen.rpm = car.rpm;
-  seen.gear = car.gear;
-  seen.limiterTime = car.limiterTime;
-  seen.wheelSlip = car.wheelSlip;
-  seen.longAccel = car.longAccel;
-  seen.speed = car.speed;
-  const live = geared && seen.live;
-  input.gear = live ? car.gear : 0;
-  input.rpm = live ? car.rpm : NaN;
-  input.limiter = live && car.limiterTime > 0;
-  return live;
+  input.gear = geared ? car.gear : 0;
+  input.rpm = geared ? car.rpm : NaN;
+  input.limiter = geared && car.limiterTime > 0;
+  return geared;
 }
 
 // Takes the gear from the car's gearbox. A change of gear is one shift event (several gears at once in a frame too);
