@@ -104,6 +104,19 @@ test('a burnout spins the rears on the spot, and letting the brake go launches t
   assert.ok(c.speed > 7, `launched to ${c.speed.toFixed(1)} m/s`);
 });
 
+test('wheelspin builds through the driveline inertia and dies away after a lift', () => {
+  const c = car(10);
+  const first = stepDriftCar(c, { ...idle, throttle: 1 }, DT).wheelspin;
+  assert.ok(first > 0 && first < 0.2, `one step of full throttle spins the rears up only a little: ${first}`);
+  let t = 0;
+  while (stepDriftCar(c, { ...idle, throttle: 1 }, DT).wheelspin < 1 && t < 1) t += DT;
+  assert.ok(t > 0.02 && t < 0.2, `full wheelspin after ${t.toFixed(3)} s`);
+  t = 0;
+  while (stepDriftCar(c, idle, DT).wheelspin > 0 && t < 1) t += DT;
+  assert.ok(t > 0.02 && t < 0.3, `the tires grip again ${t.toFixed(3)} s after the lift`);
+  assert.equal(c.wheelSlip, 0);
+});
+
 test('reverse is limited and steering a stopped car does not spin it', () => {
   const c = car();
   drive(c, 4, { ...idle, reverse: 1 });

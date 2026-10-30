@@ -39,8 +39,26 @@ const M5_DRIFT = {
   counterSteer: 0.9, // assist: front wheels follow the slide by this share of the body slip angle
   slipLimit: 34 * RAD, // body slip beyond which the assist yaws the car back, so a slide doesn't become a spin
   stability: 22, // 1/s² of yaw correction per radian past the limit
-  minSlipSpeed: 2.5 // m/s floor of the slip-angle denominator, which keeps a crawl stable
+  minSlipSpeed: 2.5, // m/s floor of the slip-angle denominator, which keeps a crawl stable
+  // Rotating driveline behind the rear tires, so wheelspin builds and dies away over time rather than in one step.
+  // G80 M3 Competition numbers: ZF 8HP76 ratios, 3.154 final drive, 275/35 R19 rears.
+  wheelRadius: 0.34, // m
+  wheelInertia: 2.6, // kg·m²: both rear wheels and tires
+  engineInertia: 0.2, // kg·m²: crank, flywheel and torque converter, felt through the gearing squared
+  gears: [5.0, 3.2, 2.143, 1.72, 1.313, 1.0, 0.823, 0.64],
+  finalDrive: 3.154,
+  shiftRpm: 7000,
+  fullSpin: 4 // m/s the tire surface outruns the road at full wheelspin (swim-engine.js hears the same 4 m/s)
 };
+
+// The rear tires' rotating inertia as a mass at the contact patch, in the gear the speed would have the car in: in
+// first the engine spins 16× faster than the wheels and weighs ~450 kg there, in top gear ~70 kg.
+function spinMass(speed, params) {
+  const wheelRpm = Math.abs(speed) / params.wheelRadius * 60 / (2 * Math.PI);
+  const axle = params.finalDrive;
+  const ratio = params.gears.find((gear) => wheelRpm * gear * axle < params.shiftRpm) ?? params.gears[params.gears.length - 1];
+  return (params.wheelInertia + params.engineInertia * (ratio * axle) ** 2) / params.wheelRadius ** 2;
+}
 
 // Normalised lateral force for a slip angle: rises linearly, peaks at `peakSlip`, then settles at `slideGrip`.
 function tireCurve(slip, params) {
@@ -118,7 +136,9 @@ function stepDriftCar(car, input, dt, params = M5_DRIFT, out = stepDriftCar.tele
   let frontLat = -frontLatMax * tireCurve(slipFront, params);
 
   // Rear tires: drive and lateral force share a friction ellipse. Asking for more traction than it holds spins the
-  // wheels; a spinning (or locked) tire keeps only its sliding grip.
+  // wheels; a spinning (or locked) tire keeps only its sliding grip. `car.wheelSlip` is how fast the tire surface
+  // outruns the road: the drive force beyond the sliding grip spins the driveline up through its inertia, and once the
+  // drive drops below the sliding grip the road pulls the wheels back to rolling speed.
   const rearMax = params.rearGrip * loadRear;
   const straight = Math.max(0, Math.min(1, 1 - Math.abs(bodySlip) / (8 * RAD) - Math.abs(input.steer)));
   const tractionMax = (params.tractionGrip + (params.launchGrip - params.tractionGrip) * straight) * loadRear;
@@ -135,11 +155,23 @@ function stepDriftCar(car, input, dt, params = M5_DRIFT, out = stepDriftCar.tele
     const freeLat = -rearMax * lateralShare(freeLong) * tireCurve(slipRear, params);
     rearLong = freeLong * (1 - handbrake) + lockedLong * handbrake;
     rearLat = freeLat * (1 - handbrake) + lockedLat * handbrake;
+    car.wheelSlip = 0;
   } else {
-    if (Math.abs(rearLong) > tractionMax) {
-      wheelspin = Math.min(1, (Math.abs(rearLong) - tractionMax) / tractionMax + 0.3);
-      rearLong = Math.sign(rearLong) * tractionMax * params.slideGrip;
+    // (the brakes push against the spin: drive in reverse spins the wheels backwards)
+    const spinDirection = throttle < 0 ? -1 : 1;
+    const drive = rearLong * spinDirection;
+    const sliding = tractionMax * params.slideGrip;
+    let wheelSlip = car.wheelSlip || 0;
+    if (wheelSlip > 0 || drive > tractionMax) {
+      wheelSlip = Math.max(0, wheelSlip + (drive - sliding) / spinMass(u, params) * dt);
     }
+    if (wheelSlip > 0) {
+      wheelspin = Math.min(1, wheelSlip / params.fullSpin);
+      rearLong = spinDirection * sliding;
+    } else {
+      rearLong = Math.max(-tractionMax, Math.min(tractionMax, rearLong));
+    }
+    car.wheelSlip = wheelSlip;
     rearLat = -rearMax * lateralShare(rearLong) * tireCurve(slipRear, params) * (1 - 0.4 * wheelspin);
   }
 
@@ -173,6 +205,7 @@ function stepDriftCar(car, input, dt, params = M5_DRIFT, out = stepDriftCar.tele
   if (burnout && Math.abs(u) < 2) {
     u = 0;
     wheelspin = 1;
+    car.wheelSlip = Math.max(car.wheelSlip || 0, params.fullSpin);
   }
   // At a crawl the tire model loses meaning; settle toward rolling without slip so the car can't spin in place.
   // Spinning rear tires (a donut pivots with little forward speed) keep their rotation.
