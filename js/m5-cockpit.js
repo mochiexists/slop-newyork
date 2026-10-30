@@ -1,13 +1,16 @@
 import * as THREE from 'three/webgpu';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { BODY_SPECS, carLayout } from './cars.js';
 import { CARELESS_WHISPER } from './swim-mode.js';
+import { driverView, birdStep, birdLift } from './m5-driver.js';
 
-// The M5's cabin for the first-person camera: the body and glasshouse are single-sided lofts, so from the driver's
-// seat they vanish and leave the hood floating in front of the road. This builds what the driver sees instead (a G90
-// interior in red leather: A-pillars, headliner, dash with the curved display, door cards, seats, centre console and
-// the M wheel), the driver's arms in a grey hoodie with the hands on the wheel, and F's raised middle finger. It all
-// rides the swim car's chassisPivot (car frame: +z forward, +x the car's LEFT, so the driver sits at +x), hidden
-// unless swimming in the cockpit camera, so the chase view pays nothing for it; only the raised arm shows outside.
+// The M5's cabin and its driver: the body and glasshouse are single-sided lofts, so from the driver's seat they vanish
+// and leave the hood floating in front of the road. This builds what the driver sees instead (a G90 interior in red
+// leather: A-pillars, headliner, dash with the curved display, door cards, seats, centre console and the M wheel) and
+// the driver in a grey hoodie: seated, hands on the wheel, F's raised middle finger out of the window. It all rides the
+// swim car's chassisPivot (car frame: +z forward, +x the car's LEFT, so the driver sits at +x) and shows whenever the
+// car is swimming: from the seat camera without the head, from outside through the see-through glass (cars.js). The
+// static cabin is merged into one mesh per material, so seeing it from outside costs a dozen draws.
 
 const RAD = Math.PI / 180;
 
@@ -34,10 +37,22 @@ const SHOULDER_BACK = 0.05;
 const UPPER_ARM = 0.3;
 const FOREARM = 0.28;
 
-// The bird (F): the left hand leaves the wheel in BIRD_TIME seconds and goes out of the driver's window. From the
-// driver's seat it is the BMW short's shot: the driver looks out to the left and the arm is out at shoulder height;
-// seen from outside the hand comes up above the roof line.
-const BIRD_TIME = 0.35;
+// The seated driver, in the frame the eye is in: hips on the seat cushion, the neck between the shoulders, the head
+// round the eye; the torso is an elliptic cylinder this wide (across) and deep, wider at the shoulders
+const HIP = new THREE.Vector3(EYE.x, 0.64, -0.66);
+const NECK = new THREE.Vector3(EYE.x, EYE.y - SHOULDER_DROP + 0.03, EYE.z - 0.08);
+const HEAD = new THREE.Vector3(EYE.x, EYE.y - 0.01, EYE.z - 0.075);
+const TORSO_WIDTH = 0.42;
+const TORSO_DEPTH = 0.24;
+const HIP_SPREAD = 0.1; // each thigh from the hip's centre
+const KNEE_SPREAD = 0.12;
+const KNEE = new THREE.Vector3(0, 0.66, -0.06); // y and z of both knees, under the wheel
+// how much of the left shoulder's lean into the window the torso and head follow
+const BODY_LEAN = 0.5;
+
+// The bird (F): the left hand leaves the wheel in BIRD_TIME seconds (m5-driver.js) and goes out of the driver's window.
+// From the driver's seat it is the BMW short's shot: the driver looks out to the left and the arm is out at shoulder
+// height; seen from outside the hand comes up above the roof line.
 const BIRD_POV = new THREE.Vector3(1.02, 1.2, -0.12);
 const BIRD_GLANCE = 45 * RAD; // how far the driver's look turns to the window with it
 // seen from the chase camera 7 m back a life-size hand is a few pixels; it grows by this much out there
@@ -71,6 +86,8 @@ const COLORS = {
   hoodie: 0x707072,
   cuff: 0x55575b,
   skin: 0xb77a58,
+  jeans: 0x1f2a3c,
+  hair: 0x1c1512,
   mRed: 0xd4101e
 };
 
@@ -109,6 +126,23 @@ function crossExtrusion(profile, x0, x1, mat) {
   // shape (u, v) and depth w -> car (x = x1 - w, y = v, z = u)
   geo.rotateY(-Math.PI / 2).translate(x1, 0, 0);
   return new THREE.Mesh(geo, mat);
+}
+
+// The static meshes of a (parentless) group merged into one mesh per material; uvs go (the cabin's materials are
+// plain colours)
+function mergeByMaterial(group) {
+  group.updateMatrixWorld(true);
+  const buckets = new Map();
+  group.traverse((o) => {
+    if (!o.isMesh) return;
+    const geo = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone();
+    geo.deleteAttribute('uv');
+    geo.clearGroups();
+    geo.applyMatrix4(o.matrixWorld);
+    if (!buckets.has(o.material)) buckets.set(o.material, []);
+    buckets.get(o.material).push(geo);
+  });
+  return [...buckets].map(([mat, geos]) => new THREE.Mesh(mergeGeometries(geos), mat));
 }
 
 // The body loft is closed across its top at the belt line (the glasshouse hides it from outside), which from the
@@ -314,8 +348,10 @@ class DriverArm {
     this.fore = new THREE.Mesh(limbGeometry(0.041, 0.047), mats.hoodie);
     this.cuff = new THREE.Mesh(limbGeometry(0.043, 0.043), mats.cuff);
     this.joint = new THREE.Mesh(new THREE.SphereGeometry(0.047, 10, 8), mats.hoodie);
+    // the shoulder, rounding the sleeve into the torso
+    this.shoulderCap = new THREE.Mesh(new THREE.SphereGeometry(0.062, 10, 8), mats.hoodie);
     this.hand = buildHand(mats.skin);
-    this.group.add(this.upper, this.fore, this.cuff, this.joint, this.hand);
+    this.group.add(this.upper, this.fore, this.cuff, this.joint, this.shoulderCap, this.hand);
     this._cuffStart = new THREE.Vector3();
   }
 
@@ -330,8 +366,56 @@ class DriverArm {
     this._cuffStart.lerpVectors(this.elbow, this.wrist, 0.86);
     placeLimb(this.cuff, this._cuffStart, this.wrist);
     this.joint.position.copy(this.elbow);
+    this.shoulderCap.position.copy(this.shoulder);
     this.hand.position.copy(this.wrist);
     this.hand.quaternion.copy(orientation);
+  }
+}
+
+// The rest of the driver round the arms: torso, hood, thighs, and the head (neck, face, hair, shades) that turns to
+// look. Its group sits at the seat's offset from the procedural cabin (useModelCabin moves it), so poses are in the
+// procedural cabin's frame.
+class DriverBody {
+  constructor(mats) {
+    this.group = new THREE.Group();
+    this.group.name = 'M5Driver';
+    this.torso = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.4, 1, 8, 1).translate(0, 0.5, 0), mats.hoodie);
+    this.hood = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 1).scale(0.15, 0.065, 0.075), mats.hoodie);
+    this.group.add(this.torso, this.hood);
+    for (const side of [-1, 1]) {
+      const thigh = new THREE.Mesh(limbGeometry(0.068, 0.082), mats.jeans);
+      const hip = new THREE.Vector3(HIP.x + side * HIP_SPREAD, HIP.y - 0.02, HIP.z + 0.06);
+      placeLimb(thigh, hip, new THREE.Vector3(HIP.x + side * KNEE_SPREAD, KNEE.y, KNEE.z));
+      this.group.add(thigh);
+    }
+
+    this.head = new THREE.Group();
+    const face = new THREE.Mesh(new THREE.IcosahedronGeometry(0.1, 1).scale(0.8, 1.05, 0.98), mats.skin);
+    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.048, 0.055, 0.12, 8).translate(0, -0.1, -0.01), mats.skin);
+    // hair: the top of a slightly bigger head, tipped back off the forehead
+    const hair = new THREE.Mesh(new THREE.SphereGeometry(0.106, 10, 5, 0, Math.PI * 2, 0, Math.PI * 0.5).scale(0.82, 0.95, 1), mats.hair);
+    hair.position.set(0, 0.018, -0.012);
+    hair.rotation.x = -0.35;
+    const shades = box(0.15, 0.03, 0.02, 0, 0.02, 0.09, mats.glossBlack);
+    this.head.add(face, neck, hair, shades);
+    this.group.add(this.head);
+    this.group.traverse((o) => {
+      if (o.isMesh) o.receiveShadow = true;
+    });
+    this._neck = new THREE.Vector3();
+  }
+
+  // lean: the left shoulder's move toward the window (the bird); yaw: where the head looks (+ to the left)
+  pose(lean, yaw) {
+    this._neck.copy(NECK).addScaledVector(lean, BODY_LEAN);
+    _dir.subVectors(this._neck, HIP);
+    const length = _dir.length();
+    this.torso.position.copy(HIP);
+    this.torso.quaternion.setFromUnitVectors(UP, _dir.divideScalar(length));
+    this.torso.scale.set(TORSO_WIDTH, length, TORSO_DEPTH);
+    this.hood.position.set(this._neck.x, this._neck.y + 0.01, this._neck.z - 0.1);
+    this.head.position.copy(HEAD).addScaledVector(lean, BODY_LEAN);
+    this.head.rotation.y = yaw;
   }
 }
 
@@ -364,6 +448,8 @@ class M5Cockpit {
       hoodie: material(COLORS.hoodie, 0.95),
       cuff: material(COLORS.cuff, 0.95),
       skin: material(COLORS.skin, 0.6),
+      jeans: material(COLORS.jeans, 0.9),
+      hair: material(COLORS.hair, 0.8),
       mRed: new THREE.MeshStandardNodeMaterial({ color: COLORS.mRed, emissive: 0x5a0006, roughness: 0.4 }),
       glossBlack: material(0x050506, 0.12, 0.2)
     };
@@ -382,12 +468,14 @@ class M5Cockpit {
     this.leftArm = new DriverArm(1, mats);
     this.rightArm = new DriverArm(-1, mats);
     this.arms.add(this.leftArm.group, this.rightArm.group);
+    this.driver = new DriverBody(mats);
+    this.driver.group.visible = false;
 
-    // The cabin takes the roof's shadow; the arms don't (the thin sleeves shimmer with shadow acne)
+    // The cabin and the driver's body take the roof's shadow; the arms don't (the thin sleeves shimmer with shadow acne)
     this.interior.traverse((o) => {
       if (o.isMesh) o.receiveShadow = true;
     });
-    entity.chassisPivot.add(this.interior, this.arms);
+    entity.chassisPivot.add(this.interior, this.arms, this.driver.group);
 
     // The painted body (the mesh lit by the car's carState) and its open-topped twin for the cockpit view
     this.body = entity.chassisPivot.children.find((o) => o.isMesh && o.material?.userData?.carState === entity.carState);
@@ -397,6 +485,8 @@ class M5Cockpit {
       this.shell.visible = false;
       entity.chassisPivot.add(this.shell);
     }
+    // the body's see-through glass (cars.js), opaque again when nobody is driving
+    this.glassOpacity = this.body?.material.userData.glassOpacity ?? null;
 
     // scratch for update()
     this._grip = new THREE.Vector3();
@@ -414,7 +504,7 @@ class M5Cockpit {
     const spec = BODY_SPECS.m5;
     const cab = spec.cabin;
     const layout = carLayout(spec);
-    const g = this.interior;
+    const g = new THREE.Group();
     const cowl = layout.cabin(cab.cowl);
     const header = layout.cabin(cab.roofFront);
 
@@ -486,7 +576,8 @@ class M5Cockpit {
       g.add(box(0.01, 0.03, 0.1, x - side * 0.03, 0.82, 0.42, mats.metal)); // door pull
     }
 
-    // Front seats: red bolsters, darker centres, headrests (mostly seen from outside and in the mirrors)
+    // Front seats: red bolsters, darker centres, low headrests (seen from outside through the glass: the backs stop at
+    // the driver's shoulder blades and the headrests at the neck, so the head and shoulders show from behind)
     for (const x of [EYE.x, -EYE.x]) {
       const seat = new THREE.Group();
       seat.position.set(x, 0.42, -0.62);
@@ -494,12 +585,23 @@ class M5Cockpit {
       const back = new THREE.Group();
       back.position.set(0, 0.1, -0.24);
       back.rotation.x = -14 * RAD;
-      back.add(box(0.54, 0.66, 0.12, 0, 0.33, 0, mats.leather));
-      back.add(box(0.3, 0.56, 0.02, 0, 0.3, 0.065, mats.leatherDark));
-      back.add(box(0.27, 0.2, 0.11, 0, 0.8, -0.01, mats.leather));
+      back.add(box(0.54, 0.5, 0.12, 0, 0.25, 0, mats.leather));
+      back.add(box(0.3, 0.42, 0.02, 0, 0.23, 0.065, mats.leatherDark));
+      back.add(box(0.22, 0.12, 0.1, 0, 0.56, -0.02, mats.leather));
       seat.add(back);
       g.add(seat);
     }
+
+    // The back of the cabin, seen through the rear glass from outside: the bench, its backrest, the parcel shelf
+    // under the backlight and the rear door cards
+    g.add(box(1.4, 0.14, 0.5, 0, 0.47, -1.32, mats.leather));
+    const bench = box(1.44, 0.56, 0.12, 0, 0.78, -1.62, mats.leather);
+    bench.rotation.x = -12 * RAD;
+    g.add(bench);
+    g.add(box(1.6, 0.03, 0.5, 0, 0.94, -1.88, mats.dash));
+    for (const side of [-1, 1]) g.add(box(0.03, 0.5, 1.05, side * 0.86, 0.69, -1.1, mats.dash));
+
+    this.interior.add(...mergeByMaterial(g));
   }
 
   buildWheel(mats) {
@@ -561,6 +663,7 @@ class M5Cockpit {
     const offset = new THREE.Vector3().subVectors(wheelCenter, WHEEL_CENTER);
     this.entity.povEye.copy(EYE).add(offset);
     for (const arm of [this.leftArm, this.rightArm]) arm.rest.add(offset);
+    this.driver.group.position.copy(offset);
     this.birdPov.add(offset);
     this.birdWindow.add(offset);
 
@@ -591,23 +694,28 @@ class M5Cockpit {
   // swimming: the swim mode is active; cockpit: the camera is the first-person preset
   update(dt, swimming, cockpit) {
     const inside = swimming && cockpit;
-    this.interior.visible = inside && !this.modelCabin;
+    const view = driverView({ swimming, inside, modelCabin: this.modelCabin });
+    this.interior.visible = view.cabin;
+    // the open-topped body whenever the cabin shows; the closed one (painted glass) when nobody is driving
     if (this.shell) {
-      this.shell.visible = inside;
-      this.body.visible = !inside;
+      this.shell.visible = view.cabin;
+      this.body.visible = !view.cabin;
     }
+    if (this.glassOpacity) this.glassOpacity.value = view.glassOpacity;
     if (!swimming) this.bird = false;
     // F, or the AI show giving the cop the bird (swim-show.js)
     const raising = this.bird || Boolean(this.entity.showBird);
-    this.birdAmount = THREE.MathUtils.clamp(this.birdAmount + (raising ? dt : -dt) / BIRD_TIME, 0, 1);
-    if (!swimming) this.birdAmount = 0;
-    // From the seat the driver looks out of the window at whoever it's for (less if already looking that way)
-    const eased = this.birdAmount * this.birdAmount * (3 - 2 * this.birdAmount);
-    this.entity.povGlance = inside ? eased * Math.max(0, BIRD_GLANCE - (this.entity.povYaw ?? 0)) : 0;
-    // From outside only the raised arm shows (out of the window); the hands on the wheel are under the roof
-    this.arms.visible = inside || (swimming && this.birdAmount > 0);
-    this.rightArm.group.visible = inside;
-    if (!this.arms.visible) return;
+    this.birdAmount = birdStep(this.birdAmount, raising, dt, swimming);
+    // The driver looks out of the window at whoever it's for (less if already looking that way): the seat camera
+    // turns with it, and from outside the head does
+    const eased = birdLift(this.birdAmount);
+    const povYaw = this.entity.povYaw ?? 0;
+    const glance = eased * Math.max(0, BIRD_GLANCE - povYaw);
+    this.entity.povGlance = inside ? glance : 0;
+    this.arms.visible = view.body;
+    this.driver.group.visible = view.body;
+    this.driver.head.visible = view.head;
+    if (!view.body) return;
 
     const c = this.entity;
     const turn = THREE.MathUtils.clamp(c.steerAngle * WHEEL_RATIO, -WHEEL_MAX_TURN, WHEEL_MAX_TURN);
@@ -616,10 +724,11 @@ class M5Cockpit {
     this.wheelMount.updateMatrix();
     const handTurn = THREE.MathUtils.clamp(turn, -HAND_MAX_TURN, HAND_MAX_TURN);
     this.poseArm(this.rightArm, handTurn, 0, inside);
-    const amount = this.birdAmount;
-    this.poseArm(this.leftArm, handTurn, amount * amount * (3 - 2 * amount), inside);
+    this.poseArm(this.leftArm, handTurn, eased, inside);
+    // the torso leans after the left shoulder (poseArm left its lean in _lean), the head looks where the driver does
+    this.driver.pose(this._lean, povYaw + glance);
 
-    if (inside) {
+    if (view.display) {
       this.redrawTimer -= dt;
       if (this.redrawTimer <= 0) {
         this.redrawTimer = DISPLAY_REFRESH;

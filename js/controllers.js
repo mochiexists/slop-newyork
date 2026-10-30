@@ -639,7 +639,8 @@ class ThirdPersonControllerManager {
     root.add(chassisPivot);
 
     const spec = BODY_SPECS.m5;
-    const paint = createLoftedCarMaterial(spec, M5_PAINT);
+    // the glass lets the driver (m5-cockpit.js) be seen from outside
+    const paint = createLoftedCarMaterial(spec, M5_PAINT, { seeThrough: true });
     const body = new THREE.Mesh(buildCarGeometry(spec, false), paint);
     chassisPivot.add(body);
 
