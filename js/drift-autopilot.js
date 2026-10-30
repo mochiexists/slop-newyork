@@ -445,6 +445,7 @@ const DRIFT_CIRCLE = {
   exitTurnGain: 1.6, // 1/s of turn rate per radian still to turn
   exitAccel: 6.5, // m/s² it gathers speed at on the way out
   exitSpeed: 19, // m/s (42 mph) it leaves at
+  exitUnwind: 40 * RAD, // the way out this far round still: it starts to power out
   exitGrip: 1.05 * 9.81, // m/s² of sideways grip: the most it turns at its speed
   exitSlipPerTurn: 0.75, // s: drift angle per rad/s of turn (42° at the circle's ~1 rad/s, none once straight)
   speedRate: 1.1, // 1/s easing of speed, angle and radius toward their targets
@@ -469,6 +470,7 @@ class DriftCircle {
   // Drive out of the circle toward a direction of travel: the orbit opens into a spiral that ends on it. Call again
   // each frame if the way out moves.
   exitToward(heading) {
+    if (!this.exiting) this.exitFrom = this.speed ?? this.o.speed;
     this.exiting = true;
     this.exitHeading = heading;
   }
@@ -529,7 +531,11 @@ class DriftCircle {
       let ahead = dir * wrap(this.exitHeading - this.travel);
       if (ahead < -2 * RAD) ahead += 2 * Math.PI;
       spiral = dir * clamp(ahead * o.exitTurnGain, 0, reach);
-      this.speed = Math.min(o.exitSpeed, this.speed + o.exitAccel * dt);
+      // The gas goes down as the car unwinds: at circle speed until the way out is close, so the spiral doesn't swing
+      // wide, then flat out
+      const unwound = clamp(1 - ahead / o.exitUnwind, 0, 1);
+      const cap = this.exitFrom + (o.exitSpeed - this.exitFrom) * unwound;
+      this.speed = Math.max(this.speed, Math.min(cap, this.speed + o.exitAccel * dt));
       slipGoal = clamp(spiral * o.exitSlipPerTurn, -o.slip, o.slip);
     } else {
       this.speed += (speedGoal - this.speed) * (1 - Math.exp(-dt * o.speedRate));

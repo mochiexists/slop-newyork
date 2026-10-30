@@ -54,6 +54,7 @@ const GLANCE_RATE = 2.5; // 1/s easing of the driver's look
 const EXIT_WINDOW = 80 * RAD; // the way out this far ahead along the circle: start powering out of it
 const EXIT_TIME_LIMIT = 3; // s of powering out before the physics takes over however straight the car is
 const ESCAPE_MERGE = 24; // m down 7th Ave from the cop where the escape is back in the avenue's middle
+const EXIT_LOOKAHEAD = 30; // m down the avenue's middle line ahead of the car that it powers out of the circle toward
 const CHASE_TIME = 14; // s the cop keeps up the chase before it gives up
 // The hand-over, like the opening of a racing game: a few seconds into the swim, at speed, a 3-2-1 count and the car
 // is the player's
@@ -423,7 +424,8 @@ class SwimShow {
         this.glance(car, dt, watching);
         car.showBird = this.time > BIRD_FROM && this.time < BIRD_TO;
         // Once it has done its laps and the way down the avenue comes round, power out of the circle onto it
-        const exit = Math.atan2(ESCAPE_ROUTE[1].x - car.position.x, ESCAPE_ROUTE[1].z - car.position.z);
+        const aimZ = Math.max(car.position.z + EXIT_LOOKAHEAD, COP_SPOT.z + ESCAPE_MERGE);
+        const exit = Math.atan2(COP_SPOT.x - car.position.x, aimZ - car.position.z);
         const ahead = Math.atan2(Math.sin(exit - this.donut.travel), Math.cos(exit - this.donut.travel)) * this.donut.direction;
         if (!this.donut.exiting && this.time > DONUT_TIME && ahead > 0 && ahead < EXIT_WINDOW) this.exitAt = this.time;
         if (this.exitAt !== undefined) this.donut.exitToward(exit);
