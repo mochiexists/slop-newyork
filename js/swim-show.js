@@ -149,7 +149,7 @@ const DONUT = {
   liftAngle: 50 * RAD, // W lifted past this angle
   speed: 10.5, // m/s: past this, and outside the circle, it taps the handbrake
   radialLead: 1.2, // s ahead the distance from the cop is read from how fast it is changing
-  exitAngle: 15 * RAD // powering out, off the gas until the slide is down to this (the gas alone would hold it)
+  exitAngle: 25 * RAD // powering out, flat out and counter-steering until the slide is down to this
 };
 
 class DonutDriver {
@@ -161,7 +161,7 @@ class DonutDriver {
     this.kick = 0;
   }
 
-  // Let go of A, lift until the rears grip, and drive out on the gas, as a player powers out of a drift
+  // Let go of A and power out flat out, counter-steering the slide down, as a player drives out of a drift
   powerOut() {
     this.phase = 'powerOut';
   }
@@ -200,8 +200,8 @@ class DonutDriver {
       want = angle < o.angle + o.anglePerMetre * outward ? 1 : 0;
       if (angle > o.liftAngle) keys.forward = 0;
       if (ground > o.speed && outward > 0) keys.handbrake = 1;
-    } else if (this.phase === 'powerOut' && angle > o.exitAngle) {
-      keys.forward = 0;
+    } else if (this.phase === 'powerOut') {
+      want = angle > o.exitAngle ? -1 : 0;
     }
     const key = steeringKey(driver, want, car.speed, dt);
     keys.left = key > 0 ? 1 : 0;
