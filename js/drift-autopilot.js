@@ -440,6 +440,13 @@ const DRIFT_CIRCLE = {
   tightSlip: 58 * RAD, // with the handbrake (or a tighter line): more angle, a smaller circle
   tightRadius: 6.5,
   exitSlip: 12 * RAD, // straightening out before handing back
+  // Powering out (exitToward): the line opens into a spiral toward the way out, the car gathering speed and the
+  // angle coming off with the turn, the way a held drift is driven out of
+  exitTurnGain: 1.6, // 1/s of turn rate per radian still to turn
+  exitAccel: 6.5, // m/s² it gathers speed at on the way out
+  exitSpeed: 19, // m/s (42 mph) it leaves at
+  exitGrip: 1.05 * 9.81, // m/s² of sideways grip: the most it turns at its speed
+  exitSlipPerTurn: 0.75, // s: drift angle per rad/s of turn (42° at the circle's ~1 rad/s, none once straight)
   speedRate: 1.1, // 1/s easing of speed, angle and radius toward their targets
   slipRate: 1.8,
   radiusRate: 0.9,
@@ -455,7 +462,21 @@ class DriftCircle {
     this.targetRadius = radius ?? this.o.radius;
     this.tight = false; // handbrake: tighter and more sideways
     this.exiting = false; // straighten up on the current tangent
+    this.exitHeading = null; // powering out toward this direction of travel (exitToward)
     this.started = false;
+  }
+
+  // Drive out of the circle toward a direction of travel: the orbit opens into a spiral that ends on it. Call again
+  // each frame if the way out moves.
+  exitToward(heading) {
+    this.exiting = true;
+    this.exitHeading = heading;
+  }
+
+  // Powered out and pointing the right way, with the angle off: the physics can take the car on from here
+  get straightened() {
+    if (this.exitHeading === null) return false;
+    return Math.abs(wrap(this.exitHeading - this.travel)) < 4 * RAD && Math.abs(this.slip) < 8 * RAD;
   }
 
   // Orbit a fixed point (the show: round the cop car) from wherever the car is now
@@ -495,11 +516,24 @@ class DriftCircle {
       this.slip = Math.atan2(Math.sin(car.heading - this.travel), Math.cos(car.heading - this.travel));
     }
     const radiusGoal = this.tight ? o.tightRadius : this.targetRadius;
+    const powering = this.exiting && this.exitHeading !== null;
     // Steady speed for the radius: about 1 g of lateral grip
     const speedGoal = this.exiting ? this.speed : Math.min(o.speed, Math.sqrt(9.81 * 1.05 * this.radius));
     let slipGoal = dir * (this.tight ? o.tightSlip : o.slip);
     if (this.exiting) slipGoal = dir * o.exitSlip;
-    this.speed += (speedGoal - this.speed) * (1 - Math.exp(-dt * o.speedRate));
+    let spiral = 0;
+    if (powering) {
+      // Keep orbiting until the way out is close, then let the turn come off: a spiral that ends on the new line
+      const reach = Math.min(this.speed / this.radius, o.exitGrip / Math.max(1, this.speed));
+      // It only ever turns the way it is drifting: a way out behind it is reached by orbiting on round to it
+      let ahead = dir * wrap(this.exitHeading - this.travel);
+      if (ahead < -2 * RAD) ahead += 2 * Math.PI;
+      spiral = dir * clamp(ahead * o.exitTurnGain, 0, reach);
+      this.speed = Math.min(o.exitSpeed, this.speed + o.exitAccel * dt);
+      slipGoal = clamp(spiral * o.exitSlipPerTurn, -o.slip, o.slip);
+    } else {
+      this.speed += (speedGoal - this.speed) * (1 - Math.exp(-dt * o.speedRate));
+    }
     this.radius += (radiusGoal - this.radius) * (1 - Math.exp(-dt * o.radiusRate));
     this.slip += (slipGoal - this.slip) * (1 - Math.exp(-dt * o.slipRate));
 
@@ -510,7 +544,11 @@ class DriftCircle {
       this.center.z += car.position.z - this.placedZ;
     }
     const prevX = car.position.x, prevZ = car.position.z, prevHeading = car.heading;
-    if (this.exiting) {
+    if (powering) {
+      this.travel += spiral * dt;
+      car.position.x += Math.sin(this.travel) * this.speed * dt;
+      car.position.z += Math.cos(this.travel) * this.speed * dt;
+    } else if (this.exiting) {
       // Run straight out along the last tangent while the angle comes off
       car.position.x += Math.sin(this.travel) * this.speed * dt;
       car.position.z += Math.cos(this.travel) * this.speed * dt;

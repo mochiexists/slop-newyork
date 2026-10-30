@@ -86,6 +86,35 @@ test('a drift circle orbits the cop car nose-in, counter-steered, and drives out
   assert.ok(c.speed > 8, 'and it leaves at speed');
 });
 
+test('powering out of a drift circle spirals onto the way out without a snap', () => {
+  const c = car(Math.PI);
+  c.position.x = 11;
+  const circle = DriftCircle.around(c, { x: 0, z: 0 }, { direction: 1, radius: 11 });
+  const tel = {};
+  for (let t = 0; t < 6; t += DT) circle.update(c, DT, tel);
+  // The way out comes round 70° ahead along the circle, as the show starts powering out
+  const exit = circle.travel + 70 * RAD;
+  let worstYawJump = 0, worstSpeedJump = 0, previousYaw = c.angularVel, previousSpeed = Math.hypot(c.speed, c.vx, c.vz);
+  let time = 0;
+  while (!circle.straightened && time < 6) {
+    circle.exitToward(exit);
+    circle.update(c, DT, tel);
+    const speed = Math.hypot(c.speed, c.vx, c.vz);
+    worstYawJump = Math.max(worstYawJump, Math.abs(c.angularVel - previousYaw));
+    worstSpeedJump = Math.max(worstSpeedJump, Math.abs(speed - previousSpeed));
+    previousYaw = c.angularVel;
+    previousSpeed = speed;
+    time += DT;
+  }
+  assert.ok(circle.straightened, `straightens onto the way out (${time.toFixed(1)} s)`);
+  assert.ok(time < 4, `within a few seconds (${time.toFixed(1)} s)`);
+  const travel = Math.atan2(Math.sin(c.heading) * c.speed + c.vx, Math.cos(c.heading) * c.speed + c.vz);
+  assert.ok(Math.abs(Math.atan2(Math.sin(travel - exit), Math.cos(travel - exit))) < 5 * RAD, 'travelling the way out');
+  assert.ok(Math.hypot(c.speed, c.vx, c.vz) > 15, `leaving at speed (${Math.hypot(c.speed, c.vx, c.vz).toFixed(1)} m/s)`);
+  assert.ok(worstYawJump < 0.1, `the yaw rate eases off rather than snapping (${worstYawJump.toFixed(3)} rad/s per step)`);
+  assert.ok(worstSpeedJump < 0.2, `the speed builds rather than jumping (${worstSpeedJump.toFixed(3)} m/s per step)`);
+});
+
 test('a player drift circle carries on from the line the car is sliding along', () => {
   const c = car(0);
   c.speed = 9;
