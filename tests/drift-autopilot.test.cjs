@@ -5,11 +5,12 @@ const test = require('node:test');
 const { loadModule } = require('./helpers/module.cjs');
 
 const physics = loadModule(readFileSync(join(__dirname, '../js/drift-physics.js'), 'utf8'));
-const { DriftAutopilot, DriftCircle } = loadModule(readFileSync(join(__dirname, '../js/drift-autopilot.js'), 'utf8'), {
+const { DriftAutopilot } = loadModule(readFileSync(join(__dirname, '../js/drift-autopilot.js'), 'utf8'), {
   imports: { './drift-physics.js': physics }
 });
 
-const DT = 1 / 240;
+const FRAME = 1 / 60;
+const STEPS = 4;
 const RAD = Math.PI / 180;
 
 function car(heading = 0) {
@@ -26,15 +27,28 @@ function distanceToRoute(route, p) {
   return best;
 }
 
-test('the AI drives a city block loop, drifting the corners and weaving round traffic', () => {
+// The controllers' swim loop with the AI at the keys: one frame of keys at 60 Hz through the car's keyboard driver,
+// then the physics in 240 Hz steps. Returns the last step's telemetry and the frame's keys.
+function frame(pilot, driver, c, traffic) {
+  const keys = pilot.update(c, FRAME, traffic, driver);
+  for (const key of Object.values(keys)) assert.ok(key === 0 || key === 1, 'the AI only presses keys');
+  const input = driver.update(c, keys, FRAME);
+  let tel;
+  for (let i = 0; i < STEPS; i++) tel = physics.stepDriftCar(c, input, FRAME / STEPS);
+  return { tel, keys };
+}
+
+test('the AI drives a city block loop on the keys, drifting the corners and weaving round traffic', () => {
   const route = [{ x: 0, z: 0 }, { x: 0, z: 250 }, { x: 250, z: 250 }, { x: 250, z: 0 }];
   const traffic = [{ x: 0, z: 120 }, { x: 3.3, z: 160 }, { x: 0, z: 200 }];
   const pilot = new DriftAutopilot();
+  const driver = new physics.KeyboardDriver();
   pilot.setPath(route);
   const c = car();
-  let maxSlip = 0, maxDeviation = 0, topSpeed = 0, hits = 0, closestPass = Infinity, t = 0;
+  let maxSlip = 0, maxDeviation = 0, topSpeed = 0, hits = 0, closestPass = Infinity, t = 0, handbrake = 0;
   while (t < 45 && !pilot.finished) {
-    const tel = physics.stepDriftCar(c, pilot.update(c, DT, traffic), DT);
+    const { tel, keys } = frame(pilot, driver, c, traffic);
+    handbrake += keys.handbrake;
     maxSlip = Math.max(maxSlip, Math.abs(tel.slipAngle));
     maxDeviation = Math.max(maxDeviation, distanceToRoute(route, c.position));
     topSpeed = Math.max(topSpeed, c.speed);
@@ -46,86 +60,15 @@ test('the AI drives a city block loop, drifting the corners and weaving round tr
       if (Math.abs(dz) < along && Math.abs(dx) < across) hits++;
       if (Math.abs(dz) < along) closestPass = Math.min(closestPass, Math.abs(dx) - across);
     }
-    t += DT;
+    t += FRAME;
   }
   assert.ok(pilot.finished, 'reaches the end of the route');
+  assert.ok(handbrake > 0, 'flicks the handbrake into the corners');
   assert.equal(hits, 0, 'never touches the traffic it weaves through');
   assert.ok(closestPass < 1.5, `and passes it close, the way a swimmer does (${closestPass.toFixed(2)} m)`);
   assert.ok(maxSlip > 25 * RAD, `drifts the corners (${(maxSlip / RAD).toFixed(0)}°)`);
   assert.ok(topSpeed > 30, `fast on the straights (${topSpeed.toFixed(0)} m/s)`);
   assert.ok(maxDeviation < 25, `stays near the route (${maxDeviation.toFixed(1)} m)`);
-});
-
-test('a drift circle orbits the cop car nose-in, counter-steered, and drives out at speed', () => {
-  // Parked after a burnout, 10 m from the cruiser
-  const c = car(0.3);
-  c.position.x = 10;
-  const cop = { x: 0, z: 0 };
-  const tel = {};
-  const circle = DriftCircle.around(c, cop, { direction: 1 });
-  let swept = 0, closest = Infinity, previous = Math.atan2(c.position.x, c.position.z);
-  for (let t = 0; t < 12; t += DT) {
-    circle.update(c, DT, tel);
-    const bearing = Math.atan2(c.position.x, c.position.z);
-    swept += Math.atan2(Math.sin(bearing - previous), Math.cos(bearing - previous));
-    previous = bearing;
-    if (t > 4) closest = Math.min(closest, Math.hypot(c.position.x, c.position.z));
-  }
-  assert.ok(Math.abs(swept) > 2 * Math.PI, `more than a lap round the cop in twelve seconds (${swept.toFixed(1)} rad)`);
-  assert.ok(closest > 8.5, `keeps its distance from the cop (${closest.toFixed(1)} m)`);
-  const ground = Math.hypot(c.speed, c.vx, c.vz);
-  assert.ok(ground > 8 && ground < 12, `a steady power-slide speed (${ground.toFixed(1)} m/s)`);
-  assert.ok(Math.abs(tel.slipAngle) > 35 * RAD && Math.abs(tel.slipAngle) < 50 * RAD, 'well sideways, not spinning');
-  assert.ok(Math.sign(c.steerAngle) === -Math.sign(c.angularVel), 'the front wheels are counter-steered');
-  assert.ok(tel.rearSlide > 5 && tel.wheelspin === 1, 'smoke');
-
-  // Straightening out hands back a car that is still moving along the circle's tangent
-  circle.exiting = true;
-  for (let t = 0; t < 1.5; t += DT) circle.update(c, DT, tel);
-  assert.ok(Math.abs(tel.slipAngle) < 20 * RAD, 'the angle comes off');
-  assert.ok(c.speed > 8, 'and it leaves at speed');
-});
-
-test('powering out of a drift circle spirals onto the way out without a snap', () => {
-  const c = car(Math.PI);
-  c.position.x = 11;
-  const circle = DriftCircle.around(c, { x: 0, z: 0 }, { direction: 1, radius: 11 });
-  const tel = {};
-  for (let t = 0; t < 6; t += DT) circle.update(c, DT, tel);
-  // The way out comes round 70° ahead along the circle, as the show starts powering out
-  const exit = circle.travel + 70 * RAD;
-  let worstYawJump = 0, worstSpeedJump = 0, previousYaw = c.angularVel, previousSpeed = Math.hypot(c.speed, c.vx, c.vz);
-  let time = 0;
-  while (!circle.straightened && time < 6) {
-    circle.exitToward(exit);
-    circle.update(c, DT, tel);
-    const speed = Math.hypot(c.speed, c.vx, c.vz);
-    worstYawJump = Math.max(worstYawJump, Math.abs(c.angularVel - previousYaw));
-    worstSpeedJump = Math.max(worstSpeedJump, Math.abs(speed - previousSpeed));
-    previousYaw = c.angularVel;
-    previousSpeed = speed;
-    time += DT;
-  }
-  assert.ok(circle.straightened, `straightens onto the way out (${time.toFixed(1)} s)`);
-  assert.ok(time < 4, `within a few seconds (${time.toFixed(1)} s)`);
-  const travel = Math.atan2(Math.sin(c.heading) * c.speed + c.vx, Math.cos(c.heading) * c.speed + c.vz);
-  assert.ok(Math.abs(Math.atan2(Math.sin(travel - exit), Math.cos(travel - exit))) < 5 * RAD, 'travelling the way out');
-  assert.ok(Math.hypot(c.speed, c.vx, c.vz) > 15, `leaving at speed (${Math.hypot(c.speed, c.vx, c.vz).toFixed(1)} m/s)`);
-  assert.ok(worstYawJump < 0.1, `the yaw rate eases off rather than snapping (${worstYawJump.toFixed(3)} rad/s per step)`);
-  assert.ok(worstSpeedJump < 0.2, `the speed builds rather than jumping (${worstSpeedJump.toFixed(3)} m/s per step)`);
-});
-
-test('a player drift circle carries on from the line the car is sliding along', () => {
-  const c = car(0);
-  c.speed = 9;
-  const circle = DriftCircle.from(c, { direction: -1 });
-  assert.ok(Math.abs(circle.center.x + 10) < 1e-9 && Math.abs(circle.center.z) < 1e-9, 'centre off the right side');
-  const tel = {};
-  circle.update(c, DT, tel);
-  assert.ok(Math.hypot(c.position.x, c.position.z - 9 * DT) < 0.01, 'no jump on the first step');
-  for (let t = 0; t < 3; t += DT) circle.update(c, DT, tel);
-  assert.ok(c.angularVel < 0, 'turning right');
-  assert.ok(Math.abs(Math.hypot(c.position.x - circle.center.x, c.position.z - circle.center.z) - 10) < 0.5, 'on its circle');
 });
 
 test('weaving staggered traffic at 85 mph, the swimmer allows for its own car turned in a flick', () => {
@@ -136,11 +79,11 @@ test('weaving staggered traffic at 85 mph, the swimmer allows for its own car tu
   const c = car(0);
   c.speed = 38;
   const pilot = new DriftAutopilot();
+  const driver = new physics.KeyboardDriver();
   pilot.setPath([{ x: 0, z: 0 }, { x: 0, z: 1000 }], { corridors: [{ left: 7, right: -7, centre: null }] });
   let contacts = 0;
-  for (let frame = 0; frame < 420; frame++) {
-    const input = pilot.update(c, 1 / 60, traffic);
-    for (let k = 0; k < 4; k++) physics.stepDriftCar(c, input, 1 / 240);
+  for (let n = 0; n < 420; n++) {
+    frame(pilot, driver, c, traffic);
     for (const o of traffic) {
       o.z += o.speed / 60;
       const a = { x: c.position.x, z: c.position.z, sin: Math.sin(c.heading), cos: Math.cos(c.heading), halfW: 0.97, halfL: 2.5 };
@@ -150,20 +93,4 @@ test('weaving staggered traffic at 85 mph, the swimmer allows for its own car tu
   }
   assert.equal(contacts, 0);
   assert.ok(c.position.z > 150, `and it got through (${c.position.z.toFixed(0)} m)`);
-});
-
-test('a drift circle shoved by a car moves with the shove instead of snapping back at a false speed', () => {
-  const c = car(0);
-  c.position.x = 10;
-  const circle = DriftCircle.around(c, { x: 0, z: 0 }, { direction: 1 });
-  const tel = {};
-  for (let t = 0; t < 4; t += DT) circle.update(c, DT, tel);
-  const before = Math.hypot(c.speed, c.vx, c.vz);
-  // A traffic car knocks it a metre along its way, between two steps
-  const along = Math.atan2(c.vx + Math.sin(c.heading) * c.speed, c.vz + Math.cos(c.heading) * c.speed);
-  c.position.x += Math.sin(along);
-  c.position.z += Math.cos(along);
-  circle.update(c, DT, tel);
-  const after = Math.hypot(c.speed, c.vx, c.vz);
-  assert.ok(Math.abs(after - before) < 1, `speed holds through the knock (${before.toFixed(1)} → ${after.toFixed(1)} m/s)`);
 });

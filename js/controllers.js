@@ -1391,19 +1391,18 @@ class ThirdPersonControllerManager {
     keys.left = this.keys.left;
     keys.right = this.keys.right;
     keys.handbrake = this.keys.up;
+    // The AI driver (the swim show) drives through the same keys: it sees the player's and presses its own in their place
+    this.swimPilot?.(c, dt, keys, driver);
     const input = driver.update(c, keys, dt);
 
     const prevX = c.position.x;
     const prevZ = c.position.z;
     c.prevX = prevX;
     c.prevZ = prevZ;
-    // The AI driver (swim-mode.js) either rewrites the input, or flies a choreographed move itself ('scripted')
-    const scripted = this.swimPilot?.(c, dt, input) === 'scripted';
     const steps = Math.ceil(dt * SWIM_STEPS_PER_SECOND);
     const step = dt / steps;
     for (let i = 0; i < steps; i++) {
-      const telemetry = scripted ? c.drift : stepDriftCar(c, input, step, M5_DRIFT, c.drift);
-      // (a drift circle pushed off a wall or a post here moves with the car: DriftCircle rebases on the push)
+      const telemetry = stepDriftCar(c, input, step, M5_DRIFT, c.drift);
       this.resolveHorizontalCollision(c.position, 1.35, c);
 
       // Squat under power, dive under braking, lean out of the corner; collisions kick the same springs
