@@ -32,7 +32,7 @@ const M5_DRIFT = {
   tractionGrip: 1.5, // longitudinal friction of the rear tires: the friction circle is an ellipse
   launchGrip: 1.65, // traction when straight and not sliding: 0-100 km/h in about 3.4 s; steering or a slide drops it
   // back to tractionGrip
-  slideGrip: 0.86, // share of peak force left far past the peak (the curve keeps sliding cars sliding)
+  slideGrip: 0.82, // share of peak force left far past the peak (the curve keeps sliding cars sliding)
   peakSlip: 8 * RAD, // slip angle of the peak lateral force
   power: 1150000, // W at the wheels: a cartoon-tuned, de-limited M5 rather than the showroom 535 kW
   launchForce: 3.4, // × weight: more than the rear tires hold, so full throttle from low speed spins them
@@ -55,6 +55,14 @@ const M5_DRIFT = {
   slideSteer: 10 * RAD, // front slip the driver's full lock asks for in a slide (the tire's peak is at 8°)
   slipLimit: 55 * RAD, // body slip beyond which the assist yaws the car back, so a slide doesn't become a spin
   stability: 22, // 1/s² of yaw correction per radian past the limit
+  slideLock: 0.7, // rad of front-wheel lock in a slide (a drift car's angle kit, 40°): the counter-steer follows the
+  // front axle's path further before it runs out and adds yaw into the slide (more makes a donut's angle wander)
+  slideCounterSteer: 3 * RAD, // front slip the counter-steer key asks for in a slide: it trims the angle rather than
+  // hurling the nose back through centre (into the turn asks for slideSteer)
+  spinLateralLoss: 0.3, // share of the rear tires' sideways grip full wheelspin takes on top of the friction ellipse:
+  // the throttle holds the angle at speed (the arcade drift lever),
+  spinLossSpeed: 25, // m/s from which all of it applies (less below, so a low-speed power-over doesn't spin)
+  exitDamping: 3, // 1/s of yaw damping as a slide comes back toward straight, so the tail doesn't swing through
   minSlipSpeed: 2.5, // m/s floor of the slip-angle denominator, which keeps a crawl stable
   // Engine and gearbox: the G80 M3 Competition's S58 (650 Nm flat from 2,750 to 5,500 rpm, 375 kW at 6,250 rpm, a
   // 7,200 rpm limiter) on a stage-2 tune to 850 Nm, through the ZF 8HP76 eight-speed and a 3.154 final drive to
@@ -218,8 +226,10 @@ function stepDriftCar(car, input, dt, params = M5_DRIFT, out = stepDriftCar.tele
   const grip = input.steer * driverLock + (u > 3 ? params.counterSteer * catching * assistLevel : 0);
   const slide = u > 3 ? Math.max(0, Math.min(1, (Math.abs(bodySlip) - params.slideFrom) / params.slideBlend)) * assistLevel : 0;
   const frontPath = Math.atan2(v + a * r, Math.max(speedAbs, params.minSlipSpeed));
-  const drifting = frontPath + input.steer * params.slideSteer;
-  const target = Math.max(-params.maxSteer, Math.min(params.maxSteer, grip + (drifting - grip) * slide));
+  const against = input.steer * bodySlip > 0;
+  const drifting = frontPath + input.steer * (against ? params.slideCounterSteer : params.slideSteer);
+  const lock = params.maxSteer + (params.slideLock - params.maxSteer) * slide;
+  const target = Math.max(-lock, Math.min(lock, grip + (drifting - grip) * slide));
   const steerStep = params.steerRate * dt;
   car.steerAngle += Math.max(-steerStep, Math.min(steerStep, target - car.steerAngle));
   const delta = car.steerAngle;
@@ -306,6 +316,7 @@ function stepDriftCar(car, input, dt, params = M5_DRIFT, out = stepDriftCar.tele
     wheelSlip += (rearLong - force) * dt / (spinMass(car.gear, params) + stiffness * dt);
     [rearLong, rearLat] = combined(wheelSlip);
     wheelspin = Math.max(0, Math.min(1, (wheelSlip - slipSpeed * params.peakSlipRatio) / params.fullSpin));
+    rearLat *= 1 - params.spinLateralLoss * wheelspin * Math.min(1, speedAbs / params.spinLossSpeed);
   }
   car.wheelSlip = wheelSlip;
 
@@ -324,7 +335,11 @@ function stepDriftCar(car, input, dt, params = M5_DRIFT, out = stepDriftCar.tele
   // Past the slip limit, rotation that would widen the slide is pulled back (the handbrake overrides it for spins).
   const excess = Math.max(0, Math.abs(bodySlip) - params.slipLimit);
   const widening = r * bodySlip < 0 ? 1 : 0;
-  const stabilise = -Math.sign(r) * excess * params.stability * widening * (1 - handbrake) * assistLevel;
+  // As a slide comes back toward straight its rotation is damped, a driver unwinding the counter-steer in time
+  const nearStraight = Math.max(0, 1 - Math.abs(bodySlip) / (params.slideFrom + params.slideBlend));
+  const recovering = r * bodySlip > 0 ? 1 : 0;
+  const unwind = -params.exitDamping * r * recovering * nearStraight;
+  const stabilise = (-Math.sign(r) * excess * params.stability * widening + unwind) * (1 - handbrake) * assistLevel;
 
   const longAccel = forceX / params.mass;
   // Body-frame equations of motion (semi-implicit): the r·v and r·u terms turn the velocity with the car.
@@ -387,7 +402,8 @@ stepDriftCar.telemetry = {
 // the throttle for the drift angle the keys ask for.
 const KEYBOARD_DRIVER = {
   steerTime: 0.75, // s of holding A or D from centre to full lock at a standstill (a 0.1 s tap: 13% of the lock)
-  steerTimePerSpeed: 0.02, // s more per m/s: 0.95 s at 10 m/s, 1.35 s at 30 m/s
+  steerTimePerSpeed: 0.006, // s more per m/s: 0.81 s at 10 m/s, 0.93 s at 30 m/s (the lock itself shrinks with speed,
+  // so a lane flick at 100 mph still takes a quick tap)
   centreTime: 0.35, // s the wheel takes to self-centre from full lock when the keys are let go
   counterSteerRate: 3, // the opposite key turns the wheel back this many times faster than it winds on
   throttleTime: 0.25, // s to floor the pedal
@@ -397,14 +413,17 @@ const KEYBOARD_DRIVER = {
   commitDelay: 0.4, // s of gas and lock held before the traction control lets the rears spin: a power-over
   commitTime: 0.25, // s over which it lets go (and takes over again)
   slideSlip: 10 * RAD, // body slip that counts as a slide under way: the throttle may hold it
-  // In a slide with W held the driver works the throttle for an angle, as a drifter does: more angle wanted, more
-  // wheelspin. Steering into the slide asks for the full angle, letting go of the keys for a shallower one, and
-  // steering out of it for none (the throttle comes back under the traction control and the car straightens).
-  driftAngle: 30 * RAD,
-  looseAngle: 18 * RAD,
-  angleRange: 15 * RAD, // angle error over which the throttle goes from half to full (or to the minimum)
-  angleLead: 0.3, // s ahead the driver reads the angle from how fast it's changing (lifts before the tail overshoots)
-  minDriftThrottle: 0.15,
+  // In a slide W is the player's: the driver only lifts once the angle runs past what the keys ask for. Steering into
+  // the slide asks for the most angle, letting go of the keys a little less, and the counter-steer a shallow one; lifting
+  // off W lets the rears grip and straighten the car.
+  driftAngle: 35 * RAD,
+  looseAngle: 25 * RAD,
+  counterAngle: 12 * RAD,
+  angleRange: 10 * RAD, // angle past the asked one over which the throttle comes down to the minimum
+  angleLead: 0.6, // s ahead the driver reads the angle from how fast it's changing (lifts before the tail overshoots)
+  minDriftThrottle: 0.3,
+  saveHold: 0.25, // s of counter-steer held into the end of a slide that makes it a save,
+  exitHold: 0.4, // after which the still-held key reads as straighten for this long (not a power-over the other way)
   burnoutSpeed: 3 // m/s below which gas and brake together is a burnout
 };
 
@@ -428,6 +447,10 @@ class KeyboardDriver {
     this.commit = 0; // 0 traction control on .. 1 the rears may spin
     this.slip = 0; // last frame's drift angle (magnitude), and how fast it changes
     this.slipRate = 0;
+    this.wasSliding = false;
+    this.slideSide = 0; // the side the tail was last out on
+    this.exitTimer = 0; // s left of a save's unwinding
+    this.counterHeld = 0; // s the counter-steer key has been held
     for (const key of Object.keys(this.input)) this.input[key] = 0;
     this.input.assist = 1;
   }
@@ -489,6 +512,21 @@ class KeyboardDriver {
     const lockDirection = Math.sign(steerKeys);
     this.lockHeld = forward > 0 && lockDirection !== 0 && lockDirection === this.lockDirection ? this.lockHeld + dt : 0;
     this.lockDirection = forward > 0 ? lockDirection : 0;
+    // A slide that ends with the counter-steer held on (not a tap to unwind the wheel) is a save: the traction control
+    // comes back, and the held key unwinds the wheel for a moment instead of throwing the car into a slide the other way
+    this.counterHeld = lockDirection !== 0 && lockDirection === this.slideSide ? this.counterHeld + dt : 0;
+    if (this.wasSliding && !sliding && this.counterHeld > p.saveHold) {
+      this.commit = 0;
+      this.lockHeld = 0;
+      this.exitTimer = p.exitHold;
+    }
+    this.exitTimer = Math.max(0, this.exitTimer - dt);
+    if (this.exitTimer > 0 && lockDirection === this.slideSide) {
+      this.steer = approach(this.steer, 0, dt / p.centreTime);
+      input.steer = this.steer;
+    }
+    this.wasSliding = sliding;
+    if (sliding) this.slideSide = Math.sign(slip);
     if (handbrake > 0 || sliding) this.commit = 1;
     else this.commit = approach(this.commit, this.lockHeld > p.commitDelay ? 1 : 0, dt / p.commitTime);
     input.throttle = this.throttle * Math.min(1, controlled + (1 - controlled) * this.commit);
@@ -499,9 +537,9 @@ class KeyboardDriver {
     if (sliding && !handbrake) {
       let target = p.looseAngle;
       if (lockDirection === -Math.sign(slip)) target = p.driftAngle;
-      else if (lockDirection === Math.sign(slip)) target = 0;
+      else if (lockDirection === Math.sign(slip)) target = p.counterAngle;
       const ahead = this.slip + this.slipRate * p.angleLead;
-      const hold = 0.5 + 0.5 * (target - ahead) / p.angleRange;
+      const hold = 1 - Math.max(0, ahead - target) / p.angleRange;
       input.throttle = this.throttle * Math.max(p.minDriftThrottle, Math.min(1, hold));
     }
     return input;

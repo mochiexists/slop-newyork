@@ -67,8 +67,11 @@ test('steering winds on while A is held: a tap nudges the wheel, a long hold rea
   const back = hold(0.4, { right: 1 });
   assert.ok(back < 0, `the opposite key swings it back across centre quickly: ${back.toFixed(2)} after 0.4 s`);
   hold(1, {});
+  const slow = hold(0.5, { left: 1 });
+  hold(1, {});
   car.speed = 30;
-  assert.ok(hold(1, { left: 1 }) < 0.8, 'slower at speed');
+  const fast = hold(0.5, { left: 1 });
+  assert.ok(fast < slow && fast > 0.45, `a little slower at speed, still quick enough to flick lanes: ${fast.toFixed(2)} vs ${slow.toFixed(2)}`);
 
   const pedal = new KeyboardDriver();
   assert.ok(pedal.update(car, keys({ forward: 1 }), FRAME).throttle < 0.1, 'the pedal is pressed');
@@ -93,7 +96,10 @@ test('a lift-off flick at 22 m/s throws the car into a drift the throttle holds'
 test('gas and lock held hold a drift that picks up speed, widens and shifts up on the limiter', () => {
   const run = drive(12, 7, () => keys({ forward: 1, left: 1 }));
   assert.ok(run.sliding > 3, `${run.sliding.toFixed(1)} s past 20°`);
-  assert.ok(run.maxSlip < 60 * RAD, `not spinning: ${(run.maxSlip / RAD).toFixed(0)}°`);
+  assert.ok(run.maxSlip < 65 * RAD, `not spinning: ${(run.maxSlip / RAD).toFixed(0)}°`);
+  const sideways = run.car.vx * Math.cos(run.car.heading) - run.car.vz * Math.sin(run.car.heading);
+  const settled = Math.abs(Math.atan2(sideways, run.car.speed)) / RAD;
+  assert.ok(settled > 25 && settled < 55, `and settles into a held angle: ${settled.toFixed(0)}°`);
   assert.ok(Math.hypot(run.car.speed, run.car.vx, run.car.vz) > 18, 'faster than it started');
   assert.ok(run.slideGears.size >= 2, `shifted while sliding: ${[...run.slideGears].join(', ')}`);
   assert.ok(run.limiter > 0, 'bouncing off the limiter');
@@ -102,6 +108,24 @@ test('gas and lock held hold a drift that picks up speed, widens and shifts up o
   const out = drive(12, 5.5, (t) => keys({ forward: 1, left: t < 3.5 ? 1 : 0 }));
   const lateral = out.car.vx * Math.cos(out.car.heading) - out.car.vz * Math.sin(out.car.heading);
   assert.ok(Math.abs(Math.atan2(lateral, out.car.speed)) < 12 * RAD, 'straightened');
+});
+
+test('at 100 mph a tap of the handbrake with gas and lock held holds a drift: the car does not push itself straight', () => {
+  const run = drive(45, 6, (t) => keys({ forward: 1, left: 1, handbrake: t > 0.5 && t < 0.65 ? 1 : 0 }));
+  assert.ok(run.sliding > 4, `${run.sliding.toFixed(1)} s past 20°`);
+  assert.ok(run.maxSlip < 60 * RAD, `held, not spun: ${(run.maxSlip / RAD).toFixed(0)}°`);
+});
+
+test('at 67 mph a Scandinavian flick and a power-over both drift, and lifting off W straightens the car', () => {
+  // A feint right on the gas, a lift into the left turn, a touch of handbrake, then back on the gas with the lock held
+  const flick = drive(30, 6, (t) => keys({ forward: t < 0.5 || t >= 0.8 ? 1 : 0, right: t < 0.5 ? 1 : 0, left: t >= 0.5 ? 1 : 0, handbrake: t >= 0.8 && t < 1 ? 1 : 0 }));
+  assert.ok(flick.sliding > 3, `flick: ${flick.sliding.toFixed(1)} s past 20°`);
+  const power = drive(30, 6, () => keys({ forward: 1, left: 1 }));
+  assert.ok(power.sliding > 3 && power.maxSpin > 0.5, `power-over: ${power.sliding.toFixed(1)} s past 20°, on wheelspin`);
+  // Lifting with the counter-steer held: the rears grip and the car comes back straight, not round the other way
+  const lift = drive(30, 6, (t) => keys({ forward: t < 3 ? 1 : 0, left: t < 3 ? 1 : 0, right: t >= 3 && t < 3.4 ? 1 : 0 }));
+  const lateral = lift.car.vx * Math.cos(lift.car.heading) - lift.car.vz * Math.sin(lift.car.heading);
+  assert.ok(Math.abs(Math.atan2(lateral, lift.car.speed)) < 10 * RAD, 'straight again');
 });
 
 test('the traction control launches an M3 Competition in its 0-60 time', () => {
