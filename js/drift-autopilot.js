@@ -44,8 +44,12 @@ const AUTOPILOT = {
   flickRate: 0.32, // lateral speed it moves across at, as a share of its speed (quick flicks)...
   maxLateralSpeed: 10, // ...up to this many m/s,
   crawlAcross: 0.58, // ...and no more than this share of its speed along the street (pointing 30° across it)
-  lateralAccel: 6, // m/s² it swings across with: a lane change at 85 mph takes about a second and a half, as it
-  // does on the road (the tires hold about 1 g, and the car has to turn back straight at the far side)
+  lateralAccel: 6, // m/s² it plans to shed its sideways speed at by the far side of a move (the tires hold about 1 g,
+  // and the car has to turn back straight there)
+  lateralSwing: 7, // m/s² its sideways speed swings toward the move's at: the wheel winding on, the car turning to it
+  settleTime: 0.5, // s it closes the last of a move in (the sideways speed falls off linearly over the last metre)
+  yawDamping: 0.05, // s: wheel angle taken off per rad/s the car is turning, swimming (catches a flick as it arrives)
+  steerLead: 0.15, // s ahead it reads the gap to its line from its sideways speed: the wheel's lag, swimming
   moveCost: 1.2, // score (m of ground) per metre moved across: it doesn't swerve for nothing
   lineUpDistance: 30, // m before a drifted corner where it lines up on the route line for it,
   lineUpCost: 40, // score per metre off that line: whenever a plan there is safe, it takes it
@@ -70,12 +74,20 @@ const AUTOPILOT = {
 const wrap = (angle) => Math.atan2(Math.sin(angle), Math.cos(angle));
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 
-// One step of a move across the street, as the car can make it: lateral speed builds and comes off at `accel`, so
-// it arrives at `goal` with no sideways speed left. Returns the new lateral speed.
-function slideAcross(lat, vel, goal, dt, accel, maxSpeed) {
-  const gap = goal - lat;
-  const wanted = Math.sign(gap) * Math.min(maxSpeed, Math.sqrt(2 * accel * Math.abs(gap)));
-  return vel + clamp(wanted - vel, -accel * dt, accel * dt);
+// The sideways speed a move across the street wants `gap` metres short of its line: as quick as it may go (`maxSpeed`),
+// but no quicker than it can shed at `accel` by the line, so it arrives with none left. The planner flies its moves on
+// it and the wheel steers the car onto it (decide), so the car moves across the way its plan did.
+// The last few tenths of a metre it closes in `settle` seconds, gently, or the wheel hunts either side of the line.
+function acrossSpeed(gap, accel, maxSpeed, settle) {
+  const distance = Math.abs(gap);
+  return Math.sign(gap) * Math.min(maxSpeed, Math.sqrt(2 * accel * distance), distance / settle);
+}
+
+// One step of a move across the street, as the car makes it: its sideways speed swings toward acrossSpeed at no more
+// than `swing` m/s² (the wheel winding on and the car turning to it). Returns the new lateral speed.
+function slideAcross(lat, vel, goal, dt, accel, maxSpeed, swing, settle) {
+  const wanted = acrossSpeed(goal - lat, accel, maxSpeed, settle);
+  return vel + clamp(wanted - vel, -swing * dt, swing * dt);
 }
 
 // The car's sideways speed across a street running along (ux, uz), + to the left
@@ -174,7 +186,7 @@ class DriftAutopilot {
     const lx = s.uz, lz = -s.ux; // left of the direction of travel
     const u = Math.max(0, car.speed);
     const carLat = (car.position.x - s.a.x) * lx + (car.position.z - s.a.z) * lz;
-    const lateralSpeed = clamp(Math.max(5, u) * o.flickRate, 3, o.maxLateralSpeed);
+    const lateralSpeed = this.lateralSpeed(u);
     // Every plan starts from where the car is and how fast it is already moving across
     const carLatVel = lateralVelocity(car, s.ux, s.uz);
 
@@ -232,7 +244,6 @@ class DriftAutopilot {
     const air = this._air ??= [];
     const side = this._side ??= [];
     const passedAt = this._passedAt ??= [];
-    const aimReach = o.lookahead + o.lookaheadTime * u; // how far down the street the wheel aims (decide)
     const overshoot = carLatVel * Math.abs(carLatVel) / (2 * o.lateralAccel); // where its sideways speed carries it
     const cornerBrake = o.braking; // m/s² the executor brakes for a corner at (decide)
     const brakingSideways = o.lateralAccel * (1 - o.brakeSteerLoss * Math.min(1, cornerBrake / (this.model.brakeGrip * GRAVITY)));
@@ -301,7 +312,9 @@ class DriftAutopilot {
             // (a car only moves across as it rolls: at a crawl it can't step sideways round the car in front)
             const goal = split && travelled > clear[line] + clearSpeed[line] * t ? then : y;
             const across = cornerBraking ? Math.min(sideways, brakingSideways) : sideways;
-            latVel = slideAcross(lat, latVel, goal, o.planStep, across, Math.min(lateralSpeed, speed * o.crawlAcross));
+            const swing = o.lateralSwing * across / o.lateralAccel;
+            latVel = slideAcross(lat, latVel, goal, o.planStep, across, Math.min(lateralSpeed, speed * o.crawlAcross), swing,
+              o.settleTime);
             lat += latVel * o.planStep;
             for (let i = 0; i < nearCount; i++) {
               const ob = near[i];
@@ -351,14 +364,13 @@ class DriftAutopilot {
           if (Math.max(y, then) > oncoming) score -= o.oncomingCost;
           // Keeping to the line already chosen wins ties: changing its mind takes a clearly better gap
           if (Math.abs(y - this.targetOffset) < o.gapStep * 0.5) score += o.commitBonus;
-          // Holding a speed (the hand-over count): a plan that slows below it is worth less the more it loses. A move far
-          // across aims the wheel far off the street, and the executor slows for that (offLine, in decide)
-          let slowest = Math.min(u, speed);
-          const swerve = Math.atan2(Math.abs(y - carLat), aimReach);
-          if (swerve > o.offLine) slowest = Math.min(slowest, Math.max(8, Math.sqrt(9.5 * aimReach / (2 * Math.sin(swerve)))));
+          // Holding a speed (the hand-over count): a plan that slows below it is worth less the more it loses
+          const slowest = Math.min(u, speed);
           if (this.keepSpeed > 0) score -= o.keepSpeedWeight * Math.max(0, this.keepSpeed - slowest);
-          // Unsafe plans rank by how late they meet trouble, then by how slow they are by then
-          if (hitAt !== Infinity) score = -o.hitCost * (o.planTime - hitAt) - speed;
+          // Unsafe plans rank by how late they meet trouble, then by how slow they are by then, then by how little they
+          // move across (when trouble is a moment away every move meets it then, and a swerve to the far side of the
+          // street would steer it into the car alongside)
+          if (hitAt !== Infinity) score = -o.hitCost * (o.planTime - hitAt) - speed - Math.abs(y - carLat) * o.moveCost;
           const safe = hitAt === Infinity;
           if (!best || (safe && !best.safe) || (safe === best.safe && score > best.score)) {
             best = this._best ??= {};
@@ -402,6 +414,12 @@ class DriftAutopilot {
       distance += next.length;
     }
     return true;
+  }
+
+  // The quickest it moves across the street at a speed: a share of the speed (a flick), up to maxLateralSpeed
+  lateralSpeed(speed) {
+    const o = this.options;
+    return clamp(Math.max(5, speed) * o.flickRate, 3, o.maxLateralSpeed);
   }
 
   // Metres along the current segment the car has come
@@ -511,10 +529,17 @@ class DriftAutopilot {
     const plan = this.plan;
     const goal = this.targetOffset;
     const reach = o.lookahead + o.lookaheadTime * Math.abs(u);
-    // The wheel aims at the gap itself, down the street. (Aiming where the planned move would have the car by the aim
-    // point led the steering when it was instant; on the keys the wheel winds on over a few tenths of a second and
-    // that lead swung the car past the gap.)
-    this.offset = goal;
+    // Swimming, the wheel flies the move as the plan did: it aims down the street along the car's own line, turned
+    // across by the sideways speed the move wants where the car is (acrossSpeed). (Aiming at the gap itself asked for
+    // sideways speed in proportion to the gap and never for less in time: on the keys the wheel winds on and off over
+    // tenths of a second, so a move of two lanes overshot by a lane.) In a drifted corner it aims at the line itself.
+    const lx = s.uz, lz = -s.ux;
+    const carLat = (car.position.x - s.a.x) * lx + (car.position.z - s.a.z) * lz;
+    const moveSpeed = Math.min(this.lateralSpeed(u), Math.max(0, u) * o.crawlAcross);
+    // (read where its sideways speed has it a moment from now: the wheel takes that long to swing the car)
+    const coming = carLat + lateralVelocity(car, s.ux, s.uz) * o.steerLead;
+    const across = this.cornering ? 0 : acrossSpeed(goal - coming, o.lateralAccel, moveSpeed, o.settleTime);
+    this.offset = this.cornering ? goal : carLat;
 
     // Speed: the plan's pedal, flown as planned (its acceleration fed straight to the pedals, so the car keeps to the
     // timing the gaps were picked with), capped by what the next corner allows
@@ -552,15 +577,19 @@ class DriftAutopilot {
 
     // Steering: aim the velocity (not the nose) at a point down the route, which holds a drift on its line
     const aim = this.pointAhead(car, reach);
-    const desired = Math.atan2(aim.x - car.position.x, aim.z - car.position.z);
+    const street = Math.atan2(aim.x - car.position.x, aim.z - car.position.z);
+    const moveAngle = Math.atan2(across, Math.max(1, Math.abs(u)));
     const slip = Math.abs(u) > 2 ? Math.atan2(car.vx * Math.cos(car.heading) - car.vz * Math.sin(car.heading), Math.abs(u)) : 0;
     const travel = car.heading + slip;
-    const error = wrap(desired - travel);
-    const wheel = error * o.steerGain;
-    // Off line and pointing the wrong way: slow to a speed the front tires can turn at (about 1 g of grip over the
-    // radius it takes to swing back onto the route). A big swerve to a gap far across counts too (planGap allows for it).
-    if (!this.cornering && Math.abs(error) > o.offLine) {
-      const radius = (o.lookahead + o.lookaheadTime * Math.abs(u)) / (2 * Math.sin(Math.min(Math.abs(error), Math.PI / 2)));
+    const error = wrap(street + moveAngle - travel);
+    // (swimming, the wheel also leans against the car's own turning, so a flick is caught as it arrives, not after)
+    const wheel = error * o.steerGain - (this.cornering ? 0 : o.yawDamping * car.angularVel);
+    // Pointing the wrong way (more off the street than the quickest move across points it): slow to a speed the front
+    // tires can turn at, about 1 g of grip over the radius it takes to swing back. A move across itself never slows it.
+    const widest = Math.atan2(moveSpeed, Math.max(1, Math.abs(u)));
+    const wrongWay = Math.max(0, Math.abs(wrap(street - travel)) - widest);
+    if (!this.cornering && wrongWay > o.offLine) {
+      const radius = (o.lookahead + o.lookaheadTime * Math.abs(u)) / (2 * Math.sin(Math.min(wrongWay, Math.PI / 2)));
       const turnLimit = Math.max(8, Math.sqrt(9.5 * radius));
       if (turnLimit < target) {
         target = turnLimit;
