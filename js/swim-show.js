@@ -88,7 +88,8 @@ const SIM_STEPS_PER_SECOND = 240; // the drift model's step rate (controllers.js
 const SHOW_SWIMMING = {
   cruiseSpeed: 45,
   passMargin: 0.2,
-  closeBonus: 10
+  closeBonus: 30,
+  splitBonus: 40
 };
 
 const GATHER_RANGE = 130; // m round the car that traffic is handed to the AI (it plans 120 m ahead)

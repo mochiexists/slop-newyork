@@ -59,6 +59,7 @@ const AUTOPILOT = {
   closeSpeed: 8, // m/s at least it passes it by,
   splitWindow: 0.8, // s between close calls on either side that make a split (threading two cars)
   splitBonus: 4, // score for a split, on top of its two close calls
+  splitAlong: 5, // m apart along the street at most that two cars count as side by side, a gap to split
   keepSpeedWeight: 12, // score per m/s a plan slows below keepSpeed (set while the show counts down the hand-over)
   brakeSteerLoss: 0.6, // share of the sideways grip lost to the brake key held down (all or nothing: 1.05 g)
   hitCost: 200, // score against a plan that touches a car
@@ -227,7 +228,22 @@ class DriftAutopilot {
     const passedAt = this._passedAt ??= [];
     const aimReach = o.lookahead + o.lookaheadTime * u; // how far down the street the wheel aims (decide)
     const overshoot = carLatVel * Math.abs(carLatVel) / (2 * o.lateralAccel); // where its sideways speed carries it
-    for (let y = band.right; y <= band.left + 1e-6; y += o.gapStep) {
+    // The lines it tries across the street: one every gapStep, and the middle of every gap between two cars side by
+    // side that it fits through (a split: the steps can miss a gap that leaves a hand's width either side)
+    const lines = this._lines ??= [];
+    let lineCount = 0;
+    for (let y = band.right; y <= band.left + 1e-6; y += o.gapStep) lines[lineCount++] = y;
+    for (let i = 0; i < count; i++) {
+      for (let j = 0; j < count; j++) {
+        const rightCar = seen[i], leftCar = seen[j];
+        if (leftCar.lateral <= rightCar.lateral || Math.abs(leftCar.along - rightCar.along) > o.splitAlong) continue;
+        const from = rightCar.lateral + rightCar.reach, to = leftCar.lateral - leftCar.reach;
+        const y = (from + to) / 2;
+        if (to >= from && y >= band.right && y <= band.left) lines[lineCount++] = y;
+      }
+    }
+    for (let line = 0; line < lineCount; line++) {
+      const y = lines[line];
       // Only the cars this move could come near: across the street, the move spans the car's line to y (plus any
       // overshoot); a car spans where it drifts to over the look-ahead, plus the passing reach
       const low = Math.min(carLat, y, carLat + overshoot), high = Math.max(carLat, y, carLat + overshoot);
