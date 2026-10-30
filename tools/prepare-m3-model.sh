@@ -16,8 +16,8 @@
 # What the build does (tools/build-m3-model.mjs): the download is a game-ripped car of 660k triangles in which every
 # part is a skinned mesh bound to a bone, with the right wheels a mirrored copy of the left ones. It bakes the bones
 # into static meshes, groups them into body, four wheels, steering wheel and lamp groups, joins and simplifies to
-# ~170k triangles (meshoptimizer), shrinks textures to <= 1024 px WebP and compresses the geometry with
-# EXT_meshopt_compression: ~19.6 MB zip -> ~3 MB .glb. three.js reads it with
+# ~170k triangles (meshoptimizer), shrinks textures to <= 512 px WebP and compresses the geometry with
+# EXT_meshopt_compression: ~19.6 MB zip -> ~2.6 MB .glb. three.js reads it with
 # GLTFLoader + MeshoptDecoder from the same CDN as the rest of three (three/addons/).
 #
 # The zip is an untrusted download: it is only unzipped into a fresh empty folder and read as data, nothing in it
