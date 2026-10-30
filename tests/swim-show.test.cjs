@@ -88,3 +88,30 @@ test('each street of the run is staged with pairs to split as its corner comes u
     { a: route[2], b: route[3], startGap: 45 }
   ]);
 });
+
+test('the show drives the automatic and hands a manual player their manual back, and lets its staged rows go', () => {
+  const car = {
+    position: { x: show.SHOW_SPOT.x, z: show.SHOW_SPOT.z }, heading: show.SHOW_SPOT.heading,
+    speed: 0, vx: 0, vz: 0, angularVel: 0, steerAngle: 0, longAccel: 0, drift: {}, manual: true
+  };
+  const driver = new physics.KeyboardDriver();
+  const controllers = { entities: { swim: car }, swimPilot: null, swimDriver: driver };
+  let released = 0;
+  const traffic = { setClearZone() {}, reseed() {}, releaseStaged: () => released++ };
+  const cruiser = { car: { position: { x: 0, z: 0 } }, park() {}, chase() {}, giveUp() {} };
+  const swimShow = new show.SwimShow({ controllerManager: controllers, trafficSystem: traffic, cruiser });
+  swimShow.start();
+  assert.equal(car.manual, false, 'the AI shifts for itself');
+  swimShow.stop();
+  assert.equal(car.manual, true, 'the player is back in manual');
+  assert.ok(released >= 1, 'the staged rows drive on as ordinary traffic');
+});
+
+test('a frame with no time in it leaves the keyboard driver unharmed', () => {
+  const car = { position: { x: 0, z: 0 }, heading: 0, speed: 12, vx: 3, vz: 0, angularVel: 0, steerAngle: 0, longAccel: 0, drift: {} };
+  const driver = new physics.KeyboardDriver();
+  const keys = { forward: 1, backward: 0, left: 1, right: 0, handbrake: 0 };
+  driver.update(car, keys, 0);
+  const input = driver.update(car, keys, FRAME);
+  assert.ok(Number.isFinite(input.throttle) && Number.isFinite(input.steer), 'finite inputs after a zero frame');
+});

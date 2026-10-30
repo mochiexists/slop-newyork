@@ -440,6 +440,8 @@ class KeyboardDriver {
   update(car, keys, dt) {
     const p = this.params;
     const input = this.input;
+    // A frame with no time in it changes nothing (the slip rate below divides by dt)
+    if (!(dt > 0)) return input;
     const forward = Number(keys.forward) || 0;
     const backward = Number(keys.backward) || 0;
     const steerKeys = (Number(keys.left) || 0) - (Number(keys.right) || 0);

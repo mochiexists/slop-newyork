@@ -244,6 +244,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
       dl: 0, dlv: 0, blink: 0, blinkPhase: random() * 0.8,
       evade: 0, alarm: 0, panicUntil: 0, panicAcc: 0, reaction: 0.6 + random() * 0.4,
       bias: 0, // m right of its lane centre it keeps to (a show row's car holding its lane's outer edge, see stageRoute)
+      staged: false, // placed in a show row (stageRoute) until releaseStaged or its next placement
       x: 0, z: 0, prevX: 0, prevZ: 0, tx: 0, tz: 1, nose: 0, yaw: 0, yawRate: 0, steer: 0, delta: 0,
       pitch: 0, roll: 0, pitchVel: 0, rollVel: 0, vx: 0, vz: 0, yawOffset: 0, yawVel: 0, impactTime: 0,
       pAhead: Infinity, pRight: 0, pSpeed: 0, wheelSpin: random() * Math.PI * 2
@@ -1628,6 +1629,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     v.wait = 0;
     v.v0 = v.ownV0 ??= v.v0; // (a show pair may have set it to its partner's, see stageRoute)
     v.bias = 0;
+    v.staged = false;
     v.speed = v.v0 * 0.5;
     v.acc = 0;
     v.impactTime = 0;
@@ -2166,11 +2168,22 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
       v.dl = p.bias;
       v.v0 = Math.min(v.v0, rows.pace);
       v.speed = v.v0;
+      v.staged = true;
       locate(v);
       v.prevX = v.x;
       v.prevZ = v.z;
     }
     return placed;
+  }
+
+  // The show is over: its staged rows drive on as ordinary traffic, back at their own pace and free to change lanes
+  function releaseStaged() {
+    for (const v of cars) {
+      if (!v.staged) continue;
+      v.staged = false;
+      v.bias = 0;
+      v.v0 = v.ownV0 ?? v.v0;
+    }
   }
 
   return {
@@ -2180,6 +2193,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     setClearZone,
     reseed,
     stageRoute,
+    releaseStaged,
     cars,
     buses,
     peds: pedestrianSystem.peds,

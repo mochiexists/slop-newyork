@@ -447,6 +447,10 @@ class SwimShow {
     this.cruiser.park(c.position.x + Math.cos(c.heading) * side, c.position.z - Math.sin(c.heading) * side, c.heading + Math.PI * 0.5);
     this.controllers.swimPilot = (car, dt, keys, driver) => this.fly(car, dt, keys, driver);
     this.controllers.swimDriver?.reset();
+    // The AI drives the automatic; a player in manual gets their manual back at the hand-over
+    this.playerManual = Boolean(c.manual);
+    c.manual = false;
+    this.traffic.releaseStaged?.();
     this.total = 0;
     this.clearedCorner = undefined;
     this.stuck = this.reversing = this.unstickTries = 0;
@@ -487,7 +491,9 @@ class SwimShow {
     car.cameraYawOverride = null;
     car.povYaw = 0;
     car.showBird = false;
+    car.manual = this.playerManual ?? false;
     this.traffic.setClearZone(null);
+    this.traffic.releaseStaged?.();
     this.cruiser.giveUp();
     this.setPhase('off');
   }

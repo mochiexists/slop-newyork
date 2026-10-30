@@ -116,6 +116,10 @@ class DriftAutopilot {
     this.segment = 0;
     this.driftedCorner = -1;
     this.finished = false;
+    // A new route starts fresh: no corner entry, handbrake flick or plan carried over from the last one
+    this.turningIn = this.cornering = false;
+    this.kick = 0;
+    this.plan = null;
   }
 
   // Segment geometry: start, unit direction, length
