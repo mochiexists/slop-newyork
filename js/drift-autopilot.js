@@ -11,6 +11,8 @@ const GRAVITY = 9.81;
 const DRIFT_SPEED_MARGIN = 1.2; // share over the corner speed a drift may carry before it lifts
 const TURN_GRIP = 9.5; // m/s²: the lateral grip a drifted corner is planned with
 const ALONG_STREET = 15 * RAD; // travelling this close to the street's direction counts as running along it
+const MIN_PEDAL = 0.05; // pedal below which the traction control's share of it isn't read
+const MIN_PASSED = 0.1; // least share of the pedal it reckons the traction control passes on
 
 const AUTOPILOT = {
   cruiseSpeed: 38, // m/s on the straights (85 mph)
@@ -40,10 +42,13 @@ const AUTOPILOT = {
   planTime: 2.5, // s it looks ahead
   planStep: 0.1,
   flickRate: 0.32, // lateral speed it moves across at, as a share of its speed (quick flicks)...
-  maxLateralSpeed: 10, // ...up to this many m/s
+  maxLateralSpeed: 10, // ...up to this many m/s,
+  crawlAcross: 0.58, // ...and no more than this share of its speed along the street (pointing 30° across it)
   lateralAccel: 6, // m/s² it swings across with: a lane change at 85 mph takes about a second and a half, as it
   // does on the road (the tires hold about 1 g, and the car has to turn back straight at the far side)
   moveCost: 1.2, // score (m of ground) per metre moved across: it doesn't swerve for nothing
+  lineUpDistance: 30, // m before a drifted corner where it lines up on the route line for it,
+  lineUpCost: 40, // score per metre off that line: whenever a plan there is safe, it takes it
   commitBonus: 6, // score for keeping the gap it already chose, so it doesn't dither
   replanInterval: 0.12, // s between decisions
   speedGain: 2, // 1/s: how hard it closes a gap between the planned speed and its own
@@ -250,7 +255,8 @@ class DriftAutopilot {
           // A punch (or a brake) into the gap, then holding that speed through it
           if (t <= o.pedalTime) speed = clamp(speed + accel * o.planStep, 0, o.cruiseSpeed);
           travelled += speed * o.planStep;
-          latVel = slideAcross(lat, latVel, y, o.planStep, sideways, lateralSpeed);
+          // (a car only moves across as it rolls: at a crawl it can't step sideways round the car in front)
+          latVel = slideAcross(lat, latVel, y, o.planStep, sideways, Math.min(lateralSpeed, speed * o.crawlAcross));
           lat += latVel * o.planStep;
           for (let i = 0; i < nearCount; i++) {
             const ob = near[i];
@@ -295,6 +301,7 @@ class DriftAutopilot {
           score += o.openWeight * open + o.speedWeight * speed;
         }
         score -= Math.abs(y - carLat) * o.moveCost;
+        if (this.lineUp) score -= Math.abs(y) * o.lineUpCost;
         score += this.closeCallScore(nearCount);
         if (y > oncoming) score -= o.oncomingCost;
         // Keeping to the line already chosen wins ties: changing its mind takes a clearly better gap
@@ -396,9 +403,13 @@ class DriftAutopilot {
     keys.left = best > 0 ? 1 : 0;
     keys.right = best < 0 ? 1 : 0;
 
+    // The traction control passes on only part of the pedal (a quarter of it off the line): it presses for the throttle
+    // it wants after that, reading last frame's share as a driver feels the car hold back
+    const passed = driver.throttle > MIN_PEDAL ? clamp(driver.input.throttle / driver.throttle, MIN_PASSED, 1) : 1;
+    const pedal = Math.min(1, want.throttle / passed);
     const up = approachValue(driver.throttle, 1, dt / p.throttleTime);
     const down = approachValue(driver.throttle, 0, dt / p.liftTime);
-    keys.forward = want.throttle > 0 && Math.abs(up - want.throttle) <= Math.abs(down - want.throttle) ? 1 : 0;
+    keys.forward = pedal > 0 && Math.abs(up - pedal) <= Math.abs(down - pedal) ? 1 : 0;
     // A held lock with the gas: a power-over once commitDelay is up, unless it means one (a drift)
     this.lockHeld = keys.forward && best !== 0 && best === this.lockKey ? this.lockHeld + dt : 0;
     this.lockKey = keys.forward ? best : 0;
@@ -441,15 +452,17 @@ class DriftAutopilot {
     const toCorner = Math.max(0, s.length - ((car.position.x - s.a.x) * s.ux + (car.position.z - s.a.z) * s.uz));
     const sharp = hasCorner && Math.abs(turn) > o.sharpTurn;
 
-    // Swim: find the line through the traffic ahead and flick across to it (straight back to the line for corners)
+    // Swim: find the line through the traffic ahead and flick across to it (back onto the route line for a drifted
+    // corner, unless a car is in the way there: traffic queues at the edge of a corner the show holds clear)
     // A driver decides a few times a second, not every frame: between decisions it flies the last plan
+    this.lineUp = sharp && toCorner < o.lineUpDistance;
     this.sincePlan = (this.sincePlan ?? Infinity) + dt;
     if (this.sincePlan >= o.replanInterval || !this.plan) {
       this.plan = this.planGap(car, obstacles);
       this.sincePlan = 0;
     }
     const plan = this.plan;
-    const goal = sharp && toCorner < 30 ? 0 : this.targetOffset;
+    const goal = this.targetOffset;
     const reach = o.lookahead + o.lookaheadTime * Math.abs(u);
     // The wheel aims at the gap itself, down the street. (Aiming where the planned move would have the car by the aim
     // point led the steering when it was instant; on the keys the wheel winds on over a few tenths of a second and

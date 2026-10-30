@@ -74,7 +74,11 @@ const STUCK_TIME = 2; // s standing still before the AI backs out
 const HOLD_BACK = 15; // m the cop keeps behind the car it chases
 const CORNER_CLEAR_DISTANCE = 110; // m out from a drift corner that the show starts holding its traffic
 const CORNER_CLEAR_RADIUS = 26;
-const REVERSE_TIME = 1.1;
+const REVERSE_TIME = 1.1; // s backing out, times the tries so far (up to MAX_REVERSE_TRIES) while it is still stuck
+const MAX_REVERSE_TRIES = 3;
+const UNSTUCK_SPEED = 8; // m/s: going again, the tries start over
+const UNSTICK_AIM = 15; // m down the route that the nose is swung toward while backing out,
+const UNSTICK_ALIGNED = 5 * RAD; // to within this
 const SIM_STEPS_PER_SECOND = 240; // the drift model's step rate (controllers.js steps the M5 the same)
 
 // The show's swimmer is sketchier than the autopilot's defaults (drift-autopilot.js AUTOPILOT): flat out at 100 mph,
@@ -438,7 +442,7 @@ class SwimShow {
     this.controllers.swimDriver?.reset();
     this.total = 0;
     this.clearedCorner = undefined;
-    this.stuck = this.reversing = 0;
+    this.stuck = this.reversing = this.unstickTries = 0;
     this.exitAt = undefined;
     this.onCamera?.('chase');
     this.setPhase('burnout');
@@ -595,19 +599,24 @@ class SwimShow {
   }
 
   // Pinned against a bus or a wall, or boxed in by traffic that is waiting for it: back out for a moment, steering
-  // the other way, and try another lane. The show never means to stand still. (S held at a standstill reverses.)
+  // the other way, and try again: S held at a standstill reverses, with the wheel set to swing the nose toward the route
+  // ahead (backing up turns the car the opposite way to the wheel), longer each time it is still stuck. The show never
+  // means to stand still.
   unstick(car, dt, keys) {
     if (this.reversing > 0) {
       this.reversing -= dt;
-      Object.assign(keys, { forward: 0, backward: 1, left: this.stuckSteer < 0 ? 1 : 0, right: this.stuckSteer > 0 ? 1 : 0, handbrake: 0 });
+      const aim = this.pilot.pointAhead(car, UNSTICK_AIM);
+      const error = wrapAngle(Math.atan2(aim.x - car.position.x, aim.z - car.position.z) - car.heading);
+      const steer = Math.abs(error) > UNSTICK_ALIGNED ? -Math.sign(error) : 0;
+      Object.assign(keys, { forward: 0, backward: 1, left: steer > 0 ? 1 : 0, right: steer < 0 ? 1 : 0, handbrake: 0 });
       return;
     }
+    if (car.speed > UNSTUCK_SPEED) this.unstickTries = 0;
     this.stuck = Math.abs(car.speed) < 1 ? (this.stuck || 0) + dt : 0;
     if (this.stuck > STUCK_TIME) {
       this.stuck = 0;
-      this.reversing = REVERSE_TIME;
-      this.stuckSteer = keys.left - keys.right || 1;
-      this.pilot.targetOffset = -this.pilot.targetOffset || this.pilot.options.laneWidth;
+      this.unstickTries = (this.unstickTries || 0) + 1;
+      this.reversing = REVERSE_TIME * Math.min(MAX_REVERSE_TRIES, this.unstickTries);
     }
   }
 
@@ -625,4 +634,4 @@ class SwimShow {
   }
 }
 
-export { SHOW_SPOT, SHOW_SIGNAL_TIME, ESCAPE_ROUTE, PoliceCruiser, SwimShow };
+export { SHOW_SPOT, SHOW_SIGNAL_TIME, ESCAPE_ROUTE, PoliceCruiser, SwimShow, routeCorridors };
