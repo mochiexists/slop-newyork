@@ -35,9 +35,12 @@ const SHOW_CLEAR_RADIUS = 42; // m of Times Square kept clear of traffic for the
 // The run: down 7th Ave, west on 42nd St, up 8th Ave past Smith's, west on 57th St. The avenues are one-way, so the
 // line runs down their middle; 42nd and 57th are two-way, so it keeps to the westbound (north, -z) half.
 const WESTBOUND = -3.5;
+// The drift into 42nd St turns at this offset instead: its slide swings about 4 m wide, which from the westbound line
+// would end nose to nose with the eastbound queue (where the show once stalled for good)
+const INTO_42ND = -7.5;
 const ESCAPE_ROUTE = [
   [COP_SPOT.x, COP_SPOT.z],
-  [avenueX('7'), streetZ(42) + WESTBOUND],
+  [avenueX('7'), streetZ(42) + INTO_42ND],
   [avenueX('8'), streetZ(42) + WESTBOUND],
   [avenueX('8'), streetZ(57) + WESTBOUND],
   [avenueX('11'), streetZ(57) + WESTBOUND]
