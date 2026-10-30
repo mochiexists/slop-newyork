@@ -71,6 +71,54 @@ test('the AI drives a city block loop on the keys, drifting the corners and weav
   assert.ok(maxDeviation < 25, `stays near the route (${maxDeviation.toFixed(1)} m)`);
 });
 
+test('it drifts Manhattan\'s 90° corners at speed: a wide entry, a 35-45° slide, out on the new street\'s line', () => {
+  // The show's run, squared up: down 7th Ave (one-way, 15 m), right into 42nd St (two-way, on the westbound half),
+  // right up 8th Ave (one-way, 21 m), with the corridors swim-show.js routeCorridors gives those streets
+  const route = [{ x: 0, z: 0 }, { x: 0, z: 230 }, { x: -275, z: 230 }, { x: -275, z: -300 }];
+  const corridors = [{ left: 6, right: -6, centre: null }, { left: 11.6, right: -2.6, centre: 4.5 }, { left: 9.5, right: -8.6, centre: null }];
+  const pilot = new DriftAutopilot({ cruiseSpeed: 40, lanes: 2, laneWidth: 2.8 });
+  const driver = new physics.KeyboardDriver();
+  pilot.setPath(route, { corridors });
+  const c = car(0);
+  c.speed = 38;
+  // Per corner, in the frames of the street before it and after it
+  const corners = [1, 2].map((k) => {
+    const a = route[k - 1], b = route[k], next = route[k + 1];
+    const length = Math.hypot(b.x - a.x, b.z - a.z), out = Math.hypot(next.x - b.x, next.z - b.z);
+    return {
+      b, length, ux: (b.x - a.x) / length, uz: (b.z - a.z) / length, vx: (next.x - b.x) / out, vz: (next.z - b.z) / out,
+      start: null, slowest: Infinity, slip: 0, wide: 0, back: null
+    };
+  });
+  let t = 0;
+  while (t < 30 && !pilot.finished) {
+    const { tel } = frame(pilot, driver, c, []);
+    t += FRAME;
+    const ground = Math.hypot(c.speed, c.vx, c.vz);
+    for (const k of corners) {
+      const dx = c.position.x - k.b.x, dz = c.position.z - k.b.z;
+      const toCorner = -(dx * k.ux + dz * k.uz);
+      // along the new street, and across it (+ left of travel: both corners turn right, so + is the outside)
+      const along = dx * k.vx + dz * k.vz, across = dx * k.vz - dz * k.vx;
+      if (k.start === null && toCorner < 60) k.start = t;
+      if (k.start === null) continue;
+      if (toCorner < 30 && along < 40) {
+        k.slowest = Math.min(k.slowest, ground);
+        k.slip = Math.max(k.slip, Math.abs(tel.slipAngle));
+        if (along > -5) k.wide = Math.max(k.wide, across);
+      }
+      if (k.back === null && along > 5 && ground > 30) k.back = t - k.start;
+    }
+  }
+  for (const [i, k] of corners.entries()) {
+    const name = `corner ${i + 1}`;
+    assert.ok(k.slowest > 11, `${name}: never slower than 11 m/s through it (${k.slowest.toFixed(1)} m/s)`);
+    assert.ok(k.slip > 35 * RAD && k.slip < 47 * RAD, `${name}: a 35-45° slide (${(k.slip / RAD).toFixed(0)}°)`);
+    assert.ok(k.wide < 3, `${name}: no more than 3 m past the new street's line (${k.wide.toFixed(1)} m)`);
+    assert.ok(k.back !== null && k.back < 7.5, `${name}: back at 30 m/s within 7.5 s of 60 m out (${k.back?.toFixed(2)} s)`);
+  }
+});
+
 test('weaving staggered traffic at 85 mph, the swimmer allows for its own car turned in a flick', () => {
   // Codex's round-2 reproduction: a contact at 2.7 s while the plan was marked safe, from a street-aligned own footprint
   const { vehicleContact } = loadModule(readFileSync(join(__dirname, '../js/vehicle-physics.js'), 'utf8'));
