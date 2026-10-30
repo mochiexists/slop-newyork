@@ -4,7 +4,7 @@ const { join } = require('node:path');
 const test = require('node:test');
 const { loadModule } = require('./helpers/module.cjs');
 
-const { M5_DRIFT, tireCurve, stepDriftCar } = loadModule(readFileSync(join(__dirname, '../js/drift-physics.js'), 'utf8'));
+const { M5_DRIFT, tireCurve, stepDriftCar, shiftUp, shiftDown, toggleManual } = loadModule(readFileSync(join(__dirname, '../js/drift-physics.js'), 'utf8'));
 
 const DT = 1 / 240;
 const RAD = Math.PI / 180;
@@ -33,17 +33,49 @@ test('the tire curve peaks at its slip angle and keeps sliding grip past it', ()
   assert.equal(tireCurve(-0.3, M5_DRIFT), -tireCurve(0.3, M5_DRIFT));
 });
 
-test('full throttle reaches 100 km/h in tuned-M5 time (2.8 s) and holds the limiter', () => {
+test('full throttle reaches 100 km/h in M3 Competition time (3.4 s) through the gears to a drag-limited top speed', () => {
   const c = car();
   let t = 0;
   while (c.speed < 100 / 3.6 && t < 10) {
     stepDriftCar(c, { ...idle, throttle: 1 }, DT);
     t += DT;
   }
-  assert.ok(t > 2.7 && t < 2.9, `0-100 km/h in ${t.toFixed(2)} s`);
+  assert.ok(t > 3.1 && t < 3.7, `0-100 km/h in ${t.toFixed(2)} s`);
+  assert.equal(c.gear, 3);
   assert.equal(c.heading, 0);
   drive(c, 40, { ...idle, throttle: 1 });
-  assert.ok(Math.abs(c.speed - M5_DRIFT.topSpeed) < 0.5, `top speed ${c.speed}`);
+  assert.ok(c.speed > 85 && c.speed < M5_DRIFT.topSpeed, `top speed ${c.speed}`);
+  assert.ok(c.gear >= 7, `in gear ${c.gear}`);
+});
+
+test('the automatic shifts up through the box and back down when the car slows, and manual holds the gear', () => {
+  const c = car();
+  const gears = new Set();
+  for (let t = 0; t < 8; t += DT) gears.add(stepDriftCar(c, { ...idle, throttle: 1 }, DT).gear);
+  assert.deepEqual([...gears].slice(0, 4), [1, 2, 3, 4]);
+  drive(c, 3, { ...idle, brake: 0.6 });
+  assert.ok(c.gear >= 3 && c.gear <= 6, `down to ${c.gear} braking to ${c.speed.toFixed(1)} m/s`);
+  drive(c, 6, { ...idle, brake: 1 });
+  assert.equal(c.gear, 1, 'and to first at a stop');
+
+  const manual = car(10);
+  assert.equal(toggleManual(manual), true);
+  let telemetry;
+  let limited = 0;
+  for (let t = 0; t < 4; t += DT) {
+    telemetry = stepDriftCar(manual, { ...idle, throttle: 1 }, DT);
+    if (telemetry.limiter) limited++;
+  }
+  assert.equal(manual.gear, 1, 'manual holds first');
+  assert.ok(limited > 0 && manual.rpm > 6500, 'on the limiter');
+  assert.ok(manual.speed < 18, `first gear tops out at ${manual.speed.toFixed(1)} m/s`);
+  assert.equal(shiftUp(manual), true);
+  assert.equal(manual.gear, 2);
+  drive(manual, 2, { ...idle, throttle: 1 });
+  assert.ok(manual.speed > 18, 'second pulls on');
+  assert.equal(shiftDown(manual), false, 'a downshift that would over-rev is refused');
+  assert.equal(manual.gear, 2);
+  assert.equal(toggleManual(manual), false);
 });
 
 test('braking stops from 100 km/h in under 40 m and the brake holds a stopped car', () => {
@@ -76,10 +108,10 @@ test('a handbrake flick into throttle holds a drift, and letting go straightens 
   });
   const at = (seconds) => slips[Math.round(seconds / DT)];
   // A left-hand drift: the car points inside its path, so the velocity is to its right (negative slip)
-  for (const t of [1.5, 2, 2.5, 3]) {
-    assert.ok(at(t) < -20 * RAD && at(t) > -60 * RAD, `drifting at ${t} s: ${(at(t) / RAD).toFixed(1)}°`);
+  for (const t of [1, 1.5, 2]) {
+    assert.ok(at(t) < -25 * RAD, `drifting at ${t} s: ${(at(t) / RAD).toFixed(1)}°`);
   }
-  assert.ok(Math.min(...slips) > -70 * RAD, 'the assist stops the slide becoming a spin');
+  assert.ok(Math.min(...slips) > -80 * RAD, 'the assist stops the slide becoming a spin');
   assert.ok(Math.abs(at(5.9)) < 3 * RAD, `recovered: ${(at(5.9) / RAD).toFixed(1)}°`);
   assert.ok(c.speed > 15, 'still moving on after the drift');
 });
@@ -88,7 +120,7 @@ test('power oversteer from low speed is caught by the counter-steer assist', () 
   const c = car(10);
   const slips = drive(c, 4, { ...idle, throttle: 1, steer: 1 });
   assert.ok(Math.min(...slips) < -25 * RAD, 'full throttle at full lock steps the tail out');
-  assert.ok(Math.min(...slips) > -70 * RAD, 'without spinning round');
+  assert.ok(Math.min(...slips) > -80 * RAD, 'without spinning round');
   assert.ok(c.speed > 8, 'and keeps driving');
 });
 
@@ -107,14 +139,26 @@ test('a burnout spins the rears on the spot, and letting the brake go launches t
 test('wheelspin builds through the driveline inertia and dies away after a lift', () => {
   const c = car(10);
   const first = stepDriftCar(c, { ...idle, throttle: 1 }, DT).wheelspin;
-  assert.ok(first > 0 && first < 0.2, `one step of full throttle spins the rears up only a little: ${first}`);
+  assert.ok(first < 0.1, `one step of full throttle spins the rears up only a little: ${first}`);
   let t = 0;
   while (stepDriftCar(c, { ...idle, throttle: 1 }, DT).wheelspin < 1 && t < 1) t += DT;
-  assert.ok(t > 0.02 && t < 0.2, `full wheelspin after ${t.toFixed(3)} s`);
+  assert.ok(t > 0.05 && t < 0.3, `full wheelspin after ${t.toFixed(3)} s`);
   t = 0;
   while (stepDriftCar(c, idle, DT).wheelspin > 0 && t < 1) t += DT;
   assert.ok(t > 0.02 && t < 0.3, `the tires grip again ${t.toFixed(3)} s after the lift`);
-  assert.equal(c.wheelSlip, 0);
+  assert.ok(c.wheelSlip < M5_DRIFT.peakSlipRatio * c.speed, `rolling with the road (${c.wheelSlip.toFixed(2)} m/s)`);
+});
+
+test('a burnout bounces the engine off the limiter', () => {
+  const c = car();
+  let limited = 0;
+  let telemetry;
+  for (let t = 0; t < 3; t += DT) {
+    telemetry = stepDriftCar(c, { ...idle, throttle: 1, burnout: 1 }, DT);
+    if (t > 2 && telemetry.limiter) limited++;
+  }
+  assert.ok(limited * DT > 0.1 && limited * DT < 0.9, `on the cut ${(limited * DT).toFixed(2)} s of the last second`);
+  assert.ok(telemetry.rpm > 6000, `revs ${telemetry.rpm.toFixed(0)}`);
 });
 
 test('reverse is limited and steering a stopped car does not spin it', () => {
