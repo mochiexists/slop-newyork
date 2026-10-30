@@ -1405,8 +1405,9 @@ class ThirdPersonControllerManager {
       const telemetry = stepDriftCar(c, input, step, M5_DRIFT, c.drift);
       this.resolveHorizontalCollision(c.position, 1.35, c);
 
-      // Squat under power, dive under braking, lean out of the corner; collisions kick the same springs
-      const targetPitch = -Math.max(-1, Math.min(1, c.longAccel / 9)) * 0.03;
+      // Squat under power, dive under braking, lean out of the corner; collisions kick the same springs (the squat is
+      // played up: the nose lifting off the line is half of what makes a launch look violent)
+      const targetPitch = -Math.max(-1, Math.min(1, c.longAccel / 9)) * 0.055;
       const targetRoll = Math.max(-0.07, Math.min(0.07, telemetry.lateralAccel * 0.009));
       c.pitchVel += ((targetPitch - c.chassisPivot.rotation.x) * 68 - c.pitchVel * 11.2) * step;
       c.rollVel += ((targetRoll - c.chassisPivot.rotation.z) * 68 - c.rollVel * 11.2) * step;

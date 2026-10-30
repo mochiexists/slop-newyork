@@ -20,6 +20,12 @@ const CAMERA_PRESETS = [
 const DEFAULT_NEAR = 0.35;
 const SEAT_NEAR = 0.05; // inside a cabin (entity.povEye): the wheel and hands are ~0.4 m from the eye
 const SEAT_BODY_FOLLOW = 0.5; // share of the chassis' pitch & roll the seated view turns with
+// Speed you can feel, for a car with drift physics (entity.longAccel): the follow views widen with speed and kick wider
+// as it pulls (a wider field of view reads as faster; motion blur reads as slower), the chase camera falls back as
+// the car launches, and the camera shivers with wheelspin and at speed
+const SPEED_FOV = { perSpeed: 12, speed: 40, perAccel: 7, accel: 9, rate: 4 }; // ° at `speed` m/s, ° at `accel` m/s²
+const LAUNCH_LAG = { perAccel: 0.4, rate: 3 }; // m the chase camera falls back per m/s² of acceleration
+const SHAKE = { amount: 0.02, speed: 40, seatShare: 0.3 }; // m at full wheelspin or `speed` m/s; a seat shakes less
 
 class CameraSystem {
   constructor(domElement, controllerManager) {
@@ -53,6 +59,8 @@ class CameraSystem {
     this._desiredPos = new THREE.Vector3();
     this._desiredLook = new THREE.Vector3();
     this.seatRoll = 0; // see seatView()
+    this.speedFov = 0; // ° added to the preset's field of view (SPEED_FOV)
+    this.launchLag = 0; // m the chase camera has fallen back (LAUNCH_LAG)
 
     this.bindPointerControls();
   }
@@ -188,7 +196,9 @@ class CameraSystem {
     // The follow cameras pull back with speed, eased so that they drift back as the entity speeds up (and in as it
     // slows down); speedLag is about how far their former world-space smoothing left them trailing at 60 FPS
     this.smoothedSpeed += (Math.abs(entity.speed) - this.smoothedSpeed) * (1 - Math.exp(-dt * 3.0));
-    const speedLag = this.smoothedSpeed * 0.1;
+    const pulling = Number.isFinite(entity.longAccel) ? Math.max(0, entity.longAccel) : 0;
+    this.launchLag += (LAUNCH_LAG.perAccel * pulling - this.launchLag) * (1 - Math.exp(-dt * LAUNCH_LAG.rate));
+    const speedLag = this.smoothedSpeed * 0.1 + this.launchLag;
 
     const totalYaw = entity.heading + this.orbitYawOffset;
 
@@ -377,9 +387,37 @@ class CameraSystem {
       this.camera.updateProjectionMatrix();
     }
 
+    this.feelSpeed(entity, dt, elapsed, seated);
     this.camera.position.copy(this.currentPos);
     this.camera.lookAt(this.currentLookAt);
     if (seated) this.camera.rotateZ(-this.seatRoll);
+  }
+
+  // SPEED_FOV and SHAKE for a drift-physics car in a follow view; everything else keeps its preset's field of view
+  feelSpeed(entity, dt, elapsed, seated) {
+    const preset = this.getActivePreset();
+    const following = preset.category === 'follow' && Number.isFinite(entity.longAccel);
+    let wider = 0;
+    if (following) {
+      const clamp01 = (x) => Math.max(0, Math.min(1, x));
+      wider = SPEED_FOV.perSpeed * clamp01(Math.abs(entity.speed) / SPEED_FOV.speed)
+        + SPEED_FOV.perAccel * clamp01(entity.longAccel / SPEED_FOV.accel);
+    }
+    this.speedFov += (wider - this.speedFov) * (1 - Math.exp(-dt * SPEED_FOV.rate));
+    const fov = preset.fov + this.speedFov;
+    if (Math.abs(this.camera.fov - fov) > 0.02) {
+      this.camera.fov = fov;
+      this.camera.updateProjectionMatrix();
+    }
+    if (!following) return;
+    const spin = entity.drift?.wheelspin ?? 0;
+    const fast = Math.min(1, (Math.abs(entity.speed) / SHAKE.speed) ** 2);
+    const shake = SHAKE.amount * Math.min(1, spin + fast) * (seated ? SHAKE.seatShare : 1);
+    if (shake > 0.0005) {
+      // (a few incommensurate sines: a rough, unrepeating shiver, no allocation)
+      this.currentPos.x += shake * (Math.sin(elapsed * 37.1) + Math.sin(elapsed * 23.3)) * 0.5;
+      this.currentPos.y += shake * (Math.sin(elapsed * 41.7) + Math.sin(elapsed * 29.9)) * 0.5;
+    }
   }
 
   // First person from a seat: entity.povEye is the eye in the vehicle's chassis frame (+z forward), entity.povPitch
