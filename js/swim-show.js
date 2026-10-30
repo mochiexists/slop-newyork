@@ -76,6 +76,10 @@ const STUCK_TIME = 2; // s standing still before the AI backs out
 const HOLD_BACK = 15; // m the cop keeps behind the car it chases
 const CORNER_CLEAR_DISTANCE = 110; // m out from a drift corner that the show starts holding its traffic
 const CORNER_CLEAR_RADIUS = 26;
+// m past a corner where the street's staged traffic starts (traffic.js stageRoute): past a drifted corner, more, so the
+// car has caught the slide and is running straight before the first pair to split
+const STAGE_GAP = 30;
+const STAGE_GAP_AFTER_DRIFT = 45;
 const REVERSE_TIME = 1.1; // s backing out, times the tries so far (up to MAX_REVERSE_TRIES) while it is still stuck
 const MAX_REVERSE_TRIES = 3;
 const UNSTUCK_SPEED = 8; // m/s: going again, the tries start over
@@ -88,8 +92,8 @@ const SIM_STEPS_PER_SECOND = 240; // the drift model's step rate (controllers.js
 const SHOW_SWIMMING = {
   cruiseSpeed: 45,
   passMargin: 0.2,
-  closeBonus: 30,
-  splitBonus: 40
+  closeBonus: 60,
+  splitBonus: 100
 };
 
 const GATHER_RANGE = 130; // m round the car that traffic is handed to the AI (it plans 120 m ahead)
@@ -592,6 +596,12 @@ class SwimShow {
     if (near && this.clearedCorner !== index) {
       this.clearedCorner = index;
       this.traffic.setClearZone({ x: corner.x, z: corner.z, r: CORNER_CLEAR_RADIUS });
+      // ...and the street past it is laid out for swimming: pairs of cars side by side to split, staged as the car
+      // comes up to the corner (round it, out of sight; down 7th Ave, as it powers out of the drift)
+      const before = path[index - 1], after = path[index + 1];
+      const turn = wrapAngle(Math.atan2(after.x - corner.x, after.z - corner.z) - Math.atan2(corner.x - before.x, corner.z - before.z));
+      const drifted = Math.abs(turn) > this.pilot.options.sharpTurn;
+      this.traffic.stageRoute?.(corner, after, { startGap: drifted ? STAGE_GAP_AFTER_DRIFT : STAGE_GAP });
     } else if (!near && this.clearedCorner !== undefined && this.clearedCorner !== index) {
       const last = path[this.clearedCorner];
       if (Math.hypot(last.x - car.position.x, last.z - car.position.z) > CORNER_CLEAR_RADIUS + 20) {

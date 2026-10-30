@@ -68,3 +68,23 @@ test('the show drives the burnout, the donuts round the cop and the power-out on
   assert.ok(closest > 6 && widest < 15, `round the cop at about the circle's radius (${closest.toFixed(1)}..${widest.toFixed(1)} m)`);
   assert.ok(bird, 'the bird out of the window');
 });
+
+test('each street of the run is staged with pairs to split as its corner comes up, further in past a drift', () => {
+  const car = { position: { x: 0, z: 0 }, heading: 0, speed: 20, vx: 0, vz: 0, angularVel: 0 };
+  const staged = [];
+  const traffic = { setClearZone() {}, reseed() {}, stageRoute: (a, b, options) => staged.push({ a, b, ...options }) };
+  const cruiser = { car: { position: { x: 0, z: 0 } }, park() {}, chase() {}, giveUp() {} };
+  const swimShow = new show.SwimShow({ controllerManager: { entities: { swim: car } }, trafficSystem: traffic, cruiser });
+  // A gentle bend 40 m on, then a right angle 200 m further
+  const route = [{ x: 0, z: 0 }, { x: 2, z: 40 }, { x: 2, z: 240 }, { x: -200, z: 240 }];
+  swimShow.pilot.setPath(route);
+  swimShow.clearNextCorner(car);
+  car.position.z = 160;
+  swimShow.pilot.advance(car);
+  swimShow.clearNextCorner(car);
+  swimShow.clearNextCorner(car);
+  assert.deepEqual(staged, [
+    { a: route[1], b: route[2], startGap: 30 },
+    { a: route[2], b: route[3], startGap: 45 }
+  ]);
+});
