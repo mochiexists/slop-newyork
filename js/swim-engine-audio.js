@@ -57,6 +57,10 @@ const M5_MOD_ENGINE_CLIPS = {
   crackle: null
 };
 
+// The compressed copy of each clip tools/encode-sounds.sh writes next to its WAV, loaded first: loops as FLAC
+// (lossless, so they keep the WAV's exact length and loop without a seam), one-shots as Opus in WebM
+const ENCODED_FORMATS = { loop: 'flac', shot: 'webm' };
+
 const LOOP_RMS = 0.16; // every loop is levelled to this, so the crossfade doesn't jump in loudness
 const CRACKLE_PEAK = 0.9;
 const MOD_SHOT_PEAK = 0.9;
@@ -138,21 +142,29 @@ function levelBuffer(buffer, { rms = 0, peak = 0 }) {
 }
 
 /**
+ * Fetches and decodes one clip (a .wav path), preferring its compressed copy (ENCODED_FORMATS[kind]) and taking the
+ * WAV when the copy isn't there or the browser can't decode it. Resolves to the buffer, or null when neither is there.
+ */
+async function decodeClip(context, fetchFile, url, kind) {
+  try {
+    const response = await fetchFile(url.replace(/\.wav$/, `.${ENCODED_FORMATS[kind]}`));
+    if (response.ok) return await context.decodeAudioData(await response.arrayBuffer());
+  } catch { /* Try the WAV. */ }
+  const response = await fetchFile(url);
+  if (!response.ok) return null;
+  return await context.decodeAudioData(await response.arrayBuffer());
+}
+
+/**
  * Fetches and decodes the recorded clips. Resolves to a bank ({ recorded, loops: [{ buffer, rpm }], decelLoops,
  * pitchRange, crackle }) or to null when they aren't there (a fresh clone that hasn't run tools/fetch-m3-sound.sh);
- * it never rejects. The first loop is tried alone, so a missing set costs a single request; a file listed twice is
- * fetched once.
+ * it never rejects. The first loop is tried alone, so a missing set costs a single try (its compressed copy, then
+ * its WAV); a file listed twice is fetched once.
  */
 async function loadSwimEngineClips(context, clips = M3_CLIPS, fetchFile = globalThis.fetch) {
   const decoded = new Map();
-  const decode = (file) => {
-    if (!decoded.has(file)) {
-      decoded.set(file, (async () => {
-        const response = await fetchFile(clips.folder + file);
-        if (!response.ok) return null;
-        return await context.decodeAudioData(await response.arrayBuffer());
-      })());
-    }
+  const decode = (file, kind = 'loop') => {
+    if (!decoded.has(file)) decoded.set(file, decodeClip(context, fetchFile, clips.folder + file, kind));
     return decoded.get(file);
   };
   // Loops levelled to one loudness (a shared buffer is levelled twice, which leaves it as it was)
@@ -166,7 +178,7 @@ async function loadSwimEngineClips(context, clips = M3_CLIPS, fetchFile = global
     const loops = await loadSet(clips.loops);
     const decelLoops = clips.decelLoops ? await loadSet(clips.decelLoops) : null;
     if (!loops || (clips.decelLoops && !decelLoops)) return null;
-    const crackle = clips.crackle ? await decode(clips.crackle).catch(() => null) : null;
+    const crackle = clips.crackle ? await decode(clips.crackle, 'shot').catch(() => null) : null;
     return {
       recorded: true,
       loops,
@@ -182,13 +194,12 @@ async function loadSwimEngineClips(context, clips = M3_CLIPS, fetchFile = global
 /**
  * Fetches and decodes the sound mod's one-shots. Resolves to { pops, burbles, bangs } (buffers levelled to a peak)
  * or to null when they aren't there; it never rejects. The first pop is tried alone, so a missing set costs a single
- * request, and a clip that fails later is left out of its group.
+ * try, and a clip that fails later is left out of its group.
  */
 async function loadM5ModShots(context, shots = M5_MOD_SHOTS, fetchFile = globalThis.fetch) {
   const decode = async (file) => {
-    const response = await fetchFile(shots.folder + file);
-    if (!response.ok) return null;
-    return levelBuffer(await context.decodeAudioData(await response.arrayBuffer()), { peak: MOD_SHOT_PEAK });
+    const buffer = await decodeClip(context, fetchFile, shots.folder + file, 'shot');
+    return buffer && levelBuffer(buffer, { peak: MOD_SHOT_PEAK });
   };
   const group = async (files) => (await Promise.all(files.map((file) => decode(file).catch(() => null)))).filter(Boolean);
   try {
@@ -562,5 +573,5 @@ function createSwimEngineVoice(context, resources, output,
   return { update, tick, dispose, state };
 }
 
-export { M3_CLIPS, M5_MOD_SHOTS, M5_MOD_ENGINE_CLIPS, SWIM_ENGINES, swimEngineBank, nextSwimEngine, loopWeights,
+export { M3_CLIPS, M5_MOD_SHOTS, M5_MOD_ENGINE_CLIPS, ENCODED_FORMATS, SWIM_ENGINES, swimEngineBank, nextSwimEngine, loopWeights,
   enginePitch, levelBuffer, loadSwimEngineClips, loadM5ModShots, createSwimEngineVoice };

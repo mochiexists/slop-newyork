@@ -34,12 +34,13 @@ The repository is the **minimal** version and stays close to the original's size
 car is drawn in code, the engine is synthesized and the music streams. The **full** version adds local assets that are
 never committed: recordings of a tuned M3 (`tools/fetch-m3-sound.sh`), the decoded GTA V M5 sound mod
 (`tools/extract-m5-mod-sound.py`) and the Sketchfab M3 model (`tools/prepare-m3-model.sh`). The game uses whichever
-of them it finds and falls back to the minimal version's car and sound for the rest. `tools/build-variants.sh` builds
+of them it finds and falls back to the minimal version's car and sound for the rest. `tools/encode-sounds.sh` then
+shrinks the recordings (FLAC loops, Opus one-shots: about 1 MB of WAV to 0.6 MB). `tools/build-variants.sh` builds
 both into `dist/minimal` and `dist/full`.
 
 For the car, download [the model](https://skfb.ly/pNwqZ) from Sketchfab as glTF and run
 `zsh tools/prepare-m3-model.sh ~/Downloads/bmw_m3_competition__hassan_visuals_3d.zip`: it bakes, simplifies and
-compresses it into `assets/models/m3.glb` (about 3 MB, gitignored).
+compresses it into `assets/models/m3.glb` (about 2.6 MB, gitignored).
 
 ## Make it your own
 

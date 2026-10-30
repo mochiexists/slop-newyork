@@ -47,8 +47,13 @@ const SIMPLIFY = {
   wheel: { ratio: 0.14, error: 0.004 },
   lamp: { ratio: 0.5, error: 0.001 }
 };
-const TEXTURE_SIZE = 1024;
-const WEBP_QUALITY = 72;
+// Textures: 512 px is all the car shows at chase-camera distance, and most of the download's maps are 512 already.
+// Colour and emissive maps take a lower WebP quality than normal maps, whose blocking would show in the lighting.
+const TEXTURE_SIZE = 512;
+const WEBP_QUALITY = 60;
+const NORMAL_WEBP_QUALITY = 72;
+const NORMAL_SLOTS = /^normalTexture$/;
+const OTHER_SLOTS = /^(?!normalTexture$)/;
 
 const io = new NodeIO().registerExtensions(ALL_EXTENSIONS).registerDependencies({
   'meshopt.encoder': MeshoptEncoder
@@ -268,7 +273,10 @@ console.log(`simplified ${Math.round(before)} -> ${Math.round(after)} triangles`
 
 await document.transform(
   prune(),
-  textureCompress({ encoder: sharp, targetFormat: 'webp', quality: WEBP_QUALITY, resize: [TEXTURE_SIZE, TEXTURE_SIZE] }),
+  textureCompress({ encoder: sharp, targetFormat: 'webp', quality: NORMAL_WEBP_QUALITY, resize: [TEXTURE_SIZE, TEXTURE_SIZE],
+    slots: NORMAL_SLOTS }),
+  textureCompress({ encoder: sharp, targetFormat: 'webp', quality: WEBP_QUALITY, resize: [TEXTURE_SIZE, TEXTURE_SIZE],
+    slots: OTHER_SLOTS }),
   meshopt({ encoder: MeshoptEncoder, level: 'high' })
 );
 
