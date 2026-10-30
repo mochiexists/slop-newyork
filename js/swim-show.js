@@ -120,7 +120,7 @@ function routeCorridors(route) {
 }
 
 // A police SUV: drift physics with less power than the M5, so it can chase but not catch
-const COP_DRIFT = { ...M5_DRIFT, mass: 2250, yawInertia: 4300, power: 420000, launchGrip: 1.6, topSpeed: 46 };
+const COP_DRIFT = { ...M5_DRIFT, mass: 2250, yawInertia: 4300, power: 420000, peakTorque: 650, launchGrip: 1.6, topSpeed: 46 };
 const COP_PAINT = new THREE.Color(0xf6f9fc);
 
 // Two-tone wail: a square wave sweeping up and down through a low-pass, in the city's audio mix
