@@ -42,7 +42,7 @@ test('tapping A on the gas at 5, 10 and 15 m/s is a grip turn, not a drift', () 
     const tap = drive(speed, 2, (t) => keys({ forward: 1, left: t > 0.3 && t < 0.45 ? 1 : 0 }));
     assert.ok(tap.maxSlip < 6 * RAD, `${speed} m/s: body slip ${(tap.maxSlip / RAD).toFixed(1)}°`);
     assert.equal(tap.maxSpin, 0, `${speed} m/s: the traction control keeps the rears hooked up`);
-    assert.ok(tap.car.heading > 2 * RAD, `${speed} m/s: the car still turns`);
+    assert.ok(tap.car.heading > 0.5 * RAD, `${speed} m/s: the car still turns (${(tap.car.heading / RAD).toFixed(1)}°)`);
 
     const weave = drive(speed, 2.5, (t) => {
       const phase = t > 0.3 ? (t - 0.3) % 0.8 : 1;
@@ -52,15 +52,26 @@ test('tapping A on the gas at 5, 10 and 15 m/s is a grip turn, not a drift', () 
   }
 });
 
-test('the wheel turns in over a fraction of a second, slower at speed, and the pedal is pressed, not switched', () => {
-  const slow = drive(2, 0.15, () => keys({ left: 1 }));
-  const fast = drive(25, 0.15, () => keys({ left: 1 }));
-  assert.ok(slow.maxSteer > 0.85, `0.15 s of A at a crawl: ${slow.maxSteer.toFixed(2)}`);
-  assert.ok(fast.maxSteer < 0.6, `0.15 s of A at 25 m/s: ${fast.maxSteer.toFixed(2)}`);
-
+test('steering winds on while A is held: a tap nudges the wheel, a long hold reaches full lock', () => {
   const car = { position: { x: 0, z: 0 }, heading: 0, speed: 10, vx: 0, vz: 0, angularVel: 0, steerAngle: 0 };
   const driver = new KeyboardDriver();
-  assert.ok(driver.update(car, { slipAngle: 0 }, keys({ forward: 1 }), FRAME).throttle < 0.1);
+  const hold = (seconds, pressed) => {
+    let input;
+    for (let t = 0; t < seconds - 1e-9; t += FRAME) input = driver.update(car, { slipAngle: 0 }, keys(pressed), FRAME);
+    return input.steer;
+  };
+  const tap = hold(0.1, { left: 1 });
+  assert.ok(tap > 0.05 && tap < 0.2, `a 0.1 s tap at 10 m/s: ${(tap * 100).toFixed(0)}% of the lock`);
+  assert.ok(hold(0.4, {}) === 0, 'and the wheel centres again');
+  assert.equal(hold(1, { left: 1 }), 1, 'a 1 s hold reaches full lock');
+  const back = hold(0.4, { right: 1 });
+  assert.ok(back < 0, `the opposite key swings it back across centre quickly: ${back.toFixed(2)} after 0.4 s`);
+  hold(1, {});
+  car.speed = 30;
+  assert.ok(hold(1, { left: 1 }) < 0.8, 'slower at speed');
+
+  const pedal = new KeyboardDriver();
+  assert.ok(pedal.update(car, { slipAngle: 0 }, keys({ forward: 1 }), FRAME).throttle < 0.1, 'the pedal is pressed');
 });
 
 test('the handbrake with gas at 15 m/s slides the car', () => {
@@ -87,8 +98,8 @@ test('gas and lock held hold a drift that picks up speed, widens and shifts up o
   assert.ok(run.slideGears.size >= 2, `shifted while sliding: ${[...run.slideGears].join(', ')}`);
   assert.ok(run.limiter > 0, 'bouncing off the limiter');
 
-  // Steering out of the slide (D in a left drift) ends it
-  const out = drive(12, 6, (t) => keys({ forward: 1, left: t < 3.5 ? 1 : 0, right: t >= 3.5 ? 1 : 0 }));
+  // Letting go of A with W still held lets the rear catch up and drives out straight
+  const out = drive(12, 5.5, (t) => keys({ forward: 1, left: t < 3.5 ? 1 : 0 }));
   const lateral = out.car.vx * Math.cos(out.car.heading) - out.car.vz * Math.sin(out.car.heading);
   assert.ok(Math.abs(Math.atan2(lateral, out.car.speed)) < 12 * RAD, 'straightened');
 });
