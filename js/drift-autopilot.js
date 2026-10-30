@@ -54,6 +54,7 @@ const AUTOPILOT = {
   closeSpeed: 8, // m/s at least it passes it by,
   splitWindow: 0.8, // s between close calls on either side that make a split (threading two cars)
   splitBonus: 4, // score for a split, on top of its two close calls
+  keepSpeedWeight: 12, // score per m/s a plan slows below keepSpeed (set while the show counts down the hand-over)
   brakeSteerLoss: 0.6, // share of the sideways grip lost to the brake key held down (all or nothing: 1.05 g)
   hitCost: 200, // score against a plan that touches a car
   oncomingCost: 25 // score against the oncoming half of a two-way street: used to pass, not to cruise in
@@ -91,6 +92,7 @@ class DriftAutopilot {
     this.keys = { forward: 0, backward: 0, left: 0, right: 0, handbrake: 0 };
     this.brakeDuty = 0;
     this.lockHeld = 0;
+    this.keepSpeed = 0; // m/s its plans should not slow below (0: no such wish)
     this.path = [];
     this.segment = 0;
     this.offset = 0; // current lateral offset from the route line (m, + left)
@@ -218,6 +220,7 @@ class DriftAutopilot {
     const air = this._air ??= [];
     const side = this._side ??= [];
     const passedAt = this._passedAt ??= [];
+    const aimReach = o.lookahead + o.lookaheadTime * u; // how far down the street the wheel aims (decide)
     const overshoot = carLatVel * Math.abs(carLatVel) / (2 * o.lateralAccel); // where its sideways speed carries it
     for (let y = band.right; y <= band.left + 1e-6; y += o.gapStep) {
       // Only the cars this move could come near: across the street, the move spans the car's line to y (plus any
@@ -272,11 +275,13 @@ class DriftAutopilot {
         // oncoming half a cost. A plan that meets a car is only taken when every plan does: then the one that meets it
         // latest, slowest, wins (time to brake or for the next move to find a way).
         let score = travelled;
+        let open = 0;
         if (hitAt === Infinity) {
           // Where the plan leaves it matters as much as the ground it covers: open road ahead in the lane it ends in,
           // and the speed it carries into it. And a plan is only safe if it ends with room to brake to the speed of the car ahead in its lane: otherwise
           // it is a trap a step past the look-ahead (closing at 30 mph on a queue)
-          let open = o.scanAhead, trapped = false;
+          open = o.scanAhead;
+          let trapped = false;
           for (let i = 0; i < nearCount; i++) {
             const ob = near[i];
             const ahead = ob.along + ob.vAlong * o.planTime - travelled - ob.length;
@@ -294,6 +299,12 @@ class DriftAutopilot {
         if (y > oncoming) score -= o.oncomingCost;
         // Keeping to the line already chosen wins ties: changing its mind takes a clearly better gap
         if (Math.abs(y - this.targetOffset) < o.gapStep * 0.5) score += o.commitBonus;
+        // Holding a speed (the hand-over count): a plan that slows below it is worth less the more it loses. A move far
+        // across aims the wheel far off the street, and the executor slows for that (offLine, in decide)
+        let slowest = Math.min(u, speed);
+        const swerve = Math.atan2(Math.abs(y - carLat), aimReach);
+        if (swerve > o.offLine) slowest = Math.min(slowest, Math.max(8, Math.sqrt(9.5 * aimReach / (2 * Math.sin(swerve)))));
+        if (this.keepSpeed > 0) score -= o.keepSpeedWeight * Math.max(0, this.keepSpeed - slowest);
         // Unsafe plans rank by how late they meet trouble, then by how slow they are by then
         if (hitAt !== Infinity) score = -o.hitCost * (o.planTime - hitAt) - speed;
         const safe = hitAt === Infinity;
@@ -303,6 +314,8 @@ class DriftAutopilot {
           best.safe = safe;
           best.y = y;
           best.accel = accel;
+          best.slowest = slowest;
+          best.open = open;
         }
       }
     }
@@ -312,7 +325,36 @@ class DriftAutopilot {
     plan.start = u;
     plan.accel = best.accel;
     plan.safe = best.safe;
+    plan.slowest = best.slowest; // the lowest speed the plan flies at
+    plan.open = best.open; // m of clear road ahead in its lane where it ends
     return plan;
+  }
+
+  /**
+   * Whether the road ahead lets the car hold `speed` for `seconds`: the plan it is flying is safe and never slower,
+   * ends with clear road for the rest of the time and the braking from that speed after it, and no drifted corner
+   * comes up within that distance and the braking for it. (The show starts its hand-over count only then, so the
+   * player takes a car that is flying.)
+   */
+  holdsSpeed(car, speed, seconds) {
+    const o = this.options;
+    const plan = this.plan;
+    if (!plan || !plan.safe || plan.slowest < speed || this.cornering || this.finished) return false;
+    if (plan.open < speed * Math.max(0, seconds - o.planTime) + speed * speed / (2 * o.braking)) return false;
+    const reach = speed * seconds + (speed * speed - o.cornerSpeed * o.cornerSpeed) / (2 * o.braking);
+    let distance = this.seg(this.segment).length - this.alongSegment(car);
+    for (let i = this.segment; i < this.path.length - 2 && distance < reach; i++) {
+      const s = this.seg(i), next = this.seg(i + 1);
+      if (Math.abs(wrap(Math.atan2(next.ux, next.uz) - Math.atan2(s.ux, s.uz))) > o.sharpTurn) return false;
+      distance += next.length;
+    }
+    return true;
+  }
+
+  // Metres along the current segment the car has come
+  alongSegment(car) {
+    const s = this.seg(this.segment);
+    return (car.position.x - s.a.x) * s.ux + (car.position.z - s.a.z) * s.uz;
   }
 
   /**
@@ -456,7 +498,7 @@ class DriftAutopilot {
     const error = wrap(desired - travel);
     const wheel = error * o.steerGain;
     // Off line and pointing the wrong way: slow to a speed the front tires can turn at (about 1 g of grip over the
-    // radius it takes to swing back onto the route)
+    // radius it takes to swing back onto the route). A big swerve to a gap far across counts too (planGap allows for it).
     if (!this.cornering && Math.abs(error) > o.offLine) {
       const radius = (o.lookahead + o.lookaheadTime * Math.abs(u)) / (2 * Math.sin(Math.min(Math.abs(error), Math.PI / 2)));
       const turnLimit = Math.max(8, Math.sqrt(9.5 * radius));

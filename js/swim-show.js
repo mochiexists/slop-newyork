@@ -64,10 +64,11 @@ const CHASE_TIME = 14; // s the cop keeps up the chase before it gives up
 // The hand-over, like the opening of a racing game: a few seconds into the swim, at speed, a 3-2-1 count and the car
 // is the player's
 const SWIM_TIME = 6; // s of swimming before it looks for a moment to hand over
-const HANDOVER_SPEED = 29; // m/s (65 mph) the count starts at, so the player takes a car that is flying
-const HANDOVER_WAIT = 8; // s more it waits for that speed before counting down anyway
+// m/s (65 mph) the count starts at and holds through, so the player takes a car that is flying: the count waits for
+// the planner to see clear road at that speed for the whole count, and during it the AI prefers plans that keep it
+const HANDOVER_SPEED = 29;
 const COUNTDOWN_TIME = 3; // s of "3, 2, 1"
-const SHOW_TIME_LIMIT = 60; // s before the count starts wherever the car is
+const SHOW_TIME_LIMIT = 60; // s before the count starts wherever the car is (a fallback: the show has to end)
 const LOOK_BACK_TIME = 2.5; // s the swim's chase camera opens looking back at the cop giving up
 const STUCK_TIME = 2; // s standing still before the AI backs out
 const HOLD_BACK = 15; // m the cop keeps behind the car it chases
@@ -445,7 +446,9 @@ class SwimShow {
 
   // "3, 2, 1": the AI keeps swimming through the count, then the car is the player's
   countDown() {
-    if (this.phase !== 'countdown') this.setPhase('countdown');
+    if (this.phase === 'countdown') return;
+    this.pilot.keepSpeed = HANDOVER_SPEED;
+    this.setPhase('countdown');
   }
 
   // Whole seconds left on the hand-over count (3, 2, 1), or 0 when not counting
@@ -468,6 +471,7 @@ class SwimShow {
   stop() {
     if (this.phase === 'off') return;
     this.controllers.swimPilot = null;
+    this.pilot.keepSpeed = 0;
     const car = this.controllers.entities.swim;
     car.cameraYawOverride = null;
     car.povYaw = 0;
@@ -555,8 +559,9 @@ class SwimShow {
           this.stop();
           return;
         }
-        if (this.phase === 'swim' && this.time > SWIM_TIME
-          && (car.speed > HANDOVER_SPEED || this.time > SWIM_TIME + HANDOVER_WAIT)) this.countDown();
+        if (this.phase === 'swim' && this.time > SWIM_TIME && this.pilot.holdsSpeed(car, HANDOVER_SPEED, COUNTDOWN_TIME)) {
+          this.countDown();
+        }
         if (this.phase === 'escape' && this.time > CHASE_TIME) {
           this.cruiser.giveUp();
           this.onCamera?.('chase');

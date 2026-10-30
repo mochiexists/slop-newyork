@@ -94,3 +94,21 @@ test('weaving staggered traffic at 85 mph, the swimmer allows for its own car tu
   assert.equal(contacts, 0);
   assert.ok(c.position.z > 150, `and it got through (${c.position.z.toFixed(0)} m)`);
 });
+
+test('the hand-over count waits for clear road at speed: not with a queue ahead or a corner coming up', () => {
+  // At 30 m/s up a straight 1 km avenue, its keyboard driver warmed up for a few frames
+  function holds(traffic, route = [{ x: 0, z: 0 }, { x: 0, z: 1000 }]) {
+    const c = car(0);
+    c.speed = 30;
+    const pilot = new DriftAutopilot({ cruiseSpeed: 45 });
+    const driver = new physics.KeyboardDriver();
+    pilot.setPath(route, { corridors: route.slice(1).map(() => ({ left: 3.3, right: -3.3, centre: null })) });
+    for (let n = 0; n < 10; n++) frame(pilot, driver, c, traffic);
+    return pilot.holdsSpeed(c, 29, 3);
+  }
+  assert.equal(holds([]), true, 'an empty avenue');
+  // A queue standing across the street 90 m ahead: it can't keep 65 mph for three seconds
+  const queue = [-3.3, 0, 3.3].map((x) => ({ x, z: 95, speed: 0, yaw: 0, half: 2.3, halfWidth: 0.95 }));
+  assert.equal(holds(queue), false, 'a queue ahead');
+  assert.equal(holds([], [{ x: 0, z: 0 }, { x: 0, z: 120 }, { x: 200, z: 120 }]), false, 'a drifted corner 120 m on');
+});
