@@ -95,6 +95,33 @@ test('weaving staggered traffic at 85 mph, the swimmer allows for its own car tu
   assert.ok(c.position.z > 150, `and it got through (${c.position.z.toFixed(0)} m)`);
 });
 
+test('a flick back across at 85 mph is caught on its line: no slide for the keyboard driver to read as a save', () => {
+  // Codex's round-1 reproduction (2026-10-31): swinging from x 4.9 back toward 1.25 the tail stepped out (18°), the
+  // driver's save unwound the held counter-steer and the car slid on into the third car at 3.58 s
+  const { vehicleContact } = loadModule(readFileSync(join(__dirname, '../js/vehicle-physics.js'), 'utf8'));
+  const traffic = [[-2.5, 49, 3], [5.75, 109, 5], [-4, 86, 5], [1, 59, 3]]
+    .map(([x, z, speed]) => ({ x, z, speed, yaw: 0, half: 2.3, halfWidth: 0.95 }));
+  const c = car(0);
+  c.speed = 38;
+  const pilot = new DriftAutopilot();
+  const driver = new physics.KeyboardDriver();
+  pilot.setPath([{ x: 0, z: 0 }, { x: 0, z: 1000 }], { corridors: [{ left: 7, right: -7, centre: null }] });
+  let contacts = 0, slip = 0;
+  for (let n = 0; n < 600; n++) {
+    const { tel } = frame(pilot, driver, c, traffic);
+    slip = Math.max(slip, Math.abs(tel.slipAngle));
+    for (const o of traffic) {
+      o.z += o.speed / 60;
+      const a = { x: c.position.x, z: c.position.z, sin: Math.sin(c.heading), cos: Math.cos(c.heading), halfW: 0.97, halfL: 2.5 };
+      const b = { x: o.x, z: o.z, sin: 0, cos: 1, halfW: 0.95, halfL: 2.3 };
+      if (vehicleContact(a, b, {})) contacts++;
+    }
+  }
+  assert.equal(contacts, 0);
+  assert.ok(slip < 10 * RAD, `its flicks stay on the tires (${(slip / RAD).toFixed(1)}° of slip at most)`);
+  assert.ok(c.position.z > 250, `and it got through (${c.position.z.toFixed(0)} m)`);
+});
+
 test('the hand-over count waits for clear road at speed: not with a queue ahead or a corner coming up', () => {
   // At 30 m/s up a straight 1 km avenue, its keyboard driver warmed up for a few frames
   function holds(traffic, route = [{ x: 0, z: 0 }, { x: 0, z: 1000 }]) {
