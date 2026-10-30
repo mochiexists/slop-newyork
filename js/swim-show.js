@@ -54,11 +54,13 @@ const BIRD_FROM = 6;
 const BIRD_TO = 9.5;
 const COP_GLANCE_LIMIT = 70 * RAD; // how far round from the windshield the driver turns to watch the cop
 const GLANCE_RATE = 2.5; // 1/s easing of the driver's look
-const EXIT_WINDOW = 80 * RAD; // the way out this far ahead of the direction of travel: let go of A and power out
+const EXIT_WINDOW = 25 * RAD; // the way out this far ahead of the direction of travel: let go of A and power out (later
+// in the lap, the slide comes out already pointing down the avenue and the car can floor it)
 const EXIT_TIME_LIMIT = 3; // s of powering out before the autopilot takes over however straight the car is
 const EXIT_SLIP = 10 * RAD; // the slide is over below this drift angle,
 const EXIT_ALIGN = 60 * RAD; // and with the car travelling roughly the way out, the autopilot steers it back onto the avenue
-const ESCAPE_MERGE = 24; // m down 7th Ave from the cop where the escape is back in the avenue's middle
+const ESCAPE_MERGE = 40; // m down 7th Ave from the cop where the escape is back in the avenue's middle: a long merge,
+// so the swing back from the plaza is a gentle one taken flat out
 const EXIT_LOOKAHEAD = 30; // m down the avenue's middle line ahead of the car that it powers out of the circle toward
 const CHASE_TIME = 14; // s the cop keeps up the chase before it gives up
 // The hand-over, like the opening of a racing game: a few seconds into the swim, at speed, a 3-2-1 count and the car
