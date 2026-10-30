@@ -7,7 +7,8 @@
 #   dist/full     the same plus the local assets nobody commits: the tuned M3 recordings (tools/fetch-m3-sound.sh),
 #                 the decoded M5 sound mod voice (tools/extract-m5-mod-sound.py) and the Sketchfab M3 Competition
 #                 model (tools/prepare-m3-model.sh). Whatever of those is missing is reported and left out; the game
-#                 falls back to the minimal version's car or sound for it.
+#                 falls back to the minimal version's car or sound for it. A clip with a compressed copy
+#                 (tools/encode-sounds.sh: FLAC loops, Opus one-shots) ships that instead of its WAV.
 #
 # Usage:  tools/build-variants.sh [minimal|full|both]        (default: both)
 # Serve:  python3 -m http.server 8765 --bind 127.0.0.1 --directory dist/full
@@ -31,6 +32,13 @@ full_assets=(
 
 say() { print -r -- "build-variants: $*"; }
 
+# The file to ship for an asset: a clip's compressed copy when tools/encode-sounds.sh made one (the voice loads it
+# first), else the file itself
+shipped_file() {
+  local copies=(${1:r}.{flac,webm}(.N))
+  print -r -- ${copies[1]:-$1}
+}
+
 size_report() {
   local dir=$1 raw=0 packed=0 file
   for file in $dir/**/*(.N); do
@@ -47,16 +55,20 @@ build() {
   mkdir -p "$out"
   git ls-files -z -- $runtime | rsync -a --from0 --files-from=- ./ "$out/"
   if [[ $name == full ]]; then
-    local pattern matches
+    local pattern matches match files wavs
     for pattern in $full_assets; do
       matches=(${~pattern}(.N))
       if (( ${#matches} == 0 )); then
         say "  missing ${pattern:h}/ (see the tools/ script that makes it); the game falls back without it"
         continue
       fi
+      files=()
+      for match in $matches; do files+=("$(shipped_file $match)"); done
       mkdir -p "$out/${pattern:h}"
-      cp -p $matches "$out/${pattern:h}/"
-      say "  + ${#matches} file(s) in ${pattern:h}/"
+      cp -p $files "$out/${pattern:h}/"
+      say "  + ${#files} file(s) in ${pattern:h}/"
+      wavs=(${(M)files:#*.wav})
+      (( ${#wavs} == 0 )) || say "    ${#wavs} of them still WAV: tools/encode-sounds.sh shrinks them"
     done
   fi
   size_report "$out"
