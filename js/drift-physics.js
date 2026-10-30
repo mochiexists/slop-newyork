@@ -526,7 +526,7 @@ class KeyboardDriver {
     const full = fullDriveForce(car, m);
     const controlled = full > 0 ? Math.min(1, share * holds / full) : 1;
 
-    // The driver commits by holding gas and lock (a power-over), pulling the handbrake, or already being sideways
+    // The driver commits by holding gas and lock (a power-over), pulling the handbrake, or steering into a slide
     const sliding = Math.abs(slip) > p.slideSlip;
     const lockDirection = Math.sign(steerKeys);
     // (only with the lock wound well on: a quick flick across a lane never commits the car to a slide)
@@ -548,7 +548,9 @@ class KeyboardDriver {
     }
     this.wasSliding = sliding;
     if (sliding) this.slideSide = Math.sign(slip);
-    if (handbrake > 0 || sliding) this.commit = 1;
+    // A slide is the driver's when they asked for it: the handbrake, a power-over, or the wheel wound well on as the
+    // tail steps out. A twitch across a lane at speed that slides the car is caught by the traction control instead.
+    if (handbrake > 0 || (sliding && (this.commit > 0.5 || wound))) this.commit = 1;
     else this.commit = approach(this.commit, this.lockHeld > p.commitDelay ? 1 : 0, dt / p.commitTime);
     input.throttle = this.throttle * Math.min(1, controlled + (1 - controlled) * this.commit);
     // The centre clutch closes for a straight-line pull and opens with the lock wound on (the front tires keep their
@@ -558,7 +560,7 @@ class KeyboardDriver {
     // In a slide, the throttle for the angle: the tail is out to the side opposite the turn (a left drift slides right)
     this.slipRate += ((Math.abs(slip) - this.slip) / dt - this.slipRate) * Math.min(1, dt * 20);
     this.slip = Math.abs(slip);
-    if (sliding && !handbrake) {
+    if (sliding && !handbrake && this.commit > 0.5) {
       let target = p.looseAngle;
       if (lockDirection === -Math.sign(slip)) target = p.driftAngle;
       else if (lockDirection === Math.sign(slip)) target = p.counterAngle;
