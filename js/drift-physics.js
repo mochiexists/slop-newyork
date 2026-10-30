@@ -5,6 +5,15 @@
 // The state matches the player car in controllers.js: `speed` is the velocity along the heading, `vx`/`vz` the
 // sideways part in world space, `angularVel` the yaw rate (+ turns left) and `heading` 0 faces +z. The car's left is
 // (cos h, -sin h) in world space, so a positive lateral velocity slides to the left.
+//
+// Driving it, for the player and the AI alike (nobody passes analog inputs):
+//   const driver = new KeyboardDriver(KEYBOARD_DRIVER, params); // one per car; params M5_DRIFT, or the cop's
+//   each 60 Hz frame:
+//     const input = driver.update(car, keys, dt); // keys { forward, backward, left, right, handbrake }, each 0 or 1
+//     for each of n sub-steps (240 Hz): stepDriftCar(car, input, dt / n, params, car.drift);
+//   driver.reset() after a teleport.
+// The gearbox lives on the car: car.gear (1-8, -1 reversing), car.rpm, car.manual (shiftUp/shiftDown/toggleManual),
+// and each step's telemetry carries rpm, gear and limiter (the fuel cut is on).
 
 const GRAVITY = 9.81;
 const RAD = Math.PI / 180;
