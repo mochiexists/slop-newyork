@@ -34,16 +34,18 @@ const SHOULDER_BACK = 0.05;
 const UPPER_ARM = 0.3;
 const FOREARM = 0.28;
 
-// The bird (F): the left hand leaves the wheel in BIRD_TIME seconds. The cockpit camera gets it up against the
-// windshield; seen from outside the arm goes out of the driver's window with the hand above the roof line.
+// The bird (F): the left hand leaves the wheel in BIRD_TIME seconds and goes out of the driver's window. From the
+// driver's seat it is the BMW short's shot: the driver looks out to the left and the arm is out at shoulder height;
+// seen from outside the hand comes up above the roof line.
 const BIRD_TIME = 0.35;
-const BIRD_POV = new THREE.Vector3(0.5, 1.08, 0.06);
+const BIRD_POV = new THREE.Vector3(1.02, 1.2, -0.12);
+const BIRD_GLANCE = 45 * RAD; // how far the driver's look turns to the window with it
 // seen from the chase camera 7 m back a life-size hand is a few pixels; it grows by this much out there
 const BIRD_OUTSIDE_SCALE = 1.5;
 const BIRD_WINDOW = new THREE.Vector3(1.0, 1.42, -0.4);
 const BIRD_LEAN = new THREE.Vector3(0.09, 0.05, 0.02); // the shoulder, leaning into the window to get the hand high
 // where the elbow bends: down and out, onto the door sill for the window
-const BIRD_POLE_POV = new THREE.Vector3(0.8, -1, 0);
+const BIRD_POLE_POV = new THREE.Vector3(1, -1, -0.2);
 const BIRD_POLE_WINDOW = new THREE.Vector3(1, -1, 0.1);
 
 // The curved display: an arc around a point behind the driver (so it bends toward them), cluster at the left end
@@ -594,8 +596,13 @@ class M5Cockpit {
       this.body.visible = !inside;
     }
     if (!swimming) this.bird = false;
-    this.birdAmount = THREE.MathUtils.clamp(this.birdAmount + (this.bird ? dt : -dt) / BIRD_TIME, 0, 1);
+    // F, or the AI show giving the cop the bird (swim-show.js)
+    const raising = this.bird || Boolean(this.entity.showBird);
+    this.birdAmount = THREE.MathUtils.clamp(this.birdAmount + (raising ? dt : -dt) / BIRD_TIME, 0, 1);
     if (!swimming) this.birdAmount = 0;
+    // From the seat the driver looks out of the window at whoever it's for (less if already looking that way)
+    const eased = this.birdAmount * this.birdAmount * (3 - 2 * this.birdAmount);
+    this.entity.povGlance = inside ? eased * Math.max(0, BIRD_GLANCE - (this.entity.povYaw ?? 0)) : 0;
     // From outside only the raised arm shows (out of the window); the hands on the wheel are under the roof
     this.arms.visible = inside || (swimming && this.birdAmount > 0);
     this.rightArm.group.visible = inside;
@@ -641,16 +648,18 @@ class M5Cockpit {
 
     if (lift > 0) {
       const raised = inside ? this.birdPov : this.birdWindow;
-      // finger up, the back of the hand to whoever it's for: traffic ahead, or (from outside) the car behind
+      // finger up, the back of the hand to whoever it's for: out to the left from the seat (the driver sees the
+      // palm), or (from outside) the car behind
       y.set(0, 1, 0);
-      z.set(0, 0, inside ? -1 : 1);
+      if (inside) z.set(-1, 0, 0);
+      else z.set(0, 0, 1);
       x.crossVectors(y, z);
       this._birdQuat.setFromRotationMatrix(this._basis.makeBasis(x, y, z));
       this._quat.slerp(this._birdQuat, lift);
       this._target.lerp(raised, lift);
       this._target.y += Math.sin(lift * Math.PI) * 0.05;
       this._pole.lerp(inside ? BIRD_POLE_POV : BIRD_POLE_WINDOW, lift);
-      if (!inside) this._lean.copy(BIRD_LEAN).multiplyScalar(lift);
+      this._lean.copy(BIRD_LEAN).multiplyScalar(lift);
       curl = 1 - THREE.MathUtils.smoothstep(lift, 0.5, 1);
     }
     arm.pose(this._target, this._pole, this._quat, this._lean);

@@ -551,11 +551,13 @@ class DriftScore {
 const SHOW_CAPTIONS = {
   burnout: ['BREAKING · SWIMMING IN TIMES SQUARE', 'show'],
   escape: ['NYPD IN PURSUIT', 'lost'],
-  swim: ['LOST THEM · SWIMMING', 'banked']
+  swim: ['LOST THEM · SWIMMING', 'banked'],
+  countdown: ['YOUR CAR IN…', 'show']
 };
 
 class SwimDirector {
-  constructor({ scene, controllerManager, audioSystem, trafficSystem }) {
+  // onShowCamera(preset id): the show's camera cuts (main.js owns the cameras)
+  constructor({ scene, controllerManager, audioSystem, trafficSystem, onShowCamera }) {
     this.controllers = controllerManager;
     this.traffic = trafficSystem;
     this.car = controllerManager.entities.swim;
@@ -565,8 +567,11 @@ class SwimDirector {
       controllerManager,
       trafficSystem,
       cruiser: this.cruiser,
-      onPhase: (phase) => this.onShowPhase(phase)
+      onPhase: (phase) => this.onShowPhase(phase),
+      onCamera: onShowCamera
     });
+    this.countdown = document.getElementById('swim-countdown');
+    this.shownCount = 0;
     this.clock = 0;
     this.smoke = new TireSmoke(scene);
     this.skids = new SkidMarks(scene);
@@ -637,11 +642,23 @@ class SwimDirector {
       this.skipImpact = true;
     }
     if (caption) this.score.flash(...caption);
-    else if (phase === 'off') this.score.flash('YOUR CAR · DRIVE', 'banked');
+    else if (phase === 'off') this.score.flash('GO · YOUR CAR', 'banked');
   }
 
   setMuted(muted) {
     this.radio.setMuted(muted);
+  }
+
+  // The hand-over's big 3, 2, 1 in the middle of the screen
+  renderCount(count) {
+    if (count === this.shownCount || !this.countdown) return;
+    this.shownCount = count;
+    this.countdown.hidden = count === 0;
+    if (!count) return;
+    this.countdown.textContent = String(count);
+    this.countdown.classList.remove('tick');
+    void this.countdown.offsetWidth; // restart the animation
+    this.countdown.classList.add('tick');
   }
 
   rearContacts() {
@@ -716,6 +733,7 @@ class SwimDirector {
       // The cruiser's own AI weaves through the same traffic; the car's AI weaves round the cruiser too
       if (this.cruiser.state !== 'hidden') this.show.obstacles.push({ x: this.cruiser.car.position.x, z: this.cruiser.car.position.z });
     }
+    this.renderCount(this.show.count);
     this.cruiser.update(dt, this.clock, camera.position, this.show.obstacles, c);
     if (this.active) this.cruiser.collide(c);
   }

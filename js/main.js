@@ -161,7 +161,10 @@ async function initApp() {
     soundButton.querySelector('use').setAttribute('href', audioSystem.enabled ? '#i-sound' : '#i-sound-off');
   }
   soundButton?.addEventListener('click', () => audioSystem.setEnabled(!audioSystem.enabled));
-  swimDirector = new SwimDirector({ scene, controllerManager, audioSystem, trafficSystem });
+  // The AI show cuts between the chase camera and the driver's seat
+  swimDirector = new SwimDirector({
+    scene, controllerManager, audioSystem, trafficSystem, onShowCamera: (id) => selectCamera(id, true)
+  });
   const m5Cockpit = new M5Cockpit(controllerManager.entities.swim, swimDirector.radio);
   // Full build: the real M3 Competition model replaces the procedural car when assets/models/m3.glb is there
   loadSwimCarModel(controllerManager.entities.swim, m5Cockpit).catch((error) => console.warn('M3 model not loaded:', error));

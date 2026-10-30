@@ -44,22 +44,39 @@ const ESCAPE_ROUTE = [
 ].map(([x, z]) => ({ x, z }));
 
 const BURNOUT_TIME = 2.6;
-const DONUT_TIME = 11; // s of drifting round the cop (a lap takes about six) before looking for the way out
-const EXIT_TIME = 0.7; // s straightening out of the circle before the escape
+const DONUT_TIME = 9.5; // s of drifting round the cop (a lap takes about six) before looking for the way out
+// The donuts are seen from the driver's seat, as the BMW short is filmed: the driver looks across at the cop and puts
+// the bird out of the window (where the short has it against the chorus), the last thing before driving off
+const BIRD_FROM = 6;
+const BIRD_TO = 9.5;
+const COP_GLANCE_LIMIT = 70 * RAD; // how far round from the windshield the driver turns to watch the cop
+const GLANCE_RATE = 2.5; // 1/s easing of the driver's look
+const EXIT_WINDOW = 80 * RAD; // the way out this far ahead along the circle: start powering out of it
+const EXIT_TIME_LIMIT = 3; // s of powering out before the physics takes over however straight the car is
 const ESCAPE_MERGE = 24; // m down 7th Ave from the cop where the escape is back in the avenue's middle
 const CHASE_TIME = 14; // s the cop keeps up the chase before it gives up
-// The hand-over, like the opening of a racing game: a few seconds into the swim, at speed, the car is the player's
-const SWIM_TIME = 7; // s of swimming before it looks for a moment to hand over
-const HANDOVER_SPEED = 22; // m/s (50 mph) it hands over at, so the player takes a car that is flying
-const HANDOVER_WAIT = 8; // s more it waits for that speed before handing over anyway
-const SHOW_TIME_LIMIT = 60; // s before the car is handed over wherever it is
+// The hand-over, like the opening of a racing game: a few seconds into the swim, at speed, a 3-2-1 count and the car
+// is the player's
+const SWIM_TIME = 6; // s of swimming before it looks for a moment to hand over
+const HANDOVER_SPEED = 29; // m/s (65 mph) the count starts at, so the player takes a car that is flying
+const HANDOVER_WAIT = 8; // s more it waits for that speed before counting down anyway
+const COUNTDOWN_TIME = 3; // s of "3, 2, 1"
+const SHOW_TIME_LIMIT = 60; // s before the count starts wherever the car is
 const CORRIDOR = 7; // m off the route before the show eases the car back toward it
-const LOOK_BACK_TIME = 2.5; // s the escape camera looks back at the cop
+const LOOK_BACK_TIME = 2.5; // s the swim's chase camera opens looking back at the cop giving up
 const STUCK_TIME = 2; // s standing still before the AI backs out
 const HOLD_BACK = 15; // m the cop keeps behind the car it chases
 const CORNER_CLEAR_DISTANCE = 110; // m out from a drift corner that the show starts holding its traffic
 const CORNER_CLEAR_RADIUS = 26;
 const REVERSE_TIME = 1.1;
+
+// The show's swimmer is sketchier than the autopilot's defaults (drift-autopilot.js AUTOPILOT): flat out at 100 mph,
+// threading gaps with a hand's width of air and going out of its way for a close pass
+const SHOW_SWIMMING = {
+  cruiseSpeed: 45,
+  passMargin: 0.2,
+  closeBonus: 10
+};
 
 const GATHER_RANGE = 130; // m round the car that traffic is handed to the AI (it plans 120 m ahead)
 const CURB_MARGIN = 1.4; // m between the curb and the middle of the car at the edge of a swim
@@ -301,13 +318,14 @@ class PoliceCruiser {
 
 // The show itself: a timeline of phases, flown through the controllers' swimPilot hook
 class SwimShow {
-  constructor({ controllerManager, trafficSystem, cruiser, onPhase }) {
+  constructor({ controllerManager, trafficSystem, cruiser, onPhase, onCamera }) {
     this.controllers = controllerManager;
     this.traffic = trafficSystem;
     this.cruiser = cruiser;
     this.onPhase = onPhase;
-    // The avenues are four or five lanes wide: weave across all of them
-    this.pilot = new DriftAutopilot({ lanes: 2, laneWidth: 2.8 });
+    this.onCamera = onCamera; // (preset id) the show cuts between the chase camera and the driver's seat
+    // The avenues are four or five lanes wide: weave across all of them, faster and closer than a driver would
+    this.pilot = new DriftAutopilot({ ...SHOW_SWIMMING, lanes: 2, laneWidth: 2.8 });
     this.phase = 'off';
     this.time = 0;
     this.total = 0;
@@ -332,7 +350,24 @@ class SwimShow {
     this.total = 0;
     this.clearedCorner = undefined;
     this.stuck = this.reversing = 0;
+    this.exitAt = undefined;
+    this.onCamera?.('chase');
     this.setPhase('burnout');
+  }
+
+  // "3, 2, 1": the AI keeps swimming through the count, then the car is the player's
+  countDown() {
+    if (this.phase !== 'countdown') this.setPhase('countdown');
+  }
+
+  // Whole seconds left on the hand-over count (3, 2, 1), or 0 when not counting
+  get count() {
+    return this.phase === 'countdown' ? Math.max(1, Math.ceil(COUNTDOWN_TIME - this.time)) : 0;
+  }
+
+  // The driver's look (cameras.js adds car.povYaw to the seat's view) and the bird (m5-cockpit.js reads car.showBird)
+  glance(car, dt, yaw) {
+    car.povYaw = (car.povYaw ?? 0) + (yaw - (car.povYaw ?? 0)) * (1 - Math.exp(-dt * GLANCE_RATE));
   }
 
   setPhase(phase) {
@@ -345,7 +380,10 @@ class SwimShow {
   stop() {
     if (this.phase === 'off') return;
     this.controllers.swimPilot = null;
-    this.controllers.entities.swim.cameraYawOverride = null;
+    const car = this.controllers.entities.swim;
+    car.cameraYawOverride = null;
+    car.povYaw = 0;
+    car.showBird = false;
     this.traffic.setClearZone(null);
     this.cruiser.giveUp();
     this.setPhase('off');
@@ -359,10 +397,7 @@ class SwimShow {
     }
     this.time += dt;
     this.total += dt;
-    if (this.total > SHOW_TIME_LIMIT) {
-      this.stop();
-      return undefined;
-    }
+    if (this.total > SHOW_TIME_LIMIT && (this.phase === 'escape' || this.phase === 'swim')) this.countDown();
     // Show cameras look across the car toward the cruiser, so the cop is in the shot
     const cop = this.cruiser.car.position;
     const towardCop = Math.atan2(cop.x - car.position.x, cop.z - car.position.z);
@@ -373,22 +408,28 @@ class SwimShow {
         input.burnout = 1;
         if (this.time > BURNOUT_TIME) {
           this.donut = DriftCircle.around(car, this.cruiser.car.position, { direction: 1, radius: DRIFT_RADIUS });
+          // Into the driver's seat for the drift, looking across at the cop
+          car.cameraYawOverride = null;
+          car.povYaw = 0;
+          this.onCamera?.('pov');
           this.setPhase('donuts');
         }
         return undefined;
       case 'donuts': {
-        // The camera sways slowly round the cop's side while the car slides round it
-        car.cameraYawOverride = towardCop + 0.6 * Math.sin(this.time * 0.45);
         this.donut.update(car, dt, car.drift);
-        // Straighten out once it has done its laps and its line points down the avenue, then run
+        // The driver watches the cop over the drift (until the way out), and gives them the bird mid-circle
+        const copBearing = Math.atan2(Math.sin(towardCop - car.heading), Math.cos(towardCop - car.heading));
+        const watching = this.donut.exiting ? 0 : Math.max(-COP_GLANCE_LIMIT, Math.min(COP_GLANCE_LIMIT, copBearing));
+        this.glance(car, dt, watching);
+        car.showBird = this.time > BIRD_FROM && this.time < BIRD_TO;
+        // Once it has done its laps and the way down the avenue comes round, power out of the circle onto it
         const exit = Math.atan2(ESCAPE_ROUTE[1].x - car.position.x, ESCAPE_ROUTE[1].z - car.position.z);
-        const facing = Math.abs(Math.atan2(Math.sin(this.donut.travel - exit), Math.cos(this.donut.travel - exit)));
-        if (!this.donut.exiting && this.time > DONUT_TIME && facing < 20 * RAD) {
-          this.donut.exiting = true;
-          this.exitAt = this.time;
-        }
-        if (this.donut.exiting && this.time - this.exitAt > EXIT_TIME) {
+        const ahead = Math.atan2(Math.sin(exit - this.donut.travel), Math.cos(exit - this.donut.travel)) * this.donut.direction;
+        if (!this.donut.exiting && this.time > DONUT_TIME && ahead > 0 && ahead < EXIT_WINDOW) this.exitAt = this.time;
+        if (this.exitAt !== undefined) this.donut.exitToward(exit);
+        if (this.donut.exiting && (this.donut.straightened || this.time - this.exitAt > EXIT_TIME_LIMIT)) {
           // The physics takes the car on at the speed and angle the circle left it with
+          this.exitAt = undefined;
           this.traffic.setClearZone(null);
           // Off the circle (which reaches over the curb) straight back onto the avenue, then the run
           const merge = { x: ESCAPE_ROUTE[0].x, z: ESCAPE_ROUTE[0].z + ESCAPE_MERGE };
@@ -400,23 +441,28 @@ class SwimShow {
         return 'scripted';
       }
       case 'escape':
-      case 'swim': {
-        // The getaway opens looking back over the car at the cop setting off after it
-        car.cameraYawOverride = this.phase === 'escape' && this.time < LOOK_BACK_TIME ? car.heading + Math.PI : null;
+      case 'swim':
+      case 'countdown': {
+        // The getaway is still the driver's view; the swimming cuts out to the chase camera, which opens looking back
+        // over the car at the traffic it just came through
+        this.glance(car, dt, 0);
+        car.cameraYawOverride = this.phase === 'swim' && this.time < LOOK_BACK_TIME ? car.heading + Math.PI : null;
         this.clearNextCorner(car);
         Object.assign(input, this.pilot.update(car, dt, this.obstacles));
         this.unstick(car, dt, input);
         this.keepNearRoute(car, dt);
-        if (this.phase === 'swim' && this.time > SWIM_TIME
-          && (car.speed > HANDOVER_SPEED || this.time > SWIM_TIME + HANDOVER_WAIT)) {
+        if (this.phase === 'countdown' && this.time > COUNTDOWN_TIME) {
           this.stop();
           return undefined;
         }
+        if (this.phase === 'swim' && this.time > SWIM_TIME
+          && (car.speed > HANDOVER_SPEED || this.time > SWIM_TIME + HANDOVER_WAIT)) this.countDown();
         if (this.phase === 'escape' && this.time > CHASE_TIME) {
           this.cruiser.giveUp();
+          this.onCamera?.('chase');
           this.setPhase('swim');
         }
-        if (this.pilot.finished) this.stop();
+        if (this.pilot.finished) this.countDown();
         return undefined;
       }
       default:

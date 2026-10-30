@@ -402,7 +402,8 @@ class CameraSystem {
       entity.position.z - x * sin + z * cos
     );
 
-    const yaw = entity.heading + this.orbitYawOffset;
+    // povYaw: where the driver is looking (the swim show watching the cop); povGlance: a look out of the window (the bird)
+    const yaw = entity.heading + this.orbitYawOffset + (entity.povYaw ?? 0) + (entity.povGlance ?? 0);
     const down = (entity.povPitch ?? 0) + pitch * SEAT_BODY_FOLLOW + (this.orbitPitchOffset - 0.09);
     desiredLook.set(
       desiredPos.x + Math.sin(yaw) * Math.cos(down) * 40.0,

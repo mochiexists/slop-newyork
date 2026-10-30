@@ -1549,6 +1549,31 @@ body.hud-minimized .hud-top-center { transform: translate(-50%, -10px); }
 .swim-flash[data-kind='lost'] { color: var(--m-red); }
 .swim-flash.show { animation: swim-flash 1.6s var(--ease-out); }
 
+/* The AI show's hand-over count: 3, 2, 1 in the middle of the screen */
+.swim-countdown {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: min(34vh, 260px);
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  color: var(--m-light);
+  text-shadow: 0 6px 40px rgba(0, 0, 0, 0.7);
+  pointer-events: none;
+  z-index: 40;
+}
+
+.swim-countdown[hidden] { display: none; }
+.swim-countdown.tick { animation: swim-count 1s var(--ease-out); }
+
+@keyframes swim-count {
+  0% { opacity: 0; transform: scale(1.6); }
+  15% { opacity: 1; transform: scale(1); }
+  75% { opacity: 1; transform: scale(0.94); }
+  100% { opacity: 0; transform: scale(0.8); }
+}
+
 @keyframes swim-flash {
   0% { opacity: 0; transform: translateY(8px) scale(0.92); }
   12% { opacity: 1; transform: translateY(0) scale(1.06); }
