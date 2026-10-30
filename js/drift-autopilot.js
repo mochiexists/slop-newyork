@@ -47,6 +47,7 @@ const AUTOPILOT = {
   lateralAccel: 6, // m/s² it plans to shed its sideways speed at by the far side of a move (the tires hold about 1 g,
   // and the car has to turn back straight there)
   lateralSwing: 7, // m/s² its sideways speed swings toward the move's at: the wheel winding on, the car turning to it
+  planSpread: 0.4, // m/s the passing margin widens by down a plan: how far its moves drift off the plan on the keys
   settleTime: 0.5, // s it closes the last of a move in (the sideways speed falls off linearly over the last metre)
   yawDamping: 0.05, // s: wheel angle taken off per rad/s the car is turning, swimming (catches a flick as it arrives)
   steerLead: 0.15, // s ahead it reads the gap to its line from its sideways speed: the wheel's lag, swimming
@@ -321,14 +322,16 @@ class DriftAutopilot {
               const ahead = ob.along + ob.vAlong * t - travelled;
               const across = ob.lateral + ob.vLateral * t - lat;
               const gapAlong = Math.abs(ahead) - ob.length;
-              const gapAcross = Math.abs(across) - ob.reach;
+              // (the further ahead, the less sure it is where on the keys it will really be across the street: the margin
+              // widens by planSpread a second)
+              const gapAcross = Math.abs(across) - ob.reach - o.planSpread * t;
               if (gapAlong < 0 && gapAcross < 0) {
                 hitAt = t;
                 break;
               }
               // A close call, as the swim mode scores it: the air beside the car while alongside it, then passing it
               if (gapAlong + o.followMargin < 0) {
-                air[i] = Math.min(air[i], gapAcross + o.passMargin);
+                air[i] = Math.min(air[i], gapAcross + o.planSpread * t + o.passMargin);
                 side[i] = Math.sign(across);
               } else if (ahead < 0 && air[i] < Infinity && passedAt[i] === Infinity && speed - ob.vAlong > o.closeSpeed) {
                 passedAt[i] = t;
