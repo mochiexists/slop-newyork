@@ -350,15 +350,7 @@ class DriftAutopilot {
     const want = this.want;
     const keys = this.keys;
     const p = driver.params;
-    const speed = Math.abs(car.speed);
-    let best = 0, bestError = Infinity;
-    for (const key of [0, 1, -1]) {
-      const error = Math.abs(nextSteer(driver.steer, key, speed, dt, p) - want.steer);
-      if (error < bestError - 1e-9) {
-        best = key;
-        bestError = error;
-      }
-    }
+    const best = steeringKey(driver, want.steer, car.speed, dt);
     keys.left = best > 0 ? 1 : 0;
     keys.right = best < 0 ? 1 : 0;
 
@@ -535,169 +527,21 @@ function nextSteer(steer, key, speed, dt, p) {
   return approachValue(steer, key, windOn);
 }
 
-function approachValue(value, target, step) {
-  return value + Math.max(-step, Math.min(step, target - value));
+/** The steering key (+1 left, -1 right, 0 neither) that lands a keyboard driver's wheel nearest `want` next frame. */
+function steeringKey(driver, want, speed, dt) {
+  let best = 0, bestError = Infinity;
+  for (const key of [0, 1, -1]) {
+    const error = Math.abs(nextSteer(driver.steer, key, Math.abs(speed), dt, driver.params) - want);
+    if (error < bestError - 1e-9) {
+      best = key;
+      bestError = error;
+    }
+  }
+  return best;
 }
 
-// A choreographed drift circle (the street "donut"): the car orbits a centre point at a steady speed with its nose
-// turned in by the drift angle, rear tires spinning and the front wheels counter-steered along the slide, the way a
-// driver holds a power-slide round a parked car. The orbit is a drift equilibrium: lateral grip of about 1 g gives
-// speed ≈ √(g·radius) and a yaw rate of speed / radius. Sets the car state directly (position, heading, velocities),
-// easing in from whatever the car was doing, so the physics can take the car back at the same speed when it ends.
-const DRIFT_CIRCLE = {
-  radius: 10, // m from the centre to the car
-  speed: 10.5, // m/s over the ground on the orbit
-  slip: 42 * RAD, // drift angle between the heading and the direction of travel
-  tightSlip: 58 * RAD, // with the handbrake (or a tighter line): more angle, a smaller circle
-  tightRadius: 6.5,
-  exitSlip: 12 * RAD, // straightening out before handing back
-  // Powering out (exitToward): the line opens into a spiral toward the way out, the car gathering speed and the
-  // angle coming off with the turn, the way a held drift is driven out of
-  exitTurnGain: 1.6, // 1/s of turn rate per radian still to turn
-  exitAccel: 6.5, // m/s² it gathers speed at on the way out
-  exitSpeed: 19, // m/s (42 mph) it leaves at
-  exitUnwind: 40 * RAD, // the way out this far round still: it starts to power out
-  exitGrip: 1.05 * 9.81, // m/s² of sideways grip: the most it turns at its speed
-  exitSlipPerTurn: 0.75, // s: drift angle per rad/s of turn (42° at the circle's ~1 rad/s, none once straight)
-  speedRate: 1.1, // 1/s easing of speed, angle and radius toward their targets
-  slipRate: 1.8,
-  radiusRate: 0.9,
-  counterSteer: 0.6 // front wheels follow the slide by this share of the drift angle (about 25° at 42°, as measured
-  // on a held 13 m circle: Velenis et al. 2011)
-};
-
-class DriftCircle {
-  constructor({ center, direction = 1, radius, options = {} }) {
-    this.o = { ...DRIFT_CIRCLE, ...options };
-    this.center = { x: center.x, z: center.z };
-    this.direction = Math.sign(direction) || 1;
-    this.targetRadius = radius ?? this.o.radius;
-    this.tight = false; // handbrake: tighter and more sideways
-    this.exiting = false; // straighten up on the current tangent
-    this.exitHeading = null; // powering out toward this direction of travel (exitToward)
-    this.started = false;
-  }
-
-  // Drive out of the circle toward a direction of travel: the orbit opens into a spiral that ends on it. Call again
-  // each frame if the way out moves.
-  exitToward(heading) {
-    if (!this.exiting) this.exitFrom = this.speed ?? this.o.speed;
-    this.exiting = true;
-    this.exitHeading = heading;
-  }
-
-  // Powered out and pointing the right way, with the angle off: the physics can take the car on from here
-  get straightened() {
-    if (this.exitHeading === null) return false;
-    return Math.abs(wrap(this.exitHeading - this.travel)) < 4 * RAD && Math.abs(this.slip) < 8 * RAD;
-  }
-
-  // Orbit a fixed point (the show: round the cop car) from wherever the car is now
-  static around(car, center, options = {}) {
-    const radius = options.radius ?? Math.hypot(car.position.x - center.x, car.position.z - center.z);
-    return new DriftCircle({ center, direction: options.direction, radius, options });
-  }
-
-  // Start a circle that carries on from the car's line: its centre sits off the side it is turning toward
-  static from(car, options = {}) {
-    const direction = Math.sign(options.direction) || 1;
-    const radius = options.radius ?? DRIFT_CIRCLE.radius;
-    const travel = travelHeading(car);
-    const center = {
-      x: car.position.x + direction * radius * Math.cos(travel),
-      z: car.position.z - direction * radius * Math.sin(travel)
-    };
-    return new DriftCircle({ center, direction, radius, options });
-  }
-
-  // Direction of travel along the orbit at the car's position: the tangent, turning in `direction`
-  tangent(car) {
-    const dx = car.position.x - this.center.x, dz = car.position.z - this.center.z;
-    // position = centre + direction·radius·(−cos ψ, sin ψ) for a car travelling along ψ
-    return Math.atan2(dz * this.direction, -dx * this.direction);
-  }
-
-  update(car, dt, telemetry) {
-    const o = this.o;
-    const dir = this.direction;
-    if (!this.started) {
-      // Take over the car's speed, angle and distance as they are, so the move eases in rather than snapping
-      this.started = true;
-      this.speed = Math.hypot(car.speed, car.vx, car.vz);
-      this.radius = Math.max(2, Math.hypot(car.position.x - this.center.x, car.position.z - this.center.z));
-      this.travel = this.tangent(car);
-      this.slip = Math.atan2(Math.sin(car.heading - this.travel), Math.cos(car.heading - this.travel));
-    }
-    const radiusGoal = this.tight ? o.tightRadius : this.targetRadius;
-    const powering = this.exiting && this.exitHeading !== null;
-    // Steady speed for the radius: about 1 g of lateral grip
-    const speedGoal = this.exiting ? this.speed : Math.min(o.speed, Math.sqrt(9.81 * 1.05 * this.radius));
-    let slipGoal = dir * (this.tight ? o.tightSlip : o.slip);
-    if (this.exiting) slipGoal = dir * o.exitSlip;
-    let spiral = 0;
-    if (powering) {
-      // Keep orbiting until the way out is close, then let the turn come off: a spiral that ends on the new line
-      const reach = Math.min(this.speed / this.radius, o.exitGrip / Math.max(1, this.speed));
-      // It only ever turns the way it is drifting: a way out behind it is reached by orbiting on round to it
-      let ahead = dir * wrap(this.exitHeading - this.travel);
-      if (ahead < -2 * RAD) ahead += 2 * Math.PI;
-      spiral = dir * clamp(ahead * o.exitTurnGain, 0, reach);
-      // The gas goes down as the car unwinds: at circle speed until the way out is close, so the spiral doesn't swing
-      // wide, then flat out
-      const unwound = clamp(1 - ahead / o.exitUnwind, 0, 1);
-      const cap = this.exitFrom + (o.exitSpeed - this.exitFrom) * unwound;
-      this.speed = Math.max(this.speed, Math.min(cap, this.speed + o.exitAccel * dt));
-      slipGoal = clamp(spiral * o.exitSlipPerTurn, -o.slip, o.slip);
-    } else {
-      this.speed += (speedGoal - this.speed) * (1 - Math.exp(-dt * o.speedRate));
-    }
-    this.radius += (radiusGoal - this.radius) * (1 - Math.exp(-dt * o.radiusRate));
-    this.slip += (slipGoal - this.slip) * (1 - Math.exp(-dt * o.slipRate));
-
-    // Pushed since the last step (a wall, a post, a car it touched): the circle moves with the car rather than pulling it
-    // back, which would also read as a burst of speed
-    if (this.placedX !== undefined) {
-      this.center.x += car.position.x - this.placedX;
-      this.center.z += car.position.z - this.placedZ;
-    }
-    const prevX = car.position.x, prevZ = car.position.z, prevHeading = car.heading;
-    if (powering) {
-      this.travel += spiral * dt;
-      car.position.x += Math.sin(this.travel) * this.speed * dt;
-      car.position.z += Math.cos(this.travel) * this.speed * dt;
-    } else if (this.exiting) {
-      // Run straight out along the last tangent while the angle comes off
-      car.position.x += Math.sin(this.travel) * this.speed * dt;
-      car.position.z += Math.cos(this.travel) * this.speed * dt;
-    } else {
-      this.travel += dir * this.speed / this.radius * dt;
-      car.position.x = this.center.x - dir * this.radius * Math.cos(this.travel);
-      car.position.z = this.center.z + dir * this.radius * Math.sin(this.travel);
-    }
-    car.heading = this.travel + this.slip;
-    this.placedX = car.position.x;
-    this.placedZ = car.position.z;
-
-    // Velocities from the motion itself, split into the car's frame
-    const vx = (car.position.x - prevX) / dt, vz = (car.position.z - prevZ) / dt;
-    const sin = Math.sin(car.heading), cos = Math.cos(car.heading);
-    const forward = vx * sin + vz * cos;
-    const lateral = vx * cos - vz * sin;
-    car.speed = forward;
-    car.vx = cos * lateral;
-    car.vz = -sin * lateral;
-    const turn = Math.atan2(Math.sin(car.heading - prevHeading), Math.cos(car.heading - prevHeading));
-    car.angularVel = turn / dt;
-    car.steerAngle = Math.max(-M5_DRIFT.maxSteer, Math.min(M5_DRIFT.maxSteer, -this.slip * o.counterSteer));
-    car.longAccel = 0;
-    if (telemetry) {
-      telemetry.slipAngle = Math.atan2(lateral, Math.abs(forward));
-      telemetry.rearSlide = Math.abs(lateral - M5_DRIFT.cgToRear * car.angularVel) + 8;
-      telemetry.wheelspin = 1;
-      telemetry.steer = car.steerAngle;
-      telemetry.lateralAccel = -car.angularVel * Math.hypot(vx, vz);
-    }
-  }
+function approachValue(value, target, step) {
+  return value + Math.max(-step, Math.min(step, target - value));
 }
 
 // Heading of the car's velocity over the ground (its nose when it is barely moving)
@@ -707,4 +551,4 @@ function travelHeading(car) {
   return Math.hypot(vx, vz) > 1 ? Math.atan2(vx, vz) : car.heading;
 }
 
-export { AUTOPILOT, DRIFT_CIRCLE, DriftAutopilot, DriftCircle, driverLock };
+export { AUTOPILOT, DriftAutopilot, driverLock, steeringKey, travelHeading };
