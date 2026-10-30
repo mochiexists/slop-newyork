@@ -1396,9 +1396,11 @@ function carPlateTexture() {
  * component controlling reverse lights.
  * Every mask is built once and shared by the colour, roughness, metalness & emissive graphs (TSL turns nodes used
  * more than once into temporaries), so the fragment shader evaluates each SDF a single time.
+ * `seeThrough` (the swimming car, whose driver sits inside) makes the window glass blend: its opacity is the
+ * `material.userData.glassOpacity` uniform (1 = the painted glass every other car has).
  */
-function createLoftedCarMaterial(spec, fixedColorHex = null) {
-  const cacheKey = `${spec.name}_${fixedColorHex ?? 'instanced'}`;
+function createLoftedCarMaterial(spec, fixedColorHex = null, { seeThrough = false } = {}) {
+  const cacheKey = `${spec.name}_${fixedColorHex ?? 'instanced'}${seeThrough ? '_seeThrough' : ''}`;
   if (_carMaterialCache.has(cacheKey)) {
     return _carMaterialCache.get(cacheKey);
   }
@@ -1942,6 +1944,20 @@ function createLoftedCarMaterial(spec, fixedColorHex = null) {
   mat.roughnessNode = roughFn();
   mat.metalnessNode = metalFn();
   mat.emissiveNode = emissiveFn();
+  if (seeThrough) {
+    // Only the glass blends; the mesh's body loft comes before its glasshouse in the index, so whatever is seen
+    // through the glass is already drawn when the glass goes over it
+    const glassOpacity = uniform(1);
+    mat.userData.glassOpacity = glassOpacity;
+    mat.transparent = true;
+    mat.opacityNode = Fn(() => {
+      const o = float(1.0).toVar();
+      If(isWindow.greaterThan(0.5), () => {
+        o.assign(mix(one, glassOpacity, evalWindowGlass().glass));
+      });
+      return o;
+    })();
+  }
 
   _carMaterialCache.set(cacheKey, mat);
   return mat;
