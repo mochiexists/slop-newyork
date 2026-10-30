@@ -87,10 +87,12 @@ const UNSTICK_AIM = 15; // m down the route that the nose is swung toward while 
 const UNSTICK_ALIGNED = 5 * RAD; // to within this
 const SIM_STEPS_PER_SECOND = 240; // the drift model's step rate (controllers.js steps the M5 the same)
 
-// The show's swimmer is sketchier than the autopilot's defaults (drift-autopilot.js AUTOPILOT): flat out at 100 mph,
-// threading gaps with a hand's width of air and going out of its way for a close pass
+// The show's swimmer is sketchier than the autopilot's defaults (drift-autopilot.js AUTOPILOT): flat out at 90 mph,
+// threading gaps with a hand's width of air and going out of its way for a close pass, but sure of its line before it
+// commits to a split (planSpread: at that speed a row comes up every second or two)
 const SHOW_SWIMMING = {
-  cruiseSpeed: 45,
+  cruiseSpeed: 40,
+  planSpread: 0.6,
   passMargin: 0.2,
   closeBonus: 60,
   splitBonus: 100

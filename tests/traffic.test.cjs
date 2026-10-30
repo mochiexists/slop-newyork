@@ -423,7 +423,7 @@ test('a standing car does not turn, however far it is off its line', () => {
 test('the AI show lays out its route as rows of two cars side by side, a split apart, down the leg only', () => {
   const src = readFileSync(join(__dirname, '../js/traffic.js'), 'utf8');
   const block = src.match(/^const SHOW_ROWS = [^]*?^function showTrafficLayout[^]*?^}/m)[0];
-  const showTrafficLayout = new Function(`${block}; return showTrafficLayout;`)();
+  const [showTrafficLayout, SHOW_ROWS] = new Function(`${block}; return [showTrafficLayout, SHOW_ROWS];`)();
   // A leg 300 m south (+z) down a four-lane avenue in two blocks, its northbound twin, and a two-lane street 50 m off
   const edge = (sx, sz, dx, dz, len, lanes) => ({ sx, sz, dx, dz, rx: -dz, rz: dx, len, lanes });
   const blocks = [edge(7.2, 6, 0, 1, 138, [1.8, 5.4, 9, 12.6]), edge(7.2, 156, 0, 1, 138, [1.8, 5.4, 9, 12.6])];
@@ -432,7 +432,8 @@ test('the AI show lays out its route as rows of two cars side by side, a split a
   let seed = 7;
   const random = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
   const { placements, stretches } = showTrafficLayout([...blocks, northbound, offLeg], { x: 0, z: 0 }, { x: 0, z: 300 }, {}, random);
-  assert.ok(placements.length >= 16, `rows all down the leg (${placements.length / 2})`);
+  const rows = placements.length / 2;
+  assert.ok(rows >= Math.floor(235 / (SHOW_ROWS.spacing * 1.3)), `rows all down the leg (${rows})`);
   assert.deepEqual(stretches.map((s) => s.edge), blocks, 'it takes over the leg\'s own lanes only');
   let lastZ = -Infinity;
   for (let i = 0; i < placements.length; i += 2) {

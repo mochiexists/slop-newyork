@@ -125,8 +125,9 @@ function seededRandom(seed) {
 // `random` () → [0, 1), and the stretch of each edge they take over, from the leg's start to the last row:
 // { edge, from, to }.
 const SHOW_ROWS = {
-  spacing: 22, // m between rows, give or take 30%, on a road `wideLanes` wide (further apart on a narrower one, where
-  wideLanes: 4, // a row fills more of it, so the swim car can straighten up between them)
+  spacing: 50, // m between rows, give or take 30%, on a road `wideLanes` wide (further apart on a narrower one, where
+  wideLanes: 4, // a row fills more of it, so the swim car can straighten up between them). Far enough apart for the
+  // swim car to line up on the next split at 80 mph; at 22 m it met a row every half second and crawled at 45 mph
   bias: 0.8, // m toward its lane's outer edge each car keeps: 5.2 m centre to centre, 0.7 m of air either side
   pace: 6, // m/s the staged cars drive at (Midtown's crawl): the swim car comes up on them fast, and they are still
   // on the stretch when it gets there
