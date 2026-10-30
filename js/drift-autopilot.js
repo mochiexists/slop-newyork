@@ -279,15 +279,13 @@ class DriftAutopilot {
       for (let next = 0; next < (split ? gridCount : 1); next++) {
         const then = split ? lines[next] : y; // the line it moves on to once past a split pair
         // Only the cars this move could come near: across the street, the move spans the car's line to y (plus any
-        // overshoot); a car spans where it drifts to over the look-ahead, plus the passing reach and the margin's spread
+        // overshoot); a car spans where it drifts to over the look-ahead, plus the passing reach
         const low = Math.min(carLat, y, then, carLat + overshoot), high = Math.max(carLat, y, then, carLat + overshoot);
-        const spread = o.planSpread * o.planTime;
         let nearCount = 0;
         for (let i = 0; i < count; i++) {
           const ob = seen[i];
           const drift = ob.vLateral * o.planTime;
-          const reach = ob.reach + spread;
-          if (ob.lateral + Math.max(0, drift) + reach > low && ob.lateral + Math.min(0, drift) - reach < high) {
+          if (ob.lateral + Math.max(0, drift) + ob.reach > low && ob.lateral + Math.min(0, drift) - ob.reach < high) {
             near[nearCount++] = ob;
           }
         }
