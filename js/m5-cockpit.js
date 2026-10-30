@@ -56,6 +56,7 @@ const DISPLAY_Y = [0.975, 1.095];
 const DISPLAY_SIZE = [1536, 224]; // canvas pixels
 const DISPLAY_REFRESH = 0.2; // s between redraws
 const MPH = 2.23694;
+const TACH_RPM = 7000; // the tach bar's full scale (its marks run 0-7 thousand)
 const MAP_SCALE = 1 / 0.6; // centre-screen map, px per metre
 
 const COLORS = {
@@ -678,12 +679,11 @@ class M5Cockpit {
     // --- Instrument cluster: tach bar along the top, speed in the middle, gear and the M drive mode beside it
     const mph = Math.abs(c.speed) * MPH;
     const stopped = Math.abs(c.speed) < 0.3;
-    let gear = `M${Math.min(8, 1 + Math.floor(mph / 22))}`;
-    if (c.speed < -0.2) gear = 'R';
-    else if (stopped) gear = 'N';
-    // no gearbox is simulated: the revs climb through 22 mph bands, and wheelspin flares them
-    const spin = Math.min(1, (c.drift?.wheelspin ?? 0) * 0.08);
-    const rpm = stopped ? 0.11 + spin * 0.6 : Math.min(1, 0.28 + ((mph % 22) / 22) * 0.62 + spin * 0.4);
+    // The gearbox's own gear and revs (drift-physics.js): D in the automatic, M in manual (T), R reversing
+    let gear = 'N';
+    if (c.gear === -1 || c.speed < -0.2) gear = 'R';
+    else if (c.gear >= 1) gear = `${c.manual ? 'M' : 'D'}${c.gear}`;
+    const rpm = Math.min(1, (c.rpm ?? 0) / TACH_RPM);
     const barX = 70, barY = 34, barW = split - 140, barH = 16;
     ctx.fillStyle = '#151a22';
     ctx.fillRect(barX, barY, barW, barH);

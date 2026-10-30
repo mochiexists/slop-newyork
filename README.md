@@ -21,10 +21,12 @@ What's in it:
   3-2-1 count before the car is yours. The traffic is seeded, so it plays the same each time. Any driving key takes
   the wheel early.
 - **Driving** (Swimming mode, **5**): W gas, S brake/reverse, A/D steer, Space handbrake. W+S at a standstill is a
-  burnout; gas and full lock in a slide is a drift circle (Space tightens it). Drifts and close calls (a car passed with
-  under a metre to spare) score, and close calls in a row chain.
-- **G** plays or stops George Michael, **F** flips the bird, **K** swaps the engine voice, **6–0** pick the camera
-  (**8** is the driver's seat).
+  burnout. Drifting is the physics': power over or flick it with the handbrake, hold the slide on the gas (more gas,
+  a wider and faster drift), and the eight-speed shifts up mid-slide off the limiter. **T** switches to the manual
+  gearbox, **Z**/**X** shift down/up. Drifts and close calls (a car passed with under a metre to spare) score, close
+  calls in a row chain, and one each side at once is a split between two cars, worth double.
+- **G** plays or stops George Michael, **F** flips the bird (out of the window, also from the driver's seat), **K**
+  swaps the engine voice, **6–0** pick the camera (**8** is the driver's seat).
 
 The music streams from YouTube's own player; nothing of it is stored here.
 
