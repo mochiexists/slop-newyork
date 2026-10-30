@@ -36,7 +36,11 @@ const M5_DRIFT = {
   maxSteer: 0.62, // rad of front-wheel lock at parking speeds
   highSpeedSteer: 0.12, // rad left of the driver's own lock at full speed (the assist can add more)
   steerRate: 3.2, // rad/s the wheels turn toward the target
-  counterSteer: 0.9, // assist: front wheels follow the slide by this share of the body slip angle
+  counterSteer: 0.9, // assist: front wheels follow the slide by this share of the body slip angle past assistFrom
+  // Body slip the assist leaves alone (a tire at its cornering limit has ~4° anyway). 5° gives a sharper turn-in at
+  // speed (1.1 g instead of ~0.85 g at 40 m/s), but the autopilot's 85 mph weave counts on the assist's catch: 0 until
+  // the AI drives through the keyboard driver and is tuned on it.
+  assistFrom: 0,
   slideFrom: 6 * RAD, // body slip where the drift steering starts taking over from the grip steering,
   slideBlend: 10 * RAD, // all of it this much further on
   slideSteer: 10 * RAD, // front slip the driver's full lock asks for in a slide (the tire's peak is at 8°)
@@ -201,7 +205,8 @@ function stepDriftCar(car, input, dt, params = M5_DRIFT, out = stepDriftCar.tele
   const speedAbs = Math.abs(u);
   const driverLock = params.highSpeedSteer + (params.maxSteer - params.highSpeedSteer) / (1 + (speedAbs / 14) ** 2);
   const bodySlip = speedAbs > 1 ? Math.atan2(v, speedAbs) : 0;
-  const grip = input.steer * driverLock + (u > 3 ? params.counterSteer * bodySlip * assistLevel : 0);
+  const catching = Math.sign(bodySlip) * Math.max(0, Math.abs(bodySlip) - params.assistFrom);
+  const grip = input.steer * driverLock + (u > 3 ? params.counterSteer * catching * assistLevel : 0);
   const slide = u > 3 ? Math.max(0, Math.min(1, (Math.abs(bodySlip) - params.slideFrom) / params.slideBlend)) * assistLevel : 0;
   const frontPath = Math.atan2(v + a * r, Math.max(speedAbs, params.minSlipSpeed));
   const drifting = frontPath + input.steer * params.slideSteer;
