@@ -138,7 +138,8 @@ test('the traction control launches an M3 Competition in its 0-60 time', () => {
     for (let i = 0; i < STEPS; i++) stepDriftCar(car, input, FRAME / STEPS, M5_DRIFT, telemetry);
     t += FRAME;
   }
-  assert.ok(t > 3.0 && t < 3.6, `0-60 mph in ${t.toFixed(2)} s`);
+  // (the tuned G80 M3 Competition xDrive: about 2.8 s; M xDrive pulls on all four in a straight line)
+  assert.ok(t > 2.6 && t < 3.1, `0-60 mph in ${t.toFixed(2)} s`);
 });
 
 test('reset clears the held state between teleports', () => {

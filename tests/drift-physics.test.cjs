@@ -33,14 +33,17 @@ test('the tire curve peaks at its slip angle and keeps sliding grip past it', ()
   assert.equal(tireCurve(-0.3, M5_DRIFT), -tireCurve(0.3, M5_DRIFT));
 });
 
-test('full throttle reaches 100 km/h in M3 Competition time (3.4 s) through the gears to a drag-limited top speed', () => {
+test('full throttle on all four (xDrive) reaches 100 km/h in a tuned M3 Competition\'s time through the gears to a drag-limited top speed', () => {
   const c = car();
   let t = 0;
   while (c.speed < 100 / 3.6 && t < 10) {
     stepDriftCar(c, { ...idle, throttle: 1 }, DT);
     t += DT;
   }
-  assert.ok(t > 3.1 && t < 3.7, `0-100 km/h in ${t.toFixed(2)} s`);
+  assert.ok(t > 2.4 && t < 2.9, `0-100 km/h in ${t.toFixed(2)} s`);
+  const rearOnly = car();
+  for (t = 0; rearOnly.speed < 100 / 3.6 && t < 10; t += DT) stepDriftCar(rearOnly, { ...idle, throttle: 1, xDrive: 0 }, DT);
+  assert.ok(t > 3.1 && t < 3.7, `and on the rears alone (xDrive open) in ${t.toFixed(2)} s`);
   assert.equal(c.gear, 3);
   assert.equal(c.heading, 0);
   drive(c, 40, { ...idle, throttle: 1 });
@@ -118,7 +121,8 @@ test('a handbrake flick into throttle holds a drift, and letting go straightens 
 
 test('power oversteer from low speed is caught by the counter-steer assist', () => {
   const c = car(10);
-  const slips = drive(c, 4, { ...idle, throttle: 1, steer: 1 });
+  // (at full lock the keyboard driver has xDrive's centre clutch open: the rears take the drive)
+  const slips = drive(c, 4, { ...idle, throttle: 1, steer: 1, xDrive: 0 });
   assert.ok(Math.min(...slips) < -25 * RAD, 'full throttle at full lock steps the tail out');
   assert.ok(Math.min(...slips) > -80 * RAD, 'without spinning round');
   assert.ok(c.speed > 8, 'and keeps driving');
@@ -138,10 +142,11 @@ test('a burnout spins the rears on the spot, and letting the brake go launches t
 
 test('wheelspin builds through the driveline inertia and dies away after a lift', () => {
   const c = car(10);
-  const first = stepDriftCar(c, { ...idle, throttle: 1 }, DT).wheelspin;
+  const rearDrive = { ...idle, throttle: 1, xDrive: 0 };
+  const first = stepDriftCar(c, rearDrive, DT).wheelspin;
   assert.ok(first < 0.1, `one step of full throttle spins the rears up only a little: ${first}`);
   let t = 0;
-  while (stepDriftCar(c, { ...idle, throttle: 1 }, DT).wheelspin < 1 && t < 1) t += DT;
+  while (stepDriftCar(c, rearDrive, DT).wheelspin < 1 && t < 1) t += DT;
   assert.ok(t > 0.05 && t < 0.3, `full wheelspin after ${t.toFixed(3)} s`);
   t = 0;
   while (stepDriftCar(c, idle, DT).wheelspin > 0 && t < 1) t += DT;

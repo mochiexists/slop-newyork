@@ -85,7 +85,10 @@ const M5_DRIFT = {
   wheelInertia: 2.6, // kg·m²: both rear wheels and tires
   engineInertia: 0.2, // kg·m²: crank, flywheel and torque converter, felt through the gearing squared
   peakSlipRatio: 0.07, // longitudinal slip (wheel surface over road speed) of the peak drive force: performance tires
-  frontDrive: 0, // M xDrive's share of the drive to the front axle (0: 2WD mode)
+  // M xDrive in 4WD Sport: the front axle takes a share of the drive while the car grips (it pulls away on all four),
+  // and next to none once it is sideways, so it still drifts on the rears; none with the handbrake or the line lock
+  frontDrive: 0.35,
+  frontDriveSlide: 0.05,
   fullSpin: 4 // m/s past the peak slip the tire surface outruns the road at full wheelspin (swim-engine.js hears 4 too)
 };
 
@@ -138,6 +141,13 @@ function fullDriveForce(car, params = M5_DRIFT) {
   const gear = car.gear >= 1 ? car.gear : cruiseGear(car.speed, params);
   const rpm = Math.max(rpmAt(car.speed, gear, params), params.stallRpm);
   return wheelForce(Math.min(rpm, params.redline), gear, car.speed, 1, params);
+}
+
+// M xDrive's share of the drive to the front axle at a body slip angle: from frontDrive gripping to frontDriveSlide
+// in a slide, over the same slip the drift steering takes over in
+function frontDriveShare(bodySlip, params) {
+  const sliding = Math.max(0, Math.min(1, (Math.abs(bodySlip) - params.slideFrom) / params.slideBlend));
+  return params.frontDrive + (params.frontDriveSlide - params.frontDrive) * sliding;
 }
 
 // The automatic: up at the shift point (earlier while the rears spin at the limiter and the car is gaining speed),
@@ -197,7 +207,8 @@ function driveForce(speed, throttle, params) {
  * Advances the car by one short step (call it at 120 Hz or more).
  * input: throttle 0..1, brake 0..1, reverse 0..1, steer -1..1 (+ left), handbrake 0..1, burnout 0..1 (line lock:
  * front brakes hold while the throttle spins the rears), assist 0..1 (counter-steer and slide limit; default 1, the
- * autopilot turns it off for donuts).
+ * autopilot turns it off for donuts), xDrive 0..1 (share of xDrive's front split engaged; default 1, the keyboard
+ * driver opens the centre clutch as the driver commits to a slide, as M xDrive's 4WD Sport does).
  * Returns the step's telemetry (the same object each call): body slip angle, rear slide speed, wheelspin and loads.
  */
 function stepDriftCar(car, input, dt, params = M5_DRIFT, out = stepDriftCar.telemetry) {
@@ -262,8 +273,9 @@ function stepDriftCar(car, input, dt, params = M5_DRIFT, out = stepDriftCar.tele
     if (throttle > 0 && car.limiterTime === 0) engineForce = wheelForce(rpm, car.gear, u, throttle, params);
     car.rpm = Math.min(rpm, params.redline + 200);
   }
-  let rearLong = engineForce * (1 - params.frontDrive);
-  let frontLong = engineForce * params.frontDrive;
+  const toFront = input.handbrake > 0 || burnout ? 0 : frontDriveShare(bodySlip, params) * (input.xDrive ?? 1);
+  let rearLong = engineForce * (1 - toFront);
+  let frontLong = engineForce * toFront;
   const brakeForce = input.brake * params.brakeGrip;
   if (brakeForce > 0 && speedAbs > 0.05) {
     frontLong -= direction * brakeForce * loadFront;
@@ -410,6 +422,7 @@ const KEYBOARD_DRIVER = {
   liftTime: 0.08, // s to lift off it
   tractionShare: 0.9, // share of the rear tires' traction the traction control gives the engine going straight
   cornerShare: 0.6, // ... and at full lock, keeping the rest of the friction circle for cornering
+  xDriveLock: 0.3, // share of the lock by which xDrive's centre clutch has opened all the way (rear drive)
   commitDelay: 0.4, // s of gas and lock held before the traction control lets the rears spin: a power-over
   commitTime: 0.25, // s over which it lets go (and takes over again)
   slideSlip: 10 * RAD, // body slip that counts as a slide under way: the throttle may hold it
@@ -435,7 +448,7 @@ class KeyboardDriver {
   constructor(params = KEYBOARD_DRIVER, model = M5_DRIFT) {
     this.params = params;
     this.model = model; // the drift model's car parameters
-    this.input = { throttle: 0, brake: 0, reverse: 0, steer: 0, handbrake: 0, burnout: 0, assist: 1 };
+    this.input = { throttle: 0, brake: 0, reverse: 0, steer: 0, handbrake: 0, burnout: 0, assist: 1, xDrive: 1 };
     this.reset();
   }
 
@@ -453,6 +466,7 @@ class KeyboardDriver {
     this.counterHeld = 0; // s the counter-steer key has been held
     for (const key of Object.keys(this.input)) this.input[key] = 0;
     this.input.assist = 1;
+    this.input.xDrive = 1;
   }
 
   /**
@@ -495,17 +509,21 @@ class KeyboardDriver {
     }
     input.steer = this.steer;
 
-    // Traction control: the drive force the rears can take beside the cornering they're doing, from the same load
-    // transfer the model uses
+    // Traction control: the drive force the tires can take beside the cornering they're doing, from the same load
+    // transfer the model uses, on whichever axle runs out first with xDrive's split
     const m = this.model;
     const weight = m.mass * GRAVITY;
     const wheelbase = m.cgToFront + m.cgToRear;
-    const loadRear = Math.max(weight * 0.15, (weight * m.cgToFront + m.mass * (car.longAccel || 0) * m.cgHeight) / wheelbase);
+    const transfer = m.mass * (car.longAccel || 0) * m.cgHeight;
+    const loadRear = Math.max(weight * 0.15, (weight * m.cgToFront + transfer) / wheelbase);
+    const loadFront = Math.max(weight * 0.15, (weight * m.cgToRear - transfer) / wheelbase);
     const turning = Math.abs(this.steer);
     const share = p.tractionShare + (p.cornerShare - p.tractionShare) * turning;
     const grip = m.launchGrip + (m.tractionGrip - m.launchGrip) * Math.min(1, turning * 4);
+    const toFront = frontDriveShare(slip, m) * input.xDrive; // (last frame's clutch, as the car has it now)
+    const holds = Math.min(grip * loadRear / (1 - toFront), toFront > 0 ? m.frontGrip * loadFront / toFront : Infinity);
     const full = fullDriveForce(car, m);
-    const controlled = full > 0 ? Math.min(1, share * grip * loadRear / full) : 1;
+    const controlled = full > 0 ? Math.min(1, share * holds / full) : 1;
 
     // The driver commits by holding gas and lock (a power-over), pulling the handbrake, or already being sideways
     const sliding = Math.abs(slip) > p.slideSlip;
@@ -530,6 +548,9 @@ class KeyboardDriver {
     if (handbrake > 0 || sliding) this.commit = 1;
     else this.commit = approach(this.commit, this.lockHeld > p.commitDelay ? 1 : 0, dt / p.commitTime);
     input.throttle = this.throttle * Math.min(1, controlled + (1 - controlled) * this.commit);
+    // The centre clutch closes for a straight-line pull and opens with the lock wound on (the front tires keep their
+    // grip for turning) and as the driver commits to a slide: the rears take the drive
+    input.xDrive = (1 - this.commit) * Math.max(0, 1 - turning / p.xDriveLock);
 
     // In a slide, the throttle for the angle: the tail is out to the side opposite the turn (a left drift slides right)
     this.slipRate += ((Math.abs(slip) - this.slip) / dt - this.slipRate) * Math.min(1, dt * 20);

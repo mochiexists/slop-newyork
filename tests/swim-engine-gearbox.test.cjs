@@ -51,7 +51,9 @@ test('each physics upshift is exactly one shift in the sound, in the same frame 
 
 test('the revs follow the physics, easing only through a shift', () => {
   const log = play(car(), createEngineState(), 10, { ...pedals, throttle: 1 });
-  let sinceShift = 0; // (and from the launch, where the converter lets the physics revs jump at once)
+  // (and from the launch, where the converter lets the physics revs jump at once and the sound's standstill blip
+  // flares over them: on all four the tires don't spin the revs past it, so it shows for its 0.22 s and the settle)
+  let sinceShift = -0.3;
   for (const frame of log) {
     sinceShift = frame.upshift ? 0 : sinceShift + FRAME;
     if (sinceShift > 0.2) {
