@@ -46,8 +46,12 @@ const AUTOPILOT = {
   crawlAcross: 0.58, // ...and no more than this share of its speed along the street (pointing 30° across it)
   lateralAccel: 6, // m/s² it plans to shed its sideways speed at by the far side of a move (the tires hold about 1 g,
   // and the car has to turn back straight there)
-  lateralSwing: 7, // m/s² its sideways speed swings toward the move's at: the wheel winding on, the car turning to it
-  planSpread: 0.4, // m/s the passing margin widens by down a plan: how far its moves drift off the plan on the keys
+  lateralSwing: 6, // m/s² its sideways speed swings toward the move's at: the wheel winding on, the car turning to it
+  swimSlip: 6 * RAD, // slip past which a swimming flick lifts off the gas until the tail is back in line
+  slipCatch: 0.75, // wheel angle per radian of slip it counter-steers with, swimming
+  swimLock: 0.6, // share of the lock it swims with at most: the tires' grip peaks there (about 1.1 g) at any speed
+  planSpread: 0.1, // m the passing margin widens by per metre a plan has moved across: how far a move on the keys
+  // drifts off the line it was planned on (the lane-change probe: about half a metre over a 3-lane swing)
   settleTime: 0.5, // s it closes the last of a move in (the sideways speed falls off linearly over the last metre)
   yawDamping: 0.05, // s: wheel angle taken off per rad/s the car is turning, swimming (catches a flick as it arrives)
   steerLead: 0.15, // s ahead it reads the gap to its line from its sideways speed: the wheel's lag, swimming
@@ -281,11 +285,14 @@ class DriftAutopilot {
         // Only the cars this move could come near: across the street, the move spans the car's line to y (plus any
         // overshoot); a car spans where it drifts to over the look-ahead, plus the passing reach
         const low = Math.min(carLat, y, then, carLat + overshoot), high = Math.max(carLat, y, then, carLat + overshoot);
+        // (and the passing margin at its widest, the whole move across: see the spread in the flight below)
+        const widest = o.planSpread * (high - low);
         let nearCount = 0;
         for (let i = 0; i < count; i++) {
           const ob = seen[i];
           const drift = ob.vLateral * o.planTime;
-          if (ob.lateral + Math.max(0, drift) + ob.reach > low && ob.lateral + Math.min(0, drift) - ob.reach < high) {
+          const reach = ob.reach + widest;
+          if (ob.lateral + Math.max(0, drift) + reach > low && ob.lateral + Math.min(0, drift) - reach < high) {
             near[nearCount++] = ob;
           }
         }
@@ -322,16 +329,18 @@ class DriftAutopilot {
               const ahead = ob.along + ob.vAlong * t - travelled;
               const across = ob.lateral + ob.vLateral * t - lat;
               const gapAlong = Math.abs(ahead) - ob.length;
-              // (the further ahead, the less sure it is where on the keys it will really be across the street: the margin
-              // widens by planSpread a second)
-              const gapAcross = Math.abs(across) - ob.reach - o.planSpread * t;
+              // (the further it has moved across, the less sure it is where on the keys it really is: the margin widens by
+              // a share of the move so far. A split of the pair it is lined up on keeps the swimmer's margin; a swing
+              // across a lane or two to a gap in the next row gets the room its error takes)
+              const spread = o.planSpread * Math.abs(lat - carLat);
+              const gapAcross = Math.abs(across) - ob.reach - spread;
               if (gapAlong < 0 && gapAcross < 0) {
                 hitAt = t;
                 break;
               }
               // A close call, as the swim mode scores it: the air beside the car while alongside it, then passing it
               if (gapAlong + o.followMargin < 0) {
-                air[i] = Math.min(air[i], gapAcross + o.planSpread * t + o.passMargin);
+                air[i] = Math.min(air[i], gapAcross + spread + o.passMargin);
                 side[i] = Math.sign(across);
               } else if (ahead < 0 && air[i] < Infinity && passedAt[i] === Infinity && speed - ob.vAlong > o.closeSpeed) {
                 passedAt[i] = t;
@@ -586,7 +595,9 @@ class DriftAutopilot {
     const travel = car.heading + slip;
     const error = wrap(street + moveAngle - travel);
     // (swimming, the wheel also leans against the car's own turning, so a flick is caught as it arrives, not after)
-    const wheel = error * o.steerGain - (this.cornering ? 0 : o.yawDamping * car.angularVel);
+    // and against the nose swinging out past the way the car is going (slip), which a flick back across builds faster
+    // than the travel turns
+    const wheel = error * o.steerGain - (this.cornering ? 0 : o.yawDamping * car.angularVel - o.slipCatch * slip);
     // Pointing the wrong way (more off the street than the quickest move across points it): slow to a speed the front
     // tires can turn at, about 1 g of grip over the radius it takes to swing back. A move across itself never slows it.
     const widest = Math.atan2(moveSpeed, Math.max(1, Math.abs(u)));
@@ -599,7 +610,10 @@ class DriftAutopilot {
         feedForward = Math.min(0, feedForward);
       }
     }
-    input.steer = kicking ? Math.sign(turn) : clamp(wheel / driverLock(u, this.model), -1, 1);
+    // (swimming, no more lock than the tires turn into grip: past it a flick back across swings the tail out, and the
+    // keyboard driver then reads the held key as a save and unwinds the wheel, so the move is never caught)
+    const most = this.cornering ? 1 : o.swimLock;
+    input.steer = kicking ? Math.sign(turn) : clamp(wheel / driverLock(u, this.model), -most, most);
     input.handbrake = this.kick > 0 ? 1 : 0;
     const slipAbs = Math.abs(slip);
     if (this.cornering && !kicking) {
@@ -640,8 +654,10 @@ class DriftAutopilot {
         input.brake = clamp(-force / (p.brakeGrip * p.mass * GRAVITY), 0, 1);
       } else {
         input.brake = 0;
-        // Easing off while the car is still sliding after a corner, so the tail comes back in line
-        const sliding = clamp(1 - (slipAbs - o.tractionSlip) / (12 * RAD), 0.05, 1);
+        // Easing off while the car is still sliding after a corner, so the tail comes back in line; and off the gas
+        // altogether once a flick swings the tail out past swimSlip, as a player lifts: held into the slide, the keyboard
+        // driver would let the rears spin, they'd lose their grip and the move across would never be caught
+        const sliding = slipAbs > o.swimSlip ? 0 : clamp(1 - (slipAbs - o.tractionSlip) / (12 * RAD), 0.05, 1);
         input.throttle = Math.min(1, force / fullDriveForce(car, p)) * sliding;
       }
     }

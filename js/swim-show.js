@@ -92,7 +92,7 @@ const SIM_STEPS_PER_SECOND = 240; // the drift model's step rate (controllers.js
 // commits to a split (planSpread: at that speed a row comes up every second or two)
 const SHOW_SWIMMING = {
   cruiseSpeed: 40,
-  planSpread: 0.6,
+  planSpread: 0.3,
   passMargin: 0.2,
   closeBonus: 60,
   splitBonus: 100
