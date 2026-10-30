@@ -13,12 +13,13 @@ const RAD = Math.PI / 180;
 
 // George Michael's official video, streamed by YouTube's own player when swimming begins; nothing is stored here.
 // Label uploads often refuse embedding (player error 150, seen from localhost on 2026-10-29), so a lyric upload that
-// embeds is the fallback. The sax riff opens the track, so it plays from the top; `riff` is where it comes in on each
-// upload (measured from their audio on 2026-10-30), for the show to start the song right on it.
+// embeds is the fallback. Driving, it plays from the top; the show starts it where the BMW donut short (REFERENCE_CLIPS)
+// picks it up, the chorus at 2:39: `chorus` is that point on each upload, found by matching the short's audio against
+// theirs on 2026-10-30 (a clear match, unbroken for the short's 21 s).
 const CARELESS_WHISPER = {
   videoIds: ['izGwDsrQ1eQ', 'JqIHlDVqUTw'],
   start: 0,
-  riff: [0, 0.2],
+  chorus: [159.25, 159.45],
   title: 'Careless Whisper',
   artist: 'George Michael'
 };
@@ -313,8 +314,9 @@ class SwimRadio {
           onReady: () => {
             this.ready = true;
             this.applyMute();
-            if (this.wanted) this.player.playVideo();
-            else if (this.cued) this.cueRiff();
+            // The show's drift may have begun while the player loaded: start on the chorus all the same
+            if (this.cued) this.cueChorus();
+            else if (this.wanted) this.player.playVideo();
             resolve();
           },
           onStateChange: (event) => this.onState(event.data),
@@ -332,7 +334,7 @@ class SwimRadio {
       this.setStatus('offline');
       return;
     }
-    const startSeconds = this.cued ? CARELESS_WHISPER.riff[this.source] : CARELESS_WHISPER.start;
+    const startSeconds = this.cued ? CARELESS_WHISPER.chorus[this.source] : CARELESS_WHISPER.start;
     const options = { videoId: CARELESS_WHISPER.videoIds[this.source], startSeconds };
     if (this.wanted) this.player.loadVideoById(options);
     else this.player.cueVideoById(options);
@@ -340,7 +342,11 @@ class SwimRadio {
 
   onState(state) {
     // 1 playing, 2 paused, 0 ended (loop the track while swimming)
-    if (state === 1) this.setStatus('playing');
+    if (state === 1) {
+      // On the chorus now: from here on the track plays on (and loops from the top) like any other drive
+      this.cued = false;
+      this.setStatus('playing');
+    }
     else if (state === 2) this.setStatus('paused');
     else if (state === 0 && this.wanted) {
       this.player.seekTo(CARELESS_WHISPER.start, true);
@@ -369,20 +375,23 @@ class SwimRadio {
     }, 2500);
   }
 
-  // The show holds the song back, cued on the sax riff, until the car swings into its drift (play() then starts it
-  // right on the riff)
+  // The show holds the song back, cued on the chorus, until the car swings into its drift (play() then starts it
+  // right there)
   cue() {
     this.card?.removeAttribute('hidden');
     this.wanted = false;
     this.cued = true;
-    if (this.ready) this.cueRiff();
+    if (this.ready) this.cueChorus();
     else this.load();
     this.setStatus('paused');
   }
 
-  cueRiff() {
+  // Loads the chorus, playing it at once if the drift has already begun
+  cueChorus() {
     const source = this.source ?? 0;
-    this.player.cueVideoById({ videoId: CARELESS_WHISPER.videoIds[source], startSeconds: CARELESS_WHISPER.riff[source] });
+    const options = { videoId: CARELESS_WHISPER.videoIds[source], startSeconds: CARELESS_WHISPER.chorus[source] };
+    if (this.wanted) this.player.loadVideoById(options);
+    else this.player.cueVideoById(options);
   }
 
   pause() {
