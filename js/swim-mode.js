@@ -62,6 +62,10 @@ const CLOSE_GAP = 1; // m of air at most between the cars for a pass to count as
 const CLOSE_SPEED = 8; // m/s at least the swimmer passes the other car by
 const CLOSE_CHAIN_TIME = 3; // s between close calls that keeps a chain going
 const CLOSE_CHAIN_MAX = 5;
+// A split: close calls on both sides within this many seconds, the swimmer through the gap between two cars. It scores
+// SPLIT_BONUS times as much.
+const SPLIT_WINDOW = 0.8;
+const SPLIT_BONUS = 2;
 const CLOSE_RANGE = 14; // m around the car that traffic is checked for close calls
 const SWIM_HALF_WIDTH = 0.97; // m: the swim car's half width and half length
 const SWIM_HALF_LENGTH = 2.52;
@@ -424,12 +428,19 @@ class SwimRadio {
 class CloseCalls {
   constructor() {
     this.alongside = new Map(); // vehicle → closest gap while alongside
+    this.side = new Map(); // vehicle → the side it was passed on (+1 left, -1 right)
     this.chain = 0;
     this.sinceLast = Infinity;
+    this.clock = 0;
+    this.lastSide = 0; // the side and time of the last close call, to spot a split
+    this.lastAt = -Infinity;
+    this.split = false; // the close call update() just scored was a split
   }
 
   update(dt, car, ...groups) {
     this.sinceLast += dt;
+    this.clock += dt;
+    this.split = false;
     if (this.sinceLast > CLOSE_CHAIN_TIME) this.chain = 0;
     const sin = Math.sin(car.heading), cos = Math.cos(car.heading);
     let points = 0;
@@ -438,6 +449,7 @@ class CloseCalls {
         const dx = v.x - car.position.x, dz = v.z - car.position.z;
         if (!v.edge || Math.abs(dx) > CLOSE_RANGE || Math.abs(dz) > CLOSE_RANGE) {
           this.alongside.delete(v);
+          this.side.delete(v);
           continue;
         }
         // In the swim car's frame: metres ahead, to the left, and the other car's extent along and across it
@@ -451,18 +463,25 @@ class CloseCalls {
         if (Math.abs(ahead) < reachAlong) {
           const closest = this.alongside.get(v);
           this.alongside.set(v, closest === undefined ? gap : Math.min(closest, gap));
+          this.side.set(v, Math.sign(left) || 1);
           continue;
         }
         const closest = this.alongside.get(v);
         if (closest === undefined) continue;
+        const side = this.side.get(v);
         this.alongside.delete(v);
+        this.side.delete(v);
         // Out the back, untouched, close, and passed rather than drifted past
         const passing = car.speed - (v.speed || 0) * Math.cos(rel);
         if (ahead < 0 && closest > 0 && closest < CLOSE_GAP && passing > CLOSE_SPEED) {
           this.chain = Math.min(CLOSE_CHAIN_MAX, this.chain + 1);
           this.sinceLast = 0;
           const closeness = 1 - closest / CLOSE_GAP;
-          points += Math.round((100 + 400 * closeness) * Math.min(2, car.speed / 25) * this.chain);
+          const split = side === -this.lastSide && this.clock - this.lastAt < SPLIT_WINDOW;
+          if (split) this.split = true;
+          this.lastSide = side;
+          this.lastAt = this.clock;
+          points += Math.round((100 + 400 * closeness) * Math.min(2, car.speed / 25) * this.chain * (split ? SPLIT_BONUS : 1));
         }
       }
     }
@@ -693,7 +712,8 @@ class SwimDirector {
       const close = this.closeCalls.update(dt, c, this.traffic.cars, this.traffic.buses);
       if (close) {
         const chain = this.closeCalls.chain > 1 ? ` ×${this.closeCalls.chain}` : '';
-        this.score.award(close, `CLOSE CALL${chain} +${close.toLocaleString('en-US')}`);
+        const label = this.closeCalls.split ? 'SPLIT' : 'CLOSE CALL';
+        this.score.award(close, `${label}${chain} +${close.toLocaleString('en-US')}`);
         this.screech.whoosh(Math.min(1, Math.abs(c.speed) / 35));
       }
       const contacts = this.rearContacts();

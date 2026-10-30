@@ -90,3 +90,28 @@ test('a close call scores a car passed at speed with less than a metre of air, a
   assert.equal(calls.chain, 2);
   assert.equal(pass(-0.1), 0, 'a scrape is a crash, not a close call');
 });
+
+test('a close call on each side at once is a split between two cars, worth double', () => {
+  const dt = 1 / 60;
+  // The swimmer at 30 m/s up +z through a gap between two cars at 10 m/s: 0.4 m of air either side
+  function thread(stagger) {
+    const calls = new swim.CloseCalls();
+    const car = { position: { x: 0, z: 0 }, heading: 0, speed: 30 };
+    const right = { edge: {}, x: -(0.97 + 0.95 + 0.4), z: 6, yaw: 0, speed: 10, half: 2.3, halfWidth: 0.95 };
+    const left = { edge: {}, x: 0.97 + 0.95 + 0.4, z: 6 + stagger, yaw: 0, speed: 10, half: 2.3, halfWidth: 0.95 };
+    let points = 0, splits = 0;
+    for (let t = 0; t < 2; t += dt) {
+      car.position.z += car.speed * dt;
+      right.z += right.speed * dt;
+      left.z += left.speed * dt;
+      points += calls.update(dt, car, [right, left]);
+      if (calls.split) splits++;
+    }
+    return { points, splits };
+  }
+  const split = thread(3);
+  const apart = thread(30);
+  assert.equal(split.splits, 1, 'the second car of the pair makes it a split');
+  assert.equal(apart.splits, 0, 'two close calls well apart are not a split');
+  assert.ok(split.points > apart.points, `a split outscores the same two passes apart (${split.points} vs ${apart.points})`);
+});
