@@ -13,6 +13,8 @@ const TURN_GRIP = 9.5; // m/s²: the lateral grip a drifted corner is planned wi
 const ALONG_STREET = 15 * RAD; // travelling this close to the street's direction counts as running along it
 const MIN_PEDAL = 0.05; // pedal below which the traction control's share of it isn't read
 const MIN_PASSED = 0.1; // least share of the pedal it reckons the traction control passes on
+const NO_HOLD = [0]; // a split or a step along its own line is flown at once
+const COMMIT_CLEARANCE = 0.05; // share of the lock it keeps short of the keyboard driver's power-over lock, swimming
 
 const AUTOPILOT = {
   cruiseSpeed: 38, // m/s on the straights (85 mph)
@@ -37,7 +39,8 @@ const AUTOPILOT = {
   passMargin: 0.35, // m of air it leaves between itself and a car it passes (a swimmer's margin, not a driver's)
   followMargin: 1.5, // m it leaves to a bumper it closes on
   gapStep: 0.75, // m between the lateral positions it tries
-  pedals: [-9.5, -6, -3, 0, 3.5, 7], // m/s² it tries for pedalTime: stamp on it, brake, ease off, hold, push, floor it
+  pedals: [-9.5, -6, -3, 0, 3.5, 7, 10.5], // m/s² it tries for pedalTime: stamp on it, brake, ease off, hold, push, floor it
+  // (10.5: all the M xDrive puts down off the line; it is traction- and power-limited above that anyway)
   pedalTime: 1, // s on the pedal before holding the speed it reached
   planTime: 2.5, // s it looks ahead
   planStep: 0.1,
@@ -58,6 +61,9 @@ const AUTOPILOT = {
   moveCost: 1.2, // score (m of ground) per metre moved across: it doesn't swerve for nothing
   lineUpDistance: 30, // m before a drifted corner where it lines up on the route line for it,
   lineUpCost: 40, // score per metre off that line: whenever a plan there is safe, it takes it
+  holds: [0, 0.4], // s it tries holding its line before a move across: at once, or a late flick
+  lateWindow: 1, // s: a move that starts within this of coming alongside the car on its line is a late flick,
+  lateBonus: 8, // ...worth this much score (the swerve the player wants, not an early lane change)
   commitBonus: 6, // score for keeping the gap it already chose, so it doesn't dither
   replanInterval: 0.12, // s between decisions
   speedGain: 2, // 1/s: how hard it closes a gap between the planned speed and its own
@@ -115,7 +121,6 @@ class DriftAutopilot {
     this.want = { throttle: 0, brake: 0, reverse: 0, steer: 0, handbrake: 0 };
     this.keys = { forward: 0, backward: 0, left: 0, right: 0, handbrake: 0 };
     this.brakeDuty = 0;
-    this.lockHeld = 0;
     this.keepSpeed = 0; // m/s its plans should not slow below (0: no such wish)
     this.path = [];
     this.segment = 0;
@@ -296,13 +301,17 @@ class DriftAutopilot {
             near[nearCount++] = ob;
           }
         }
-        for (const accel of o.pedals) {
+        // A move across to a line is also tried late: holding the line it is on for holdTime first, then flicking (a
+        // swerve at the last moment round the car ahead is the swim; an early lane change is a commute)
+        const holds = split || Math.abs(y - carLat) < o.gapStep ? NO_HOLD : o.holds;
+        for (const hold of holds) for (const accel of o.pedals) {
           // Fly the plan: speed eases toward the pedal's, position slides across at the flick rate. The brake key is all
           // or nothing, and the frames it is down leave the front tires little to turn with: the harder the plan brakes,
           // the slower it can move across.
           const braking = accel < 0 ? Math.min(1, -accel / (this.model.brakeGrip * GRAVITY)) : 0;
           const sideways = o.lateralAccel * (1 - o.brakeSteerLoss * braking);
           let travelled = 0, speed = u, lat = carLat, latVel = carLatVel, hitAt = Infinity;
+          let heldUntil = Infinity; // when it first comes alongside a car on the line it held (a held plan)
           for (let i = 0; i < nearCount; i++) {
             air[i] = Infinity;
             passedAt[i] = Infinity;
@@ -318,7 +327,8 @@ class DriftAutopilot {
             if (cornerBraking) speed = Math.max(cornerLimit, speed - cornerBrake * o.planStep);
             travelled += speed * o.planStep;
             // (a car only moves across as it rolls: at a crawl it can't step sideways round the car in front)
-            const goal = split && travelled > clear[line] + clearSpeed[line] * t ? then : y;
+            let goal = split && travelled > clear[line] + clearSpeed[line] * t ? then : y;
+            if (t <= hold) goal = carLat;
             const across = cornerBraking ? Math.min(sideways, brakingSideways) : sideways;
             const swing = o.lateralSwing * across / o.lateralAccel;
             latVel = slideAcross(lat, latVel, goal, o.planStep, across, Math.min(lateralSpeed, speed * o.crawlAcross), swing,
@@ -337,6 +347,9 @@ class DriftAutopilot {
               if (gapAlong < 0 && gapAcross < 0) {
                 hitAt = t;
                 break;
+              }
+              if (hold > 0 && gapAlong < 0 && Math.abs(ob.lateral + ob.vLateral * t - carLat) < ob.reach) {
+                heldUntil = Math.min(heldUntil, t);
               }
               // A close call, as the swim mode scores it: the air beside the car while alongside it, then passing it
               if (gapAlong + o.followMargin < 0) {
@@ -373,6 +386,8 @@ class DriftAutopilot {
           score -= (Math.abs(y - carLat) + Math.abs(then - y)) * o.moveCost;
           if (this.lineUp) score -= Math.abs(y) * o.lineUpCost;
           score += this.closeCallScore(nearCount);
+          // A late flick: the move starts within lateWindow of reaching the car on the line it held, and still clears it
+          if (hold > 0 && heldUntil - hold < o.lateWindow) score += o.lateBonus;
           if (Math.max(y, then) > oncoming) score -= o.oncomingCost;
           // Keeping to the line already chosen wins ties: changing its mind takes a clearly better gap
           if (Math.abs(y - this.targetOffset) < o.gapStep * 0.5) score += o.commitBonus;
@@ -392,6 +407,7 @@ class DriftAutopilot {
             best.accel = accel;
             best.slowest = slowest;
             best.open = open;
+            best.hold = hold;
           }
         }
       }
@@ -404,6 +420,8 @@ class DriftAutopilot {
     plan.safe = best.safe;
     plan.slowest = best.slowest; // the lowest speed the plan flies at
     plan.open = best.open; // m of clear road ahead in its lane where it ends
+    plan.hold = best.hold; // s it holds the line it is on before it moves (a late flick)
+    plan.holdLine = carLat;
     return plan;
   }
 
@@ -469,8 +487,8 @@ class DriftAutopilot {
   // The keys that move the driver's wheel and pedal toward what it wants. A key is on or off for a whole frame, so it
   // taps them: each frame it picks the steering key (left, right or neither) whose wind-on or self-centring lands the
   // wheel nearest the wanted lock, holds W while the pedal is short of the wanted throttle, and pulses the brake for
-  // its share of the frames. Holding the gas and one steering key is a power-over to the keyboard driver (it lets the
-  // rears spin), so outside a drift it lifts W for a frame before that counts as meant.
+  // its share of the frames. (Gas with the lock wound past the driver's commitLock is a power-over; swimming, decide
+  // keeps the wheel short of it, so W stays held through a flick.)
   press(car, dt, driver) {
     const want = this.want;
     const keys = this.keys;
@@ -486,14 +504,6 @@ class DriftAutopilot {
     const up = approachValue(driver.throttle, 1, dt / p.throttleTime);
     const down = approachValue(driver.throttle, 0, dt / p.liftTime);
     keys.forward = pedal > 0 && Math.abs(up - pedal) <= Math.abs(down - pedal) ? 1 : 0;
-    // A held lock with the gas: a power-over once commitDelay is up, unless it means one (a drift)
-    this.lockHeld = keys.forward && best !== 0 && best === this.lockKey ? this.lockHeld + dt : 0;
-    this.lockKey = keys.forward ? best : 0;
-    if (!this.cornering && this.lockHeld + dt > p.commitDelay * 0.75) {
-      keys.forward = 0;
-      this.lockHeld = 0;
-      this.lockKey = 0;
-    }
 
     // The brake key is all or nothing: pressed for its share of the frames (never at a stop, where S reverses)
     this.brakeDuty = want.brake > 0 && car.speed > 0.6 ? this.brakeDuty + want.brake : 0;
@@ -539,7 +549,8 @@ class DriftAutopilot {
       this.sincePlan = 0;
     }
     const plan = this.plan;
-    const goal = this.targetOffset;
+    // (a late flick holds the line it was on until the plan says go)
+    const goal = this.sincePlan < (plan.hold ?? 0) ? plan.holdLine : this.targetOffset;
     const reach = o.lookahead + o.lookaheadTime * Math.abs(u);
     // Swimming, the wheel flies the move as the plan did: it aims down the street along the car's own line, turned
     // across by the sideways speed the move wants where the car is (acrossSpeed). (Aiming at the gap itself asked for
@@ -611,8 +622,9 @@ class DriftAutopilot {
       }
     }
     // (swimming, no more lock than the tires turn into grip: past it a flick back across swings the tail out, and the
-    // keyboard driver then reads the held key as a save and unwinds the wheel, so the move is never caught)
-    const most = this.cornering ? 1 : o.swimLock;
+    // keyboard driver then reads the held key as a save and unwinds the wheel, so the move is never caught. And short of
+    // the lock at which gas and lock commit a power-over, so W stays held through a flick)
+    const most = this.cornering ? 1 : Math.min(o.swimLock, (kp.commitLock ?? 1) - COMMIT_CLEARANCE);
     input.steer = kicking ? Math.sign(turn) : clamp(wheel / driverLock(u, this.model), -most, most);
     input.handbrake = this.kick > 0 ? 1 : 0;
     const slipAbs = Math.abs(slip);
@@ -658,7 +670,9 @@ class DriftAutopilot {
         // altogether once a flick swings the tail out past swimSlip, as a player lifts: held into the slide, the keyboard
         // driver would let the rears spin, they'd lose their grip and the move across would never be caught
         const sliding = slipAbs > o.swimSlip ? 0 : clamp(1 - (slipAbs - o.tractionSlip) / (12 * RAD), 0.05, 1);
-        input.throttle = Math.min(1, force / fullDriveForce(car, p)) * sliding;
+        // (a plan flooring it is W held: the traction control and xDrive put down what the tires take)
+        const flooring = feedForward >= o.pedals[o.pedals.length - 1];
+        input.throttle = (flooring ? 1 : Math.min(1, force / fullDriveForce(car, p))) * sliding;
       }
     }
     if (this.finished) {
