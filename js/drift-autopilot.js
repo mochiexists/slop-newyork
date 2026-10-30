@@ -1,4 +1,4 @@
-import { M5_DRIFT } from './drift-physics.js';
+import { M5_DRIFT, fullDriveForce } from './drift-physics.js';
 
 // The AI driver for swimming: it presses the same pedals and wheel a player does (input for stepDriftCar) to follow
 // a route along the streets as fast as the corners allow, handbrake-flicks into a drift at every sharp corner, and
@@ -17,7 +17,7 @@ const AUTOPILOT = {
   braking: 7.5, // m/s² it plans to brake at before a corner
   sharpTurn: 40 * RAD, // corners sharper than this are drifted
   kickTime: 0.32, // s of handbrake to break the rear loose
-  driftThrottle: 0.32, // share of the engine's power that holds a slide (it has a lot)
+  driftThrottle: 0.5, // share of the engine's power that holds a slide (it has a lot)
   driftAngle: 30 * RAD, // body slip it holds through a corner
   exitAlign: 12 * RAD, // travelling this close to the new street's direction ends the corner
   tractionSlip: 5 * RAD, // slip it allows on the straights before easing off the gas
@@ -416,8 +416,9 @@ class DriftAutopilot {
         // grows with speed), and less again while the car is still sliding
         const sliding = clamp(1 - (slipAbs - o.tractionSlip) / (12 * RAD), 0.05, 1);
         const grip = clamp(o.tractionThrottle * Math.max(6, u), 0.15, 1);
-        const fullForce = Math.min(p.launchForce * p.mass * GRAVITY, p.power / Math.max(1, Math.abs(u)));
-        input.throttle = Math.min(force / fullForce, grip) * sliding;
+        const fullForce = fullDriveForce(car, p);
+        const gripForce = grip * Math.min(p.launchForce * p.mass * GRAVITY, p.power / Math.max(1, Math.abs(u)));
+        input.throttle = Math.min(1, Math.min(force, gripForce) / fullForce) * sliding;
       }
     }
     if (this.finished) {
