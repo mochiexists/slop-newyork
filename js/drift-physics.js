@@ -365,15 +365,17 @@ stepDriftCar.telemetry = {
 
 // The player's hands and feet on the drift model. Keys are on/off, so a tap of A would slam the wheel to full lock and
 // W would floor the throttle in one frame. Racing games filter keyboard input the way a driver's hands move: the wheel
-// turns in over a fraction of a second, slower the faster the car goes, and comes back to centre quicker; the pedal is
-// pressed rather than switched. On top, a traction control in the spirit of BMW's M Dynamic Mode: on a plain throttle
+// winds on while A or D is held, so a tap only nudges it and a long hold reaches full lock (slower the faster the car
+// goes), it self-centres when the key is let go, and the opposite key swings it back across centre quickly, as
+// catching a slide needs; the pedal is pressed rather than switched. On top, a traction control in the spirit of BMW's M Dynamic Mode: on a plain throttle
 // it gives the engine only as much torque as the rear tires can put down while they also corner, and it lets the rears
 // spin once the driver commits (gas and lock held, the handbrake, or a slide already under way); in a slide it works
 // the throttle for the drift angle the keys ask for.
 const KEYBOARD_DRIVER = {
-  steerTime: 0.15, // s from centre to full lock at a standstill
-  steerTimePerSpeed: 0.006, // s more per m/s: 0.24 s at 15 m/s, 0.33 s at 30 m/s
-  centreTime: 0.1, // s from full lock back to centre
+  steerTime: 0.75, // s of holding A or D from centre to full lock at a standstill (a 0.1 s tap: 13% of the lock)
+  steerTimePerSpeed: 0.02, // s more per m/s: 0.95 s at 10 m/s, 1.35 s at 30 m/s
+  centreTime: 0.35, // s the wheel takes to self-centre from full lock when the keys are let go
+  counterSteerRate: 3, // the opposite key turns the wheel back this many times faster than it winds on
   throttleTime: 0.25, // s to floor the pedal
   liftTime: 0.08, // s to lift off it
   tractionShare: 0.9, // share of the rear tires' traction the traction control gives the engine going straight
@@ -439,13 +441,14 @@ class KeyboardDriver {
     const pedal = rollingBack ? 0 : forward;
     this.throttle = approach(this.throttle, pedal, dt / (pedal > this.throttle ? p.throttleTime : p.liftTime));
 
-    // Steering: out toward the lock at the speed-sensitive rate; back to centre (or across it) at the quicker one
-    const outward = steerKeys !== 0 && steerKeys * this.steer >= 0 && Math.abs(steerKeys) > Math.abs(this.steer);
-    if (outward) {
-      this.steer = approach(this.steer, steerKeys, dt / (p.steerTime + p.steerTimePerSpeed * speed));
+    // Steering: wind on toward the held key's lock, swing back fast against the current lock, self-centre on release
+    const windOn = dt / (p.steerTime + p.steerTimePerSpeed * speed);
+    if (steerKeys === 0) {
+      this.steer = approach(this.steer, 0, dt / p.centreTime);
+    } else if (steerKeys * this.steer < 0) {
+      this.steer = approach(this.steer, steerKeys, windOn * p.counterSteerRate);
     } else {
-      const centre = steerKeys * this.steer < 0 ? 0 : steerKeys;
-      this.steer = approach(this.steer, centre, dt / p.centreTime);
+      this.steer = approach(this.steer, steerKeys, windOn);
     }
     input.steer = this.steer;
 
