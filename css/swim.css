@@ -1,0 +1,244 @@
+/* ------------------------------------------------------------------------------------------------------------------
+   Swimming (BMW M5 drift mode): drift score up top, Careless Whisper under the brand. M-stripe colours for the
+   drift numbers, so the mode reads at a glance without borrowing taxi yellow. Linked after style.css (index.html),
+   so the upstream stylesheet stays as it is and these rules come after it in the cascade.
+   ------------------------------------------------------------------------------------------------------------------ */
+:root {
+  --m-light: #6fc3ff;
+  --m-dark: #2b4fb8;
+  --m-red: #ff3b3b;
+  --swim-pink: #ff4fa3;
+}
+
+.swim-only { display: none; }
+body.swimming .swim-only { display: flex; }
+body.swimming .swim-radio[hidden] { display: none; }
+
+.hud-top-center {
+  top: max(var(--edge), env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+body.hud-minimized .hud-top-center { transform: translate(-50%, -10px); }
+
+.swim-score {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  padding: 10px 20px;
+  position: relative;
+  overflow: hidden;
+}
+
+/* The M tricolour along the bottom edge */
+.swim-score::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--m-light) 0 33.3%, var(--m-dark) 33.3% 66.6%, var(--m-red) 66.6%);
+}
+
+.swim-angle-block,
+.swim-points-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 82px;
+}
+
+.swim-angle {
+  font-size: 30px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--m-light);
+  line-height: 1.05;
+}
+
+.swim-points {
+  font-size: 30px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  line-height: 1.05;
+}
+
+.swim-caption {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.swim-chain {
+  color: var(--swim-pink);
+  letter-spacing: 0.04em;
+}
+
+.swim-totals {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+  border-left: 1px solid var(--divider);
+  padding-left: 18px;
+}
+
+.swim-flash {
+  font-size: 26px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  color: var(--m-light);
+  text-shadow: 0 2px 18px rgba(0, 0, 0, 0.65);
+  opacity: 0;
+  transform: scale(0.94);
+  transition: opacity 0.45s var(--ease-out), transform 0.45s var(--ease-out);
+  pointer-events: none;
+}
+
+.swim-flash[data-kind='lost'] { color: var(--m-red); }
+/* On while flashes keep coming (swim-hud-flash.js): the transitions carry on from wherever they are, never from 0 */
+.swim-flash.is-on {
+  opacity: 1;
+  transform: none;
+  transition-duration: 0.16s;
+}
+
+/* Swimming, the street signs swap in place as the corners fly by: their entrance would blink them every block */
+body.swimming .location-place,
+body.swimming .location-signs { animation: none; }
+
+/* The AI show's hand-over count: 3, 2, 1 in the middle of the screen */
+.swim-countdown {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: min(34vh, 260px);
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  color: var(--m-light);
+  text-shadow: 0 6px 40px rgba(0, 0, 0, 0.7);
+  pointer-events: none;
+  z-index: 40;
+}
+
+.swim-countdown[hidden] { display: none; }
+.swim-countdown.tick { animation: swim-count 1s var(--ease-out); }
+
+@keyframes swim-count {
+  0% { opacity: 0; transform: scale(1.6); }
+  15% { opacity: 1; transform: scale(1); }
+  75% { opacity: 1; transform: scale(0.94); }
+  100% { opacity: 0; transform: scale(0.8); }
+}
+
+.swim-radio {
+  position: fixed;
+  z-index: 10;
+  top: calc(max(var(--edge), env(safe-area-inset-top)) + 72px);
+  left: max(var(--edge), env(safe-area-inset-left));
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px 8px 8px;
+}
+
+.swim-radio-video {
+  width: 160px;
+  height: 90px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #000;
+  flex: none;
+}
+
+.swim-radio-video iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+}
+
+.swim-radio-title {
+  font-weight: 800;
+  font-size: 14px;
+}
+
+.swim-radio-artist {
+  font-size: 12px;
+  color: var(--text-2);
+  margin-bottom: 8px;
+}
+
+.swim-radio-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.swim-radio-buttons .tool-btn {
+  height: 30px;
+  padding: 0 12px;
+}
+
+.swim-radio .swim-radio-pause { display: none; }
+.swim-radio[data-status='playing'] .swim-radio-play { display: none; }
+.swim-radio[data-status='playing'] .swim-radio-pause { display: inline-flex; }
+.swim-radio[data-status='offline'] .swim-radio-buttons::after {
+  content: 'YouTube unavailable';
+  font-size: 12px;
+  color: var(--text-3);
+  align-self: center;
+}
+
+/* The engine sound switch (M3 / M5 GTA mod): dimmed while the mod's engine isn't installed */
+.swim-radio-buttons .swim-engine.is-unavailable { opacity: 0.55; }
+
+body.hud-minimized .swim-radio { opacity: 0; pointer-events: none; }
+
+@media (max-width: 820px) {
+  .swim-radio { top: calc(max(var(--edge), env(safe-area-inset-top)) + 120px); }
+  .swim-radio-video { width: 112px; height: 63px; }
+  .swim-score { gap: 14px; padding: 8px 14px; }
+  .swim-angle,
+  .swim-points { font-size: 24px; }
+  .swim-totals { display: none; }
+}
+
+/* The AI show's "driving for you" chip and its headline */
+.swim-pilot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-2);
+}
+
+.swim-pilot[hidden] { display: none; }
+
+.swim-pilot-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--m-red);
+  animation: swim-pilot-blink 1.4s ease-in-out infinite;
+}
+
+@keyframes swim-pilot-blink {
+  50% { background: var(--m-light); }
+}
+
+.swim-flash[data-kind='show'] { color: #fff; }
