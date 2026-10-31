@@ -57,7 +57,8 @@ const AUTOPILOT = {
   passMargin: 0.35, // m of air it leaves between itself and a car it passes (a swimmer's margin, not a driver's)
   followMargin: 1.5, // m it leaves to a bumper it closes on
   gapStep: 0.75, // m between the lateral positions it tries
-  thenStride: 1, // ...and every this many of them it tries moving on to past a split
+  thenStride: 2, // ...and every this many of them it tries moving on to past a split (every other one: a plan on a
+  // street of rows takes a third less time, ~13 ms, and splits as many)
   pedals: [-9.5, -6, -3, 0, 3.5, 7, 10.5], // m/s² it tries for pedalTime: stamp on it, brake, ease off, hold, push, floor it
   // (10.5: all the M xDrive puts down off the line; it is traction- and power-limited above that anyway)
   coastPedal: true, // it also tries lifting off both pedals (the drag and the tires' rolling slow it: ~0.5 m/s² at 85 mph)
