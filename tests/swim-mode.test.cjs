@@ -21,7 +21,7 @@ test.before(async () => {
   });
   swim = loadModule(read('js/swim-mode.js'), {
     imports: { 'three/webgpu': {}, 'three/tsl': {}, './city-config.js': config, './cars.js': { BODY_SPECS: {} }, './swim-show.js': show,
-      './swim-hud-flash.js': loadModule(read('js/swim-hud-flash.js')) }
+      './swim-hud-flash.js': loadModule(read('js/swim-hud-flash.js')), './swim-music-fade.js': loadModule(read('js/swim-music-fade.js')) }
   });
 });
 

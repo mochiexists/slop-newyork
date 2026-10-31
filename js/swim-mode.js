@@ -4,6 +4,7 @@ import { avenueX, streetZ } from './city-config.js';
 import { BODY_SPECS } from './cars.js';
 import { PoliceCruiser, SwimShow, SHOW_SPOT, SHOW_SIGNAL_TIME } from './swim-show.js';
 import { HudFlash } from './swim-hud-flash.js';
+import { MusicDuck, MusicFader } from './swim-music-fade.js';
 
 // Swimming: the BMW M5 weaving through traffic and drifting through Times Square to Careless Whisper. This module owns
 // everything about the mode except the car itself (controllers.js) and its physics (drift-physics.js): the
@@ -278,7 +279,8 @@ class TireScreech {
 }
 
 // The soundtrack, through YouTube's IFrame Player API. The API script and player load on the first swim; if the
-// browser blocks playback the card offers a play button.
+// browser blocks playback the card offers a play button. The song fades in from silence once it is really playing
+// (not while it buffers) and fades out before a pause or a cue (swim-music-fade.js); update() steps the fade.
 class SwimRadio {
   constructor(card) {
     this.card = card;
@@ -288,6 +290,10 @@ class SwimRadio {
     this.muted = false;
     this.loading = null;
     this.blockedTimer = 0;
+    this.fader = new MusicFader();
+    this.shownVolume = -1; // the volume last given to the player
+    this.sounding = false; // the player is playing (YouTube's state 1), as far as its last state change said
+    this.pendingCue = false; // the chorus waits to be cued until the song playing has faded out
     card?.querySelector('[data-swim-radio="play"]')?.addEventListener('click', () => this.play());
     card?.querySelector('[data-swim-radio="pause"]')?.addEventListener('click', () => this.pause());
   }
@@ -320,6 +326,7 @@ class SwimRadio {
           onReady: () => {
             this.ready = true;
             this.applyMute();
+            this.applyVolume();
             // The show's drift may have begun while the player loaded: start on the chorus all the same
             if (this.cued) this.cueChorus();
             else if (this.wanted) this.player.playVideo();
@@ -342,18 +349,25 @@ class SwimRadio {
     }
     const startSeconds = this.cued ? CARELESS_WHISPER.chorus[this.source] : CARELESS_WHISPER.start;
     const options = { videoId: CARELESS_WHISPER.videoIds[this.source], startSeconds };
+    this.startSilent();
     if (this.wanted) this.player.loadVideoById(options);
     else this.player.cueVideoById(options);
   }
 
   onState(state) {
     // 1 playing, 2 paused, 0 ended (loop the track while swimming)
+    this.sounding = state === 1;
     if (state === 1) {
       // On the chorus now: from here on the track plays on (and loops from the top) like any other drive
       this.cued = false;
       this.setStatus('playing');
+      // The fade starts with the sound, not with the request, so buffering doesn't eat into it
+      if (this.wanted) this.fader.fadeIn();
     }
-    else if (state === 2) this.setStatus('paused');
+    else if (state === 2) {
+      this.setStatus('paused');
+      this.startSilent(); // whatever paused it, the next start fades in again
+    }
     else if (state === 0 && this.wanted) {
       this.player.seekTo(CARELESS_WHISPER.start, true);
       this.player.playVideo();
@@ -372,8 +386,18 @@ class SwimRadio {
       return;
     }
     this.wanted = true;
-    if (this.ready) this.player.playVideo();
-    else this.load();
+    if (this.pendingCue) {
+      // The drift came before the last song finished fading out: straight to the chorus
+      this.pendingCue = false;
+      this.startSilent();
+      this.cueChorus();
+    } else if (this.sounding) {
+      this.fader.fadeIn(); // still playing, maybe fading out: turn the fade round
+    } else {
+      this.startSilent();
+      if (this.ready) this.player.playVideo();
+      else this.load();
+    }
     // Autoplay can be refused (no user gesture reached the frame): show the play button instead of silence
     clearTimeout(this.blockedTimer);
     this.blockedTimer = setTimeout(() => {
@@ -382,14 +406,41 @@ class SwimRadio {
   }
 
   // The show holds the song back, cued on the chorus, until the car swings into its drift (play() then starts it
-  // right there)
+  // right there). A song already playing fades out first: cueing would stop it dead.
   cue() {
     this.card?.removeAttribute('hidden');
     this.wanted = false;
     this.cued = true;
-    if (this.ready) this.cueChorus();
-    else this.load();
     this.setStatus('paused');
+    if (!this.ready) {
+      this.load();
+      return;
+    }
+    this.pendingCue = true;
+    this.fader.fadeOut(() => {
+      if (!this.pendingCue) return;
+      this.pendingCue = false;
+      this.cueChorus();
+    });
+  }
+
+  // Silent from here, ready for a fade-in
+  startSilent() {
+    this.fader.silence();
+    this.applyVolume();
+  }
+
+  // Steps the fade (every frame)
+  update(dt) {
+    this.fader.update(dt);
+    this.applyVolume();
+  }
+
+  applyVolume() {
+    const volume = this.fader.volume;
+    if (!this.ready || volume === this.shownVolume) return;
+    this.player.setVolume(volume);
+    this.shownVolume = volume;
   }
 
   // Loads the chorus, playing it at once if the drift has already begun
@@ -400,11 +451,16 @@ class SwimRadio {
     else this.player.cueVideoById(options);
   }
 
+  // Fades the song out, then pauses it (unless it was asked to play again meanwhile)
   pause() {
     this.cued = false;
+    this.pendingCue = false;
     this.wanted = false;
-    if (this.ready) this.player.pauseVideo();
     this.setStatus('paused');
+    if (!this.ready) return;
+    this.fader.fadeOut(() => {
+      if (!this.wanted) this.player.pauseVideo();
+    });
   }
 
   stop() {
@@ -599,6 +655,8 @@ class SwimDirector {
     this.screech = new TireScreech(audioSystem);
     this.closeCalls = new CloseCalls();
     this.radio = new SwimRadio(document.getElementById('swim-radio'));
+    this.audio = audioSystem;
+    this.duck = new MusicDuck(); // the city mix makes room as the song fades in
     this.score = new DriftScore({
       angle: document.getElementById('swim-angle'),
       points: document.getElementById('swim-points'),
@@ -747,6 +805,8 @@ class SwimDirector {
     }
     this.screech.update(slide, Math.abs(c.speed), this.active);
     this.score.flasher.update(dt);
+    this.radio.update(dt);
+    this.duck.update(this.audio, this.radio.fader.gain);
     this.smoke.update(dt, camera);
     this.skids.update();
 
