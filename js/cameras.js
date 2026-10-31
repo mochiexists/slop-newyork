@@ -1,5 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { bryantParkLawn } from './landmarks.js';
+import { ScoreKick } from './swim-camera-kick.js';
 
 // Chase, action, cockpit, fixed-location and aerial cameras, with mouse/touch orbit and zoom.
 
@@ -61,6 +62,7 @@ class CameraSystem {
     this.seatRoll = 0; // see seatView()
     this.speedFov = 0; // ° added to the preset's field of view (SPEED_FOV)
     this.launchLag = 0; // m the chase camera has fallen back (LAUNCH_LAG)
+    this.scoreKick = new ScoreKick(); // a close call's or split's punch: scoreKick.trigger(split)
 
     this.bindPointerControls();
   }
@@ -404,7 +406,9 @@ class CameraSystem {
         + SPEED_FOV.perAccel * clamp01(entity.longAccel / SPEED_FOV.accel);
     }
     this.speedFov += (wider - this.speedFov) * (1 - Math.exp(-dt * SPEED_FOV.rate));
-    const fov = preset.fov + this.speedFov;
+    // (and the punch of a close call or split, on top: swim-camera-kick.js)
+    const kick = this.scoreKick.update(dt);
+    const fov = preset.fov + this.speedFov + (following ? kick.fov : 0);
     if (Math.abs(this.camera.fov - fov) > 0.02) {
       this.camera.fov = fov;
       this.camera.updateProjectionMatrix();
@@ -412,7 +416,7 @@ class CameraSystem {
     if (!following) return;
     const spin = entity.drift?.wheelspin ?? 0;
     const fast = Math.min(1, (Math.abs(entity.speed) / SHAKE.speed) ** 2);
-    const shake = SHAKE.amount * Math.min(1, spin + fast) * (seated ? SHAKE.seatShare : 1);
+    const shake = (SHAKE.amount * Math.min(1, spin + fast) + kick.shake) * (seated ? SHAKE.seatShare : 1);
     if (shake > 0.0005) {
       // (a few incommensurate sines: a rough, unrepeating shiver, no allocation)
       this.currentPos.x += shake * (Math.sin(elapsed * 37.1) + Math.sin(elapsed * 23.3)) * 0.5;

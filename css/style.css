@@ -1543,11 +1543,22 @@ body.hud-minimized .hud-top-center { transform: translate(-50%, -10px); }
   color: var(--m-light);
   text-shadow: 0 2px 18px rgba(0, 0, 0, 0.65);
   opacity: 0;
+  transform: scale(0.94);
+  transition: opacity 0.45s var(--ease-out), transform 0.45s var(--ease-out);
   pointer-events: none;
 }
 
 .swim-flash[data-kind='lost'] { color: var(--m-red); }
-.swim-flash.show { animation: swim-flash 1.6s var(--ease-out); }
+/* On while flashes keep coming (swim-hud-flash.js): the transitions carry on from wherever they are, never from 0 */
+.swim-flash.is-on {
+  opacity: 1;
+  transform: none;
+  transition-duration: 0.16s;
+}
+
+/* Swimming, the street signs swap in place as the corners fly by: their entrance would blink them every block */
+body.swimming .location-place,
+body.swimming .location-signs { animation: none; }
 
 /* The AI show's hand-over count: 3, 2, 1 in the middle of the screen */
 .swim-countdown {
@@ -1572,13 +1583,6 @@ body.hud-minimized .hud-top-center { transform: translate(-50%, -10px); }
   15% { opacity: 1; transform: scale(1); }
   75% { opacity: 1; transform: scale(0.94); }
   100% { opacity: 0; transform: scale(0.8); }
-}
-
-@keyframes swim-flash {
-  0% { opacity: 0; transform: translateY(8px) scale(0.92); }
-  12% { opacity: 1; transform: translateY(0) scale(1.06); }
-  70% { opacity: 1; transform: translateY(0) scale(1); }
-  100% { opacity: 0; transform: translateY(-10px) scale(1); }
 }
 
 .swim-radio {
@@ -1672,7 +1676,7 @@ body.hud-minimized .swim-radio { opacity: 0; pointer-events: none; }
   height: 8px;
   border-radius: 50%;
   background: var(--m-red);
-  animation: swim-pilot-blink 1s steps(2) infinite;
+  animation: swim-pilot-blink 1.4s ease-in-out infinite;
 }
 
 @keyframes swim-pilot-blink {
