@@ -5,6 +5,7 @@ const test = require('node:test');
 const { loadModule } = require('./helpers/module.cjs');
 
 const source = readFileSync(join(__dirname, '../js/cameras.js'), 'utf8');
+const kick = loadModule(readFileSync(join(__dirname, '../js/swim-camera-kick.js'), 'utf8'));
 
 class Vector3 {
   constructor(x = 0, y = 0, z = 0) { this.set(x, y, z); }
@@ -59,7 +60,7 @@ function cameraHarness(entity = {
   window.innerHeight = 900;
   const { CameraSystem } = loadModule(source, {
     globals: { window, document },
-    imports: { 'three/webgpu': { Vector3, PerspectiveCamera }, './landmarks.js': {} }
+    imports: { 'three/webgpu': { Vector3, PerspectiveCamera }, './landmarks.js': {}, './swim-camera-kick.js': kick }
   });
   const camera = new CameraSystem(canvas, { getActiveEntity: () => entity });
   return {
@@ -239,4 +240,45 @@ test('teleport releases every camera pointer and ignores old gestures before acc
   h.pointer(h.canvas, 'pointermove', 3, 610);
   close(h.camera.orbitYawOffset, -0.065);
   assert.equal(h.camera.isDragging, true);
+});
+
+test('a close call kicks the follow view a few degrees wider and eases back inside a third of a second; a split harder', () => {
+  const { SCORE_KICK, ScoreKick } = kick;
+  // The kick on its own: a quick rise to its peak, then down to nothing by SCORE_KICK.time
+  const k = new ScoreKick();
+  k.trigger();
+  const fovs = [];
+  for (let i = 0; i < 30; i++) fovs.push(k.update(1 / 60).fov);
+  const peak = Math.max(...fovs);
+  assert.ok(peak > 2 && peak <= SCORE_KICK.fov + 1e-9, `a few degrees at its peak (${peak.toFixed(2)}°)`);
+  assert.ok(fovs.indexOf(peak) <= Math.ceil(SCORE_KICK.attack * 60), 'the peak comes at once');
+  for (let i = fovs.indexOf(peak) + 1; i < fovs.length; i++) assert.ok(fovs[i] <= fovs[i - 1] + 1e-12, 'then only eases out');
+  assert.equal(fovs[Math.ceil(SCORE_KICK.time * 60) + 1], 0, 'gone after its time');
+  assert.equal(k.shake, 0);
+  const split = new ScoreKick();
+  split.trigger(true);
+  const closeCall = new ScoreKick();
+  closeCall.trigger(false);
+  for (let i = 0; i < 3; i++) {
+    split.update(1 / 60);
+    closeCall.update(1 / 60);
+  }
+  assert.ok(split.fov > closeCall.fov * 1.4 && split.shake > closeCall.shake * 1.4, 'a split kicks harder');
+
+  // In the camera: on top of the speed feel for a car in the chase view, and the view settles back to it after
+  const h = cameraHarness({
+    position: new Vector3(0, 0, 100), heading: 0, speed: 30, longAccel: 0, type: 'car', drift: { wheelspin: 0 },
+    chaseDistance: 6.9, chaseHeight: 2.12, cameraTargetOffset: new Vector3(0, 1, 0)
+  });
+  for (let i = 0; i < 240; i++) h.camera.update(1 / 60, i / 60);
+  const settled = h.camera.camera.fov;
+  h.camera.scoreKick.trigger(true);
+  let widest = settled;
+  for (let i = 0; i < 6; i++) {
+    h.camera.update(1 / 60, 4 + i / 60);
+    widest = Math.max(widest, h.camera.camera.fov);
+  }
+  assert.ok(widest - settled > 3, `the chase view punches wider (${(widest - settled).toFixed(2)}°)`);
+  for (let i = 0; i < 30; i++) h.camera.update(1 / 60, 5 + i / 60);
+  assert.ok(Math.abs(h.camera.camera.fov - settled) < 0.05, 'and is back where it was');
 });

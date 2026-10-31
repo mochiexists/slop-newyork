@@ -575,9 +575,11 @@ const SHOW_CAPTIONS = {
 };
 
 class SwimDirector {
-  // onShowCamera(preset id): the show's camera cuts (main.js owns the cameras)
-  constructor({ scene, controllerManager, audioSystem, trafficSystem, onShowCamera }) {
+  // onShowCamera(preset id): the show's camera cuts (main.js owns the cameras); onCloseCall(split): a close call or a
+  // split scored, the player's or the show's (the camera's punch)
+  constructor({ scene, controllerManager, audioSystem, trafficSystem, onShowCamera, onCloseCall }) {
     this.controllers = controllerManager;
+    this.onCloseCall = onCloseCall;
     this.traffic = trafficSystem;
     this.car = controllerManager.entities.swim;
     this.cruiser = new PoliceCruiser(scene, audioSystem);
@@ -714,6 +716,7 @@ class SwimDirector {
         const chain = this.closeCalls.chain > 1 ? ` ×${this.closeCalls.chain}` : '';
         const label = this.closeCalls.split ? 'SPLIT' : 'CLOSE CALL';
         this.score.award(close, `${label}${chain} +${close.toLocaleString('en-US')}`);
+        this.onCloseCall?.(this.closeCalls.split);
         this.screech.whoosh(Math.min(1, Math.abs(c.speed) / 35));
       }
       const contacts = this.rearContacts();

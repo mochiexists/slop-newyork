@@ -164,7 +164,8 @@ async function initApp() {
   soundButton?.addEventListener('click', () => audioSystem.setEnabled(!audioSystem.enabled));
   // The AI show cuts between the chase camera and the driver's seat
   swimDirector = new SwimDirector({
-    scene, controllerManager, audioSystem, trafficSystem, onShowCamera: (id) => selectCamera(id, true)
+    scene, controllerManager, audioSystem, trafficSystem, onShowCamera: (id) => selectCamera(id, true),
+    onCloseCall: (split) => cameraSystem.scoreKick.trigger(split)
   });
   const m5Cockpit = new M5Cockpit(controllerManager.entities.swim, swimDirector.radio);
   // Full build: the real M3 Competition model replaces the procedural car when assets/models/m3.glb is there
