@@ -1298,9 +1298,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     previewPoint(v, c + ahead + 2, bendB);
     let bend = Math.atan2(bendB.dx, bendB.dz) - Math.atan2(bendA.dx, bendA.dz);
     bend -= Math.round(bend / (Math.PI * 2)) * Math.PI * 2;
-    // ...plus how far right of its path it heads, and how far right of where it should be it is (nose and dl - evade,
-    // less the lane edge a show row's car keeps to)
-    const off = v.dl - (v.evade || 0) - (v.bias || 0);
+    // ...plus how far right of its path it heads, and how far right of where it should be it is (nose and dl - evade)
+    const off = v.dl - (v.evade || 0) - (v.bias || 0); // (less the lane edge a show row's car keeps to: swim-traffic.js)
     const want = Math.atan((wheelbase * bend) / 2) + v.nose + Math.atan(((panic ? 3 : 1.2) * off) / (1 + v.speed));
     const lateral = panic ? v.driver.grip : 1.3 * v.driver.aLat; // the sideways acceleration it steers up to
     const most = Math.min(v.driver.lock, Math.atan((lateral * wheelbase) / Math.max(v.speed * v.speed, 1e-3)));
@@ -1379,7 +1378,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
 
     const turn = v.move.turn;
     if (v.evade) v.blink = 0; // no time to signal a swerve
-    else if (Math.abs(v.dl - (v.bias || 0)) > 0.3 && Math.abs(v.dlv) > 0.05) v.blink = v.dl > v.bias ? -1 : 1;
+    else if (Math.abs(v.dl - (v.bias || 0)) > 0.3 && Math.abs(v.dlv) > 0.05) v.blink = v.dl > (v.bias || 0) ? -1 : 1;
     else if (turn !== 'S' && (v.conn || v.edge.len - v.s < 35)) v.blink = turn === 'R' ? 1 : -1;
     else v.blink = 0;
 
