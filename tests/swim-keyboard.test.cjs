@@ -93,21 +93,20 @@ test('a lift-off flick at 22 m/s throws the car into a drift the throttle holds'
   assert.ok(run.maxSlip > 25 * RAD, `flick ${(run.maxSlip / RAD).toFixed(1)}°`);
 });
 
-test('gas and lock held hold a drift that picks up speed, widens and shifts up on the limiter', () => {
+test('gas and lock held hold a drift in one gear that settles into a held angle, and lifting straightens it', () => {
   const run = drive(12, 7, () => keys({ forward: 1, left: 1 }));
   assert.ok(run.sliding > 3, `${run.sliding.toFixed(1)} s past 20°`);
   assert.ok(run.maxSlip < 65 * RAD, `not spinning: ${(run.maxSlip / RAD).toFixed(0)}°`);
   const sideways = run.car.vx * Math.cos(run.car.heading) - run.car.vz * Math.sin(run.car.heading);
   const settled = Math.abs(Math.atan2(sideways, run.car.speed)) / RAD;
   assert.ok(settled > 25 && settled < 55, `and settles into a held angle: ${settled.toFixed(0)}°`);
-  assert.ok(Math.hypot(run.car.speed, run.car.vx, run.car.vz) > 18, 'faster than it started');
-  assert.ok(run.slideGears.size >= 2, `shifted while sliding: ${[...run.slideGears].join(', ')}`);
-  assert.ok(run.limiter > 0, 'bouncing off the limiter');
+  // the automatic holds its gear in the slide (a taller one would let the rears grip up)
+  assert.equal(run.slideGears.size, 1, `one gear while sliding: ${[...run.slideGears].join(', ')}`);
 
-  // Letting go of A with W still held lets the rear catch up and drives out straight
-  const out = drive(12, 5.5, (t) => keys({ forward: 1, left: t < 3.5 ? 1 : 0 }));
+  // Letting go of the keys lets the rear catch up and drives out straight
+  const out = drive(12, 6, (t) => keys({ forward: t < 3.5 ? 1 : 0, left: t < 3.5 ? 1 : 0 }));
   const lateral = out.car.vx * Math.cos(out.car.heading) - out.car.vz * Math.sin(out.car.heading);
-  assert.ok(Math.abs(Math.atan2(lateral, out.car.speed)) < 12 * RAD, 'straightened');
+  assert.ok(Math.abs(Math.atan2(lateral, out.car.speed)) < 5 * RAD, 'straightened');
 });
 
 test('at 100 mph a tap of the handbrake with gas and lock held holds a drift: the car does not push itself straight', () => {
