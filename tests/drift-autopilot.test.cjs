@@ -270,3 +270,96 @@ test('a pair to split coming up beyond its plans\' reach: the show\'s swimmer he
   assert.ok(Math.abs(target({ splitLineUp: 20 })) < 0.4, 'lined up on the gap');
   assert.ok(target({}) < -3, 'without the wish it stays a lane off, in the open');
 });
+
+// The show's swimmer (swim-show.js SHOW_SWIMMING) on a 5-lane avenue's corridor
+const SHOW_LIKE = { cruiseSpeed: 40, planSpread: 0.2, lateBonus: 20, passMargin: 0.2, closeBonus: 60, splitBonus: 100, splitLineUp: 20, lanes: 2, laneWidth: 2.8 };
+
+test('a late flick it commits to goes when it planned: replanning never puts it off', () => {
+  // Closing at 22 m/s on a car in its line, a car a lane over further on: it holds its line, then flicks round
+  const traffic = [{ x: 0, z: 60, speed: 10, yaw: 0, half: 2.3, halfWidth: 0.92 }, { x: -3.6, z: 75, speed: 10, yaw: 0, half: 2.3, halfWidth: 0.92 }];
+  const c = car(0);
+  c.speed = 32;
+  // (without the commit bonus for the line it is on, which here keeps it from choosing the flick at all)
+  const pilot = new DriftAutopilot({ ...SHOW_LIKE, commitShare: 0 });
+  pilot.setPath([{ x: 0, z: 0 }, { x: 0, z: 1000 }], { corridors: [{ left: 7, right: -7, centre: null }] });
+  const driver = new physics.KeyboardDriver();
+  let held = 0, lastFlick, contacts = 0;
+  const { vehicleContact } = loadModule(readFileSync(join(__dirname, '../js/vehicle-physics.js'), 'utf8'));
+  for (let n = 0; n < 180; n++) {
+    frame(pilot, driver, c, traffic);
+    for (const o of traffic) o.z += o.speed / 60;
+    if (pilot.sincePlan === 0) {
+      if (pilot.flickAt !== undefined) {
+        held++;
+        if (lastFlick !== undefined) assert.ok(pilot.flickAt <= lastFlick + 1e-9, `the flick at ${lastFlick.toFixed(2)} s was put off to ${pilot.flickAt.toFixed(2)} s`);
+      }
+      lastFlick = pilot.flickAt;
+    }
+    const a = { x: c.position.x, z: c.position.z, sin: Math.sin(c.heading), cos: Math.cos(c.heading), halfW: 0.97, halfL: 2.5 };
+    if (traffic.some((o) => vehicleContact(a, { x: o.x, z: o.z, sin: 0, cos: 1, halfW: 0.92, halfL: 2.3 }, {}))) contacts++;
+  }
+  assert.ok(held > 0, 'it chose a late flick');
+  assert.equal(contacts, 0);
+  assert.ok(c.position.z > traffic[0].z + 10, 'and it got past');
+});
+
+test('it doesn\'t turn a move back within half a second of starting it, and the show\'s big bonuses get a real commit margin', () => {
+  // A car dead ahead in its line, open road either side: either way round is as good
+  const ahead = [{ x: 0, z: 40, speed: 8, yaw: 0, half: 2.3, halfWidth: 0.92 }];
+  function choose(moveWay) {
+    const c = car(0);
+    c.speed = 30;
+    const pilot = new DriftAutopilot(SHOW_LIKE);
+    pilot.setPath([{ x: 0, z: 0 }, { x: 0, z: 1000 }], { corridors: [{ left: 7, right: -7, centre: null }] });
+    pilot.clock = 10;
+    if (moveWay) {
+      // (a move that way started 0.2 s ago)
+      pilot.moveWay = moveWay;
+      pilot.moveStart = 9.8;
+    }
+    pilot.planGap(c, ahead);
+    return Math.sign(pilot.targetOffset);
+  }
+  const free = choose(0);
+  assert.notEqual(free, 0, 'it goes round one side');
+  assert.equal(choose(-free), -free, 'a move the other way just started: it carries on round that side');
+  const options = new DriftAutopilot(SHOW_LIKE).options;
+  assert.ok(options.commitShare * options.splitBonus >= 20, 'next to a 100-point split, keeping its line is worth 20');
+});
+
+test('crawling up to a queue across the street, it knows it is queued; moving, or with nothing ahead, it is not', () => {
+  const queue = [-3.3, 0, 3.3].map((x) => ({ x, z: 9, speed: 0, yaw: 0, half: 2.3, halfWidth: 0.95 }));
+  function queued(speed, traffic) {
+    const c = car(0);
+    c.speed = speed;
+    const pilot = new DriftAutopilot();
+    pilot.setPath([{ x: 0, z: 0 }, { x: 0, z: 500 }], { corridors: [{ left: 3.3, right: -3.3, centre: null }] });
+    pilot.planGap(c, traffic);
+    return pilot.queued;
+  }
+  assert.equal(queued(0.5, queue), true, 'stopped behind it');
+  assert.equal(queued(12, queue), false, 'still rolling at 12 m/s');
+  assert.equal(queued(0.5, []), false, 'nothing ahead (pinned some other way: the show may back out)');
+});
+
+test('out of a drifted corner it stays on the gas: no lift as the slide ends', () => {
+  // The corner test's run; frames off the gas from each corner's new street until back at 30 m/s
+  const route = [{ x: 0, z: 0 }, { x: 0, z: 230 }, { x: -275, z: 230 }, { x: -275, z: -300 }];
+  const corridors = [{ left: 6, right: -6, centre: null }, { left: 11.6, right: -2.6, centre: 4.5 }, { left: 9.5, right: -8.6, centre: null }];
+  const pilot = new DriftAutopilot({ cruiseSpeed: 40, lanes: 2, laneWidth: 2.8 });
+  const driver = new physics.KeyboardDriver();
+  pilot.setPath(route, { corridors });
+  const c = car(0);
+  c.speed = 38;
+  const lifts = [0, 0], back = [false, false];
+  for (let n = 0; n < 30 * 60 && !pilot.finished; n++) {
+    const { keys } = frame(pilot, driver, c, []);
+    const k = pilot.segment - 1;
+    if (k < 0 || k > 1 || back[k]) continue;
+    if (Math.hypot(c.speed, c.vx, c.vz) > 30) back[k] = true;
+    else if (!pilot.kick && !pilot.turningIn && !keys.forward) lifts[k]++;
+  }
+  assert.ok(back[0] && back[1], 'back up to speed after both');
+  // (it used to lift for 0.5-0.7 s as the angle came down, the moment a real car snaps back)
+  for (const [i, lift] of lifts.entries()) assert.ok(lift < 10, `corner ${i + 1}: ${lift} frames off the gas`);
+});
