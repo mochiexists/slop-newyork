@@ -37,8 +37,9 @@ const AUTOPILOT = {
   driftSpeed: 20, // m/s it holds a slide to: the gas comes off as the slide's ground speed rises to it (a faster slide is
   // a wider one)
   driftThrottleGain: 0.5, // share of the pedal per m/s under driftSpeed
-  exitTurn: 20 * RAD, // turn still to go below which it asks for less angle, down to none on the new street's line,
-  // and powers out
+  exitTurn: 20 * RAD, // turn still to go below which it asks for less angle, down to none on the new street's line
+  // (and still lifts as the slide swings past that: holding the gas there gained 0.04 s back to speed in the sims and
+  // ran a drift into 57th St wide into a storefront in the browser)
   exitSlip: 6 * RAD, // drift angle below which the corner is done (swimSlip: the swimming then keeps W down),
   exitAlign: 20 * RAD, // ...travelling this close to the new street's direction
   tractionSlip: 5 * RAD, // slip it allows on the straights before easing off the gas
@@ -874,14 +875,6 @@ class DriftAutopilot {
       // The flick: off the gas (W down with the handbrake spins the rears up for its release and over-rotates the car)
       input.throttle = 0;
       input.brake = 0;
-    } else if (this.cornering && toGo < o.exitTurn) {
-      // The way out: on the street's line, power out of the slide rather than lift (a lift loads the nose, the rears
-      // bite and the car snaps back). W stays down (the keyboard driver brings the pedal in over a moment); with the
-      // counter-steer held, it works the throttle for its shallow counter-steer angle, and the save hands the traction
-      // control back as the slide ends
-      input.brake = 0;
-      const ground = Math.hypot(car.speed, car.vx, car.vz);
-      input.throttle = clamp((o.driftSpeed - ground) * o.driftThrottleGain, 0, 1);
     } else if (this.cornering) {
       // Hold the slide on the gas (the keyboard driver works the throttle for the angle while W is held), and lift
       // when the tail swings well past the angle it wants (the rears bite and stop the swing) or the slide picks up

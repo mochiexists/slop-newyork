@@ -341,25 +341,3 @@ test('crawling up to a queue across the street, it knows it is queued; moving, o
   assert.equal(queued(12, queue), false, 'still rolling at 12 m/s');
   assert.equal(queued(0.5, []), false, 'nothing ahead (pinned some other way: the show may back out)');
 });
-
-test('out of a drifted corner it stays on the gas: no lift as the slide ends', () => {
-  // The corner test's run; frames off the gas from each corner's new street until back at 30 m/s
-  const route = [{ x: 0, z: 0 }, { x: 0, z: 230 }, { x: -275, z: 230 }, { x: -275, z: -300 }];
-  const corridors = [{ left: 6, right: -6, centre: null }, { left: 11.6, right: -2.6, centre: 4.5 }, { left: 9.5, right: -8.6, centre: null }];
-  const pilot = new DriftAutopilot({ cruiseSpeed: 40, lanes: 2, laneWidth: 2.8 });
-  const driver = new physics.KeyboardDriver();
-  pilot.setPath(route, { corridors });
-  const c = car(0);
-  c.speed = 38;
-  const lifts = [0, 0], back = [false, false];
-  for (let n = 0; n < 30 * 60 && !pilot.finished; n++) {
-    const { keys } = frame(pilot, driver, c, []);
-    const k = pilot.segment - 1;
-    if (k < 0 || k > 1 || back[k]) continue;
-    if (Math.hypot(c.speed, c.vx, c.vz) > 30) back[k] = true;
-    else if (!pilot.kick && !pilot.turningIn && !keys.forward) lifts[k]++;
-  }
-  assert.ok(back[0] && back[1], 'back up to speed after both');
-  // (it used to lift for 0.5-0.7 s as the angle came down, the moment a real car snaps back)
-  for (const [i, lift] of lifts.entries()) assert.ok(lift < 10, `corner ${i + 1}: ${lift} frames off the gas`);
-});
