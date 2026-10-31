@@ -350,7 +350,12 @@ class DriftAutopilot {
     while (this.segment < this.path.length - 2) {
       const s = this.seg(this.segment);
       const along = (car.position.x - s.a.x) * s.ux + (car.position.z - s.a.z) * s.uz;
-      if (along < s.length - 2) break;
+      const next = this.seg(this.segment + 1);
+      const alongNext = (car.position.x - next.a.x) * next.ux + (car.position.z - next.a.z) * next.uz;
+      const offThis = Math.abs((car.position.x - s.a.x) * s.uz - (car.position.z - s.a.z) * s.ux);
+      const offNext = Math.abs((car.position.x - next.a.x) * next.uz - (car.position.z - next.a.z) * next.ux);
+      const rounded = alongNext > 0 && offNext < offThis && !this.turningIn && this.kick === 0;
+      if (along < s.length - 2 && !rounded) break;
       this.segment++;
     }
     const last = this.seg(this.path.length - 2);
@@ -926,7 +931,8 @@ class DriftAutopilot {
       this.turningIn = true;
       this.cornering = true;
     }
-    if (this.turningIn && Math.abs(driver.steer) >= o.kickSteer) {
+    // (wound on into the turn: still turned the other way from lining up, the wheel hasn't got there)
+    if (this.turningIn && driver.steer * this.cornerTurn >= o.kickSteer) {
       this.turningIn = false;
       this.kick = o.kickTime;
     }
