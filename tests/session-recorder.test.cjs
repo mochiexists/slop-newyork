@@ -93,7 +93,8 @@ test('replaying the recorded keys from a keyframe through the same physics repro
     for (let s = 0; s < 4; s++) physics.stepDriftCar(car, input, f.dt / 4, physics.M5_DRIFT, car.drift);
   }
   const last = frames.at(-1);
-  // the recording rounds the state, so the replay lands close rather than exactly on it
+  // the recording rounds the state, so the replay lands close rather than exactly on it (since the 1,100 Nm tune this
+  // drive powers over into a 45° slide, which magnifies the rounding: 0.011 rad of heading from keyframe 3)
   assert.ok(Math.hypot(car.position.x - last.x, car.position.z - last.z) < 0.5, `apart ${Math.hypot(car.position.x - last.x, car.position.z - last.z)}`);
-  assert.ok(Math.abs(car.heading - last.heading) < 0.01);
+  assert.ok(Math.abs(car.heading - last.heading) < 0.02, `heading off by ${Math.abs(car.heading - last.heading).toFixed(4)} rad`);
 });
