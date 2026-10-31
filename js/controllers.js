@@ -1394,6 +1394,8 @@ class ThirdPersonControllerManager {
     keys.handbrake = this.keys.up;
     // The AI driver (the swim show) drives through the same keys: it sees the player's and presses its own in their place
     this.swimPilot?.(c, dt, keys, driver);
+    // The flight recorder (session-recorder.js, set by main.js) notes the frame's keys and the state they act on
+    this.swimRecorder?.frame(c, keys, dt, driver, Boolean(this.swimPilot));
     const input = driver.update(c, keys, dt);
 
     const prevX = c.position.x;

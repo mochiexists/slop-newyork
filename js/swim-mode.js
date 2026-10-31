@@ -3,6 +3,9 @@ import { attribute, float, texture, vec3 } from 'three/tsl';
 import { avenueX, streetZ } from './city-config.js';
 import { BODY_SPECS } from './cars.js';
 import { PoliceCruiser, SwimShow, SHOW_SPOT, SHOW_SIGNAL_TIME } from './swim-show.js';
+import { HudFlash } from './swim-hud-flash.js';
+import { MusicDuck, MusicFader } from './swim-music-fade.js';
+import { SwimExhaust } from './swim-exhaust.js';
 
 // Swimming: the BMW M5 weaving through traffic and drifting through Times Square to Careless Whisper. This module owns
 // everything about the mode except the car itself (controllers.js) and its physics (drift-physics.js): the
@@ -55,6 +58,7 @@ const SQUEEZE_ROUTE = [
 const DRIFT_SLIP = 12 * RAD; // body slip that counts as a drift
 const DRIFT_MIN_SPEED = 2.5; // m/s over the ground (a donut's tail swings round at about this)
 const DRIFT_GRACE = 0.7; // s a drift may straighten before it is banked
+const BANK_FLASH_MIN = 25; // points a banked drift needs to flash its score (a flick's +5 doesn't)
 const SKID_SLIDE = 3.2; // m/s of rear tire slide before rubber is laid
 const SMOKE_SLIDE = 5; // m/s of rear tire slide before smoke
 const CRASH_SPEED_CHANGE = 5; // m/s of velocity change in one frame
@@ -276,7 +280,8 @@ class TireScreech {
 }
 
 // The soundtrack, through YouTube's IFrame Player API. The API script and player load on the first swim; if the
-// browser blocks playback the card offers a play button.
+// browser blocks playback the card offers a play button. The song fades in from silence once it is really playing
+// (not while it buffers) and fades out before a pause or a cue (swim-music-fade.js); update() steps the fade.
 class SwimRadio {
   constructor(card) {
     this.card = card;
@@ -286,6 +291,10 @@ class SwimRadio {
     this.muted = false;
     this.loading = null;
     this.blockedTimer = 0;
+    this.fader = new MusicFader();
+    this.shownVolume = -1; // the volume last given to the player
+    this.sounding = false; // the player is playing (YouTube's state 1), as far as its last state change said
+    this.pendingCue = false; // the chorus waits to be cued until the song playing has faded out
     card?.querySelector('[data-swim-radio="play"]')?.addEventListener('click', () => this.play());
     card?.querySelector('[data-swim-radio="pause"]')?.addEventListener('click', () => this.pause());
   }
@@ -318,6 +327,7 @@ class SwimRadio {
           onReady: () => {
             this.ready = true;
             this.applyMute();
+            this.applyVolume();
             // The show's drift may have begun while the player loaded: start on the chorus all the same
             if (this.cued) this.cueChorus();
             else if (this.wanted) this.player.playVideo();
@@ -340,18 +350,25 @@ class SwimRadio {
     }
     const startSeconds = this.cued ? CARELESS_WHISPER.chorus[this.source] : CARELESS_WHISPER.start;
     const options = { videoId: CARELESS_WHISPER.videoIds[this.source], startSeconds };
+    this.startSilent();
     if (this.wanted) this.player.loadVideoById(options);
     else this.player.cueVideoById(options);
   }
 
   onState(state) {
     // 1 playing, 2 paused, 0 ended (loop the track while swimming)
+    this.sounding = state === 1;
     if (state === 1) {
       // On the chorus now: from here on the track plays on (and loops from the top) like any other drive
       this.cued = false;
       this.setStatus('playing');
+      // The fade starts with the sound, not with the request, so buffering doesn't eat into it
+      if (this.wanted) this.fader.fadeIn();
     }
-    else if (state === 2) this.setStatus('paused');
+    else if (state === 2) {
+      this.setStatus('paused');
+      this.startSilent(); // whatever paused it, the next start fades in again
+    }
     else if (state === 0 && this.wanted) {
       this.player.seekTo(CARELESS_WHISPER.start, true);
       this.player.playVideo();
@@ -370,8 +387,18 @@ class SwimRadio {
       return;
     }
     this.wanted = true;
-    if (this.ready) this.player.playVideo();
-    else this.load();
+    if (this.pendingCue) {
+      // The drift came before the last song finished fading out: straight to the chorus
+      this.pendingCue = false;
+      this.startSilent();
+      this.cueChorus();
+    } else if (this.sounding) {
+      this.fader.fadeIn(); // still playing, maybe fading out: turn the fade round
+    } else {
+      this.startSilent();
+      if (this.ready) this.player.playVideo();
+      else this.load();
+    }
     // Autoplay can be refused (no user gesture reached the frame): show the play button instead of silence
     clearTimeout(this.blockedTimer);
     this.blockedTimer = setTimeout(() => {
@@ -380,14 +407,41 @@ class SwimRadio {
   }
 
   // The show holds the song back, cued on the chorus, until the car swings into its drift (play() then starts it
-  // right there)
+  // right there). A song already playing fades out first: cueing would stop it dead.
   cue() {
     this.card?.removeAttribute('hidden');
     this.wanted = false;
     this.cued = true;
-    if (this.ready) this.cueChorus();
-    else this.load();
     this.setStatus('paused');
+    if (!this.ready) {
+      this.load();
+      return;
+    }
+    this.pendingCue = true;
+    this.fader.fadeOut(() => {
+      if (!this.pendingCue) return;
+      this.pendingCue = false;
+      this.cueChorus();
+    });
+  }
+
+  // Silent from here, ready for a fade-in
+  startSilent() {
+    this.fader.silence();
+    this.applyVolume();
+  }
+
+  // Steps the fade (every frame)
+  update(dt) {
+    this.fader.update(dt);
+    this.applyVolume();
+  }
+
+  applyVolume() {
+    const volume = this.fader.volume;
+    if (!this.ready || volume === this.shownVolume) return;
+    this.player.setVolume(volume);
+    this.shownVolume = volume;
   }
 
   // Loads the chorus, playing it at once if the drift has already begun
@@ -395,14 +449,26 @@ class SwimRadio {
     const source = this.source ?? 0;
     const options = { videoId: CARELESS_WHISPER.videoIds[source], startSeconds: CARELESS_WHISPER.chorus[source] };
     if (this.wanted) this.player.loadVideoById(options);
-    else this.player.cueVideoById(options);
+    else this.stopped(() => this.player.cueVideoById(options));
   }
 
+  // Sends a command that stops the sound (pause, cue) and stops counting the player as playing at once: a play()
+  // before YouTube's state change arrives must start it again, not just turn the fade round
+  stopped(command) {
+    command();
+    this.sounding = false;
+  }
+
+  // Fades the song out, then pauses it (unless it was asked to play again meanwhile)
   pause() {
     this.cued = false;
+    this.pendingCue = false;
     this.wanted = false;
-    if (this.ready) this.player.pauseVideo();
     this.setStatus('paused');
+    if (!this.ready) return;
+    this.fader.fadeOut(() => {
+      if (!this.wanted) this.stopped(() => this.player.pauseVideo());
+    });
   }
 
   stop() {
@@ -489,17 +555,22 @@ class CloseCalls {
   }
 }
 
+// Writes an element's text only when it changes (the score is rendered ten times a second)
+function setText(element, text) {
+  if (element && element.textContent !== text) element.textContent = text;
+}
+
 // Drift scoring: points for angle × speed while sliding, banked when the car straightens up, lost in a crash.
 class DriftScore {
   constructor(elements) {
     this.el = elements;
+    this.flasher = new HudFlash(elements.flash);
     this.points = 0;
     this.total = 0;
     this.best = 0;
     this.time = 0;
     this.grace = 0;
     this.active = false;
-    this.flashTimer = 0;
     this.render();
   }
 
@@ -516,14 +587,14 @@ class DriftScore {
       this.grace -= dt;
       if (this.grace <= 0) this.bank();
     }
-    if (this.flashTimer > 0) this.flashTimer -= dt;
   }
 
   bank() {
     if (this.points >= 1) {
       this.total += Math.round(this.points);
       this.best = Math.max(this.best, Math.round(this.points));
-      this.flash(`+${Math.round(this.points).toLocaleString('en-US')} SWIM`, 'banked');
+      // A flick's few points still count, they just don't flash over the close calls
+      if (this.points >= BANK_FLASH_MIN) this.flash(`+${Math.round(this.points).toLocaleString('en-US')} SWIM`, 'banked');
     }
     this.reset();
   }
@@ -548,21 +619,16 @@ class DriftScore {
   }
 
   flash(text, kind) {
-    if (!this.el.flash) return;
-    this.el.flash.textContent = text;
-    this.el.flash.dataset.kind = kind;
-    this.el.flash.classList.remove('show');
-    void this.el.flash.offsetWidth; // restart the animation
-    this.el.flash.classList.add('show');
+    this.flasher.show(text, kind);
   }
 
   render(slip = 0) {
     const { angle, points, total, best, chain } = this.el;
-    if (angle) angle.textContent = `${Math.round(Math.abs(slip) / RAD)}°`;
-    if (points) points.textContent = this.active ? Math.round(this.points).toLocaleString('en-US') : '—';
-    if (total) total.textContent = this.total.toLocaleString('en-US');
-    if (best) best.textContent = this.best.toLocaleString('en-US');
-    if (chain) chain.textContent = this.active ? `×${1 + Math.min(4, Math.floor(this.time / 2.5))}` : '';
+    setText(angle, `${Math.round(Math.abs(slip) / RAD)}°`);
+    setText(points, this.active ? Math.round(this.points).toLocaleString('en-US') : '—');
+    setText(total, this.total.toLocaleString('en-US'));
+    setText(best, this.best.toLocaleString('en-US'));
+    setText(chain, this.active ? `×${1 + Math.min(4, Math.floor(this.time / 2.5))}` : '');
   }
 }
 
@@ -581,9 +647,11 @@ const YOUR_CAR_HINT_TIME = 8; // s
 const NO_WAY_ON = 'AI: DRIVE ONTO A MIDTOWN AVENUE FIRST';
 
 class SwimDirector {
-  // onShowCamera(preset id): the show's camera cuts (main.js owns the cameras)
-  constructor({ scene, controllerManager, audioSystem, trafficSystem, onShowCamera }) {
+  // onShowCamera(preset id): the show's camera cuts (main.js owns the cameras); onCloseCall(split): a close call or a
+  // split scored, the player's or the show's (the camera's punch)
+  constructor({ scene, controllerManager, audioSystem, trafficSystem, onShowCamera, onCloseCall }) {
     this.controllers = controllerManager;
+    this.onCloseCall = onCloseCall;
     this.traffic = trafficSystem;
     this.car = controllerManager.entities.swim;
     this.cruiser = new PoliceCruiser(scene, audioSystem);
@@ -600,8 +668,12 @@ class SwimDirector {
     this.smoke = new TireSmoke(scene);
     this.skids = new SkidMarks(scene);
     this.screech = new TireScreech(audioSystem);
+    // Pops, crackles and flames from the tips, on the pedal as driven (after any AI driver), like the engine voice
+    this.exhaust = new SwimExhaust({ car: this.car, audioSystem, controls: () => controllerManager.swimDriver?.input });
     this.closeCalls = new CloseCalls();
     this.radio = new SwimRadio(document.getElementById('swim-radio'));
+    this.audio = audioSystem;
+    this.duck = new MusicDuck(); // the city mix makes room as the song fades in
     this.score = new DriftScore({
       angle: document.getElementById('swim-angle'),
       points: document.getElementById('swim-points'),
@@ -719,6 +791,7 @@ class SwimDirector {
         const chain = this.closeCalls.chain > 1 ? ` ×${this.closeCalls.chain}` : '';
         const label = this.closeCalls.split ? 'SPLIT' : 'CLOSE CALL';
         this.score.award(close, `${label}${chain} +${close.toLocaleString('en-US')}`);
+        this.onCloseCall?.(this.closeCalls.split);
         this.screech.whoosh(Math.min(1, Math.abs(c.speed) / 35));
       }
       const contacts = this.rearContacts();
@@ -749,6 +822,10 @@ class SwimDirector {
       }
     }
     this.screech.update(slide, Math.abs(c.speed), this.active);
+    this.score.flasher.update(dt);
+    this.radio.update(dt);
+    this.duck.update(this.audio, this.radio.fader.gain);
+    this.exhaust.update(dt, camera, this.active);
     this.smoke.update(dt, camera);
     this.skids.update();
 
@@ -768,4 +845,4 @@ class SwimDirector {
   }
 }
 
-export { CARELESS_WHISPER, SWIM_STARTS, SQUEEZE_ROUTE, SHOW_SPOT, SHOW_SIGNAL_TIME, CloseCalls, SwimDirector };
+export { CARELESS_WHISPER, SWIM_STARTS, SQUEEZE_ROUTE, SHOW_SPOT, SHOW_SIGNAL_TIME, CloseCalls, SwimRadio, SwimDirector };

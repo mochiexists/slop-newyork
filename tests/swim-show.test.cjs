@@ -190,7 +190,7 @@ test('out of the last lap it drifts onto 7th Ave and pulls off flat out: 50 mph 
   assert.ok(o.exitSpeeds[o.exitSpeeds.length - 1] * MPH > 70, `and on (${(o.exitSpeeds[o.exitSpeeds.length - 1] * MPH).toFixed(0)} mph 6 s on)`);
 });
 
-test('each street of the run is staged with pairs to split as its corner comes up, further in past a drift', () => {
+test('each street of the run is staged with pairs to split as its corner comes up, further in past a drift, and short of the next drift\'s line-up', () => {
   const car = { position: { x: 0, z: 0 }, heading: 0, speed: 20, vx: 0, vz: 0, angularVel: 0 };
   const staged = [];
   const traffic = { setClearZone() {}, reseed() {}, stageRoute: (a, b, options) => staged.push({ a, b, ...options }) };
@@ -205,7 +205,7 @@ test('each street of the run is staged with pairs to split as its corner comes u
   swimShow.clearNextCorner(car);
   swimShow.clearNextCorner(car);
   assert.deepEqual(staged, [
-    { a: route[1], b: route[2], startGap: 30 },
+    { a: route[1], b: route[2], startGap: 30, endGap: swimShow.pilot.options.lineUpDistance },
     { a: route[2], b: route[3], startGap: 45 }
   ]);
 });

@@ -5,7 +5,7 @@ const test = require('node:test');
 const { loadModule } = require('./helpers/module.cjs');
 
 const read = (path) => readFileSync(join(__dirname, '..', path), 'utf8');
-const { GLASS_SEE_THROUGH, BIRD_TIME, driverView, birdStep, birdLift } = loadModule(read('js/m5-driver.js'), {
+const { GLASS_SEE_THROUGH, BIRD_TIME, driverView, birdStep, birdLift, wheelFollow } = loadModule(read('js/m5-driver.js'), {
   globals: { Math }
 });
 
@@ -68,4 +68,22 @@ test('the arm eases off the wheel and into the window', () => {
   assert.equal(birdLift(1), 1);
   assert.equal(birdLift(0.5), 0.5);
   assert.ok(birdLift(0.1) < 0.1 && birdLift(0.9) > 0.9, 'slow at both ends');
+});
+
+test('the steering wheel follows the front wheels smoothly: no snap on a jolt, settled in a third of a second, no overshoot', () => {
+  const RAD = Math.PI / 180;
+  const follow = { angle: 0, rate: 0 };
+  const frames = [];
+  // the front wheels jump 46° (a slide caught at the lock) and stay there
+  for (let t = 0; t < 0.6; t += 1 / 60) frames.push(wheelFollow(follow, -40 * RAD, 1 / 60));
+  const steps = frames.map((a, i) => Math.abs(a - (i ? frames[i - 1] : 0)));
+  assert.ok(Math.max(...steps) < 8 * RAD, `no frame turns the front wheels more than 8° (${(Math.max(...steps) / RAD).toFixed(1)}°)`);
+  const at = frames[Math.round(0.33 * 60)];
+  assert.ok(Math.abs(at + 40 * RAD) < 3 * RAD, `within 3° of it after a third of a second (${(at / RAD).toFixed(1)}°)`);
+  assert.ok(frames.every((a) => a >= -40 * RAD - 1e-9), 'never past it');
+
+  // a long frame (a hitch) doesn't make it ring
+  const hitch = { angle: 0, rate: 0 };
+  wheelFollow(hitch, 10 * RAD, 0.5);
+  assert.ok(hitch.angle > 0 && hitch.angle <= 10 * RAD);
 });

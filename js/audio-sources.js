@@ -100,10 +100,10 @@ class CityAudioSources {
     };
   }
 
-  // The swimming car's pedal as driven this frame: controllers.js keeps the drift model's input (after any AI
-  // driver has rewritten it) in _swimInput; before the first swim frame, the keys.
+  // The swimming car's pedal as driven this frame: the keyboard driver's output (controllers.js swimDriver, after any
+  // AI driver has pressed its keys); before the first swim frame, the keys.
   swimControls() {
-    const input = this.controllers._swimInput;
+    const input = this.controllers.swimDriver?.input;
     const controls = this.swimPedal ??= { throttle: 0 };
     controls.throttle = input ? unit(Math.max(input.throttle, input.reverse)) : unit(+this.controllers.keys.forward);
     return controls;

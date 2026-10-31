@@ -95,14 +95,16 @@ const SIM_STEPS_PER_SECOND = 240; // the drift model's step rate (controllers.js
 
 // The show's swimmer is sketchier than the autopilot's defaults (drift-autopilot.js AUTOPILOT): flat out at 90 mph,
 // threading gaps with a hand's width of air and going out of its way for a close pass, but sure of its line before it
-// commits to a split (planSpread: at that speed a row comes up every second or two)
+// commits to a split (planSpread: at that speed a row comes up every second or two), and heading for the gap of the
+// next pair while it is still out of reach (splitLineUp), so it isn't a lane off when it gets there
 const SHOW_SWIMMING = {
   cruiseSpeed: 40,
   planSpread: 0.2,
   lateBonus: 20,
   passMargin: 0.2,
   closeBonus: 60,
-  splitBonus: 100
+  splitBonus: 100,
+  splitLineUp: 20
 };
 
 const GATHER_RANGE = 130; // m round the car that traffic is handed to the AI (it plans 120 m ahead)
@@ -161,6 +163,7 @@ const DONUT = {
   steerGain: 5, // share of lock per radian of aim error while driving onto the circle
   kickSpeed: 9, // m/s at which it flicks into the slide
   kickTime: 0.25, // s of handbrake
+  slideAngle: 20 * RAD, // a slide this deep while driving onto the circle is the drift already: no flick needed
   // On the circle it drives as a player feels a donut ahead: a few times a second it weighs each thing it could do
   // with its hands and feet (the wheel at one of `wheels`, W down or up, a dab of the handbrake), plays each a moment
   // ahead on the car's own physics through its own keyboard driver (so it knows the car as the player does, however
@@ -325,7 +328,9 @@ class DonutDriver {
       const aimX = this.center.x + Math.sin(aim) * this.radius, aimZ = this.center.z + Math.cos(aim) * this.radius;
       const error = wrapAngle(Math.atan2(aimX - car.position.x, aimZ - car.position.z) - travelHeading(car));
       want = Math.max(-1, Math.min(1, error * o.steerGain));
-      if (ground > o.kickSpeed) this.setPhase('kick');
+      // (on the reworked slide steering the car often steps out on its own here: that is the drift already)
+      if (angle > o.slideAngle) this.setPhase('drift');
+      else if (ground > o.kickSpeed) this.setPhase('kick');
     } else if (this.phase === 'kick') {
       // The flick: off the gas, the handbrake and the lock into the turn
       want = 1;
@@ -778,10 +783,13 @@ class SwimShow {
       this.traffic.setClearZone({ x: corner.x, z: corner.z, r: CORNER_CLEAR_RADIUS });
       // ...and the street past it is laid out for swimming: pairs of cars side by side to split, staged as the car
       // comes up to the corner (round it, out of sight; down 7th Ave, as it powers out of the drift)
-      const before = path[index - 1], after = path[index + 1];
-      const turn = wrapAngle(Math.atan2(after.x - corner.x, after.z - corner.z) - Math.atan2(corner.x - before.x, corner.z - before.z));
-      const drifted = Math.abs(turn) > this.pilot.options.sharpTurn;
-      this.traffic.stageRoute?.(corner, after, { startGap: drifted ? STAGE_GAP_AFTER_DRIFT : STAGE_GAP });
+      const before = path[index - 1], after = path[index + 1], beyond = path[index + 2];
+      const drifted = this.isDrifted(before, corner, after);
+      // (and short of a drifted corner at its far end by the AI's line-up for it: a pair there would sit in its braking,
+      // held up at the corner, where it can't be split at speed)
+      const options = { startGap: drifted ? STAGE_GAP_AFTER_DRIFT : STAGE_GAP };
+      if (beyond && this.isDrifted(corner, after, beyond)) options.endGap = this.pilot.options.lineUpDistance;
+      this.traffic.stageRoute?.(corner, after, options);
     } else if (!near && this.clearedCorner !== undefined && this.clearedCorner !== index) {
       const last = path[this.clearedCorner];
       if (Math.hypot(last.x - car.position.x, last.z - car.position.z) > CORNER_CLEAR_RADIUS + 20) {
@@ -789,6 +797,12 @@ class SwimShow {
         this.traffic.setClearZone(null);
       }
     }
+  }
+
+  // Whether the route's turn at b (from a, on to c) is sharp enough for the AI to drift it
+  isDrifted(a, b, c) {
+    const turn = wrapAngle(Math.atan2(c.x - b.x, c.z - b.z) - Math.atan2(b.x - a.x, b.z - a.z));
+    return Math.abs(turn) > this.pilot.options.sharpTurn;
   }
 
   // Pinned against a bus or a wall, or boxed in by traffic that is waiting for it: back out for a moment, steering

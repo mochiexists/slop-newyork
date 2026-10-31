@@ -24,6 +24,7 @@ import { shiftDown, shiftUp, toggleManual } from './drift-physics.js';
 import { SwimDirector, SWIM_STARTS, SQUEEZE_ROUTE, SHOW_SPOT, SHOW_SIGNAL_TIME } from './swim-mode.js';
 import { M5Cockpit } from './m5-cockpit.js';
 import { loadSwimCarModel } from './m3-model.js';
+import { installSessionRecorder } from './session-recorder.js';
 
 // Application setup, shader warm-up and frame loop.
 
@@ -164,9 +165,12 @@ async function initApp() {
   soundButton?.addEventListener('click', () => audioSystem.setEnabled(!audioSystem.enabled));
   // The AI show cuts between the chase camera and the driver's seat
   swimDirector = new SwimDirector({
-    scene, controllerManager, audioSystem, trafficSystem, onShowCamera: (id) => selectCamera(id, true)
+    scene, controllerManager, audioSystem, trafficSystem, onShowCamera: (id) => selectCamera(id, true),
+    onCloseCall: (split) => cameraSystem.scoreKick.trigger(split)
   });
   const m5Cockpit = new M5Cockpit(controllerManager.entities.swim, swimDirector.radio);
+  // The swimming car's flight recorder: to the dev server's /session-log, and a file on L (session-recorder.js)
+  installSessionRecorder({ controllerManager, cameraSystem, isTypingInField, onSaved: () => swimDirector.score.flash('SESSION SAVED', 'banked') });
   // Full build: the real M3 Competition model replaces the procedural car when assets/models/m3.glb is there
   loadSwimCarModel(controllerManager.entities.swim, m5Cockpit).catch((error) => console.warn('M3 model not loaded:', error));
   updateSoundButton();

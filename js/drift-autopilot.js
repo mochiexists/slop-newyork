@@ -16,19 +16,19 @@ const COMMIT_CLEARANCE = 0.05; // share of the lock it keeps short of the keyboa
 
 const AUTOPILOT = {
   cruiseSpeed: 38, // m/s on the straights (85 mph)
-  cornerSpeed: 15, // m/s it brakes to for a drifted 90° corner, by the point it turns in: the slide scrubs it to ~12
+  cornerSpeed: 16, // m/s it brakes to for a drifted 90° corner, by the point it turns in: the slide scrubs it to ~12
   braking: 7.5, // m/s² it plans to brake at before a corner
   turnGrip: 10.5, // m/s²: the lateral grip a drifted corner is planned with (its radius, so where it turns in)
   sharpTurn: 40 * RAD, // corners sharper than this are drifted
-  kickTime: 0.32, // s of handbrake to break the rear loose
+  kickTime: 0.25, // s of handbrake to break the rear loose
   kickSteer: 0.25, // share of the lock the wheel is wound on to before the handbrake flick
-  driftAngle: 39 * RAD, // drift angle it holds through a corner (the yaw it carries out of the flick peaks ~6° past it)
+  driftAngle: 35 * RAD, // drift angle it holds through a corner (the yaw it carries out of the flick peaks ~8° past it)
   angleGain: 1 / (10 * RAD), // share of the lock per radian of drift angle short of (into the turn) or past (counter-steer) it
-  slipLead: 0.15, // s ahead it reads the drift angle from how fast it is swinging
-  counterLock: 0.3, // share of the lock it counter-steers with at most: the wheel takes half a second to wind back into
-  // the turn from a full counter-steer, and by then the rears have gripped and the slide is over
+  slipLead: 0.35, // s ahead it reads the drift angle from how fast it is swinging
+  counterLock: 1, // share of the lock it counter-steers with at most (with no key the wheels self-align and the fronts
+  // still bite into the turn: catching the flick's swing takes the counter-steer key, drift-physics.js)
   slipRateFilter: 20, // 1/s: how quickly its feel for that swing follows the car
-  liftAngle: 20 * RAD, // read ahead this far past the angle it wants, it lifts off W
+  liftAngle: 10 * RAD, // read ahead this far past the angle it wants, it lifts off W
   driftSpeed: 20, // m/s it holds a slide to: the gas comes off as the slide's ground speed rises to it (a faster slide is
   // a wider one)
   driftThrottleGain: 0.5, // share of the pedal per m/s under driftSpeed
@@ -45,6 +45,11 @@ const AUTOPILOT = {
   scanAhead: 120, // m of traffic it plans through: at 85 mph, its look-ahead plus the room to brake to a queue
   carHalfWidth: 0.97, // m: the car's own half width and half length
   carHalfLength: 2.5,
+  yawSettle: 0.5, // s: in a plan, how quickly the car straightens from the angle it is turned at now (the wheel's lag
+  // and the yaw damping catching a flick),
+  yawCarry: 0.25, // ...after swinging on at its yaw rate for this long (the wheel takes that to catch it)
+  yawLead: 2, // ...and how far its nose is turned in a move across, as a share of the angle it travels across at (in a
+  // flick at 85 mph the nose leads: 12° at 8° of travel, the tail stepping out a little)
   passMargin: 0.35, // m of air it leaves between itself and a car it passes (a swimmer's margin, not a driver's)
   followMargin: 1.5, // m it leaves to a bumper it closes on
   gapStep: 0.75, // m between the lateral positions it tries
@@ -87,6 +92,7 @@ const AUTOPILOT = {
   splitBonus: 4, // score for a split, on top of its two close calls
   splitAlong: 5, // m apart along the street at most that two cars count as side by side, a gap to split,
   splitRoom: 0.4, // m of room at least it leaves beyond its margins (on the keys it can't hold a line to the centimetre)
+  splitLineUp: 0, // score per metre a plan ends off the gap of the nearest pair to split ahead (0: it doesn't seek them)
   keepSpeedWeight: 12, // score per m/s a plan slows below keepSpeed (set while the show counts down the hand-over)
   brakeSteerLoss: 0.6, // share of the sideways grip lost to the brake key held down (all or nothing: 1.05 g)
   hitCost: 200, // score against a plan that touches a car
@@ -103,6 +109,15 @@ const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 function acrossSpeed(gap, accel, maxSpeed, settle) {
   const distance = Math.abs(gap);
   return Math.sign(gap) * Math.min(maxSpeed, Math.sqrt(2 * accel * distance), distance / settle);
+}
+
+// The swimmer's own half extent along and across the street, turned `yaw` (rad) off it
+function footprintAlong(o, yaw) {
+  return o.carHalfLength * Math.abs(Math.cos(yaw)) + o.carHalfWidth * Math.abs(Math.sin(yaw));
+}
+
+function footprintAcross(o, yaw) {
+  return o.carHalfWidth * Math.abs(Math.cos(yaw)) + o.carHalfLength * Math.abs(Math.sin(yaw));
 }
 
 // One step of a move across the street, as the car makes it: its sideways speed swings toward acrossSpeed at no more
@@ -213,11 +228,17 @@ class DriftAutopilot {
 
     // Traffic in the street's frame: along (m ahead of the car, centre to centre), across, and both velocities
     // The swimmer's own footprint along and across the street, turned as it is (a flick turns it 10-20°, which widens it
-    // by half a metre)
-    const egoRel = car.heading - Math.atan2(s.ux, s.uz);
-    const egoCos = Math.abs(Math.cos(egoRel)), egoSin = Math.abs(Math.sin(egoRel));
-    const egoAlong = o.carHalfLength * egoCos + o.carHalfWidth * egoSin;
-    const egoAcross = o.carHalfWidth * egoCos + o.carHalfLength * egoSin;
+    // by half a metre). In flight it is turned the way the plan moves across, or as it is now while that settles
+    // (yawSettle): straight again by the time it reaches a pair a second ahead, it can split them.
+    const egoYawSigned = wrap(car.heading - Math.atan2(s.ux, s.uz));
+    const egoYaw = Math.abs(egoYawSigned);
+    const egoAlong = footprintAlong(o, egoYaw);
+    const egoAcross = footprintAcross(o, egoYaw);
+    // (a car still swinging turns on for a moment before the wheel catches it: the turn it settles from is the most of
+    // now and where its yaw rate carries it over yawCarry)
+    const egoYawPeak = Math.max(egoYaw, Math.abs(egoYawSigned + (car.angularVel || 0) * o.yawCarry));
+    // (at its widest, however it turns: the half diagonal)
+    const egoWidest = Math.hypot(o.carHalfLength, o.carHalfWidth);
     // (entries are pooled: this runs several times a second with dozens of cars)
     const seen = this._seen ??= [];
     const band = this.corridor();
@@ -254,7 +275,11 @@ class DriftAutopilot {
       entry.vLateral = vx * lx + vz * lz;
       entry.length = inside ? Math.max(extentAlong + egoAlong, Math.abs(along) - 0.2) : length;
       entry.across = extentAcross;
+      entry.extentAlong = extentAlong;
+      entry.inside = inside;
       entry.reach = inside ? Math.max(extentAcross + egoAcross, Math.min(reach, Math.abs(lateral - carLat) - 0.05)) : reach;
+      // (the most it reaches across in any flight: see the footprint in the flight below)
+      entry.widestReach = inside ? entry.reach : extentAcross + egoWidest + o.passMargin;
       count++;
     }
 
@@ -284,7 +309,9 @@ class DriftAutopilot {
       for (let j = 0; j < count; j++) {
         const rightCar = seen[i], leftCar = seen[j];
         if (leftCar.lateral <= rightCar.lateral || Math.abs(leftCar.along - rightCar.along) > o.splitAlong) continue;
-        const from = rightCar.lateral + rightCar.reach, to = leftCar.lateral - leftCar.reach;
+        // (with its own car straight, as it will be by then: turned in a flick now, the gap still counts)
+        const from = rightCar.lateral + rightCar.across + o.carHalfWidth + o.passMargin;
+        const to = leftCar.lateral - leftCar.across - o.carHalfWidth - o.passMargin;
         const y = (from + to) / 2;
         // (only pairs still ahead; a gap with more than a close call's air either side is just road, which the steps
         // already cover)
@@ -295,6 +322,16 @@ class DriftAutopilot {
         lines[lineCount++] = y;
       }
     }
+    // The split it lines up on (splitLineUp): the gap of the nearest pair ahead, while that pair is still beyond where
+    // its plans reach (closer, the plans themselves decide whether to thread it)
+    let splitLine = null, splitClear = Infinity;
+    for (let line = gridCount; line < lineCount; line++) {
+      if (clear[line] < splitClear) {
+        splitClear = clear[line];
+        splitLine = lines[line];
+      }
+    }
+    if (splitClear < u * o.planTime) splitLine = null;
     for (let line = 0; line < lineCount; line++) {
       const y = lines[line];
       const split = line >= gridCount;
@@ -309,7 +346,7 @@ class DriftAutopilot {
         for (let i = 0; i < count; i++) {
           const ob = seen[i];
           const drift = ob.vLateral * o.planTime;
-          const reach = ob.reach + widest;
+          const reach = ob.widestReach + widest;
           if (ob.lateral + Math.max(0, drift) + reach > low && ob.lateral + Math.min(0, drift) - reach < high) {
             near[nearCount++] = ob;
           }
@@ -347,21 +384,28 @@ class DriftAutopilot {
             latVel = slideAcross(lat, latVel, goal, o.planStep, across, Math.min(lateralSpeed, speed * o.crawlAcross), swing,
               o.settleTime);
             lat += latVel * o.planStep;
+            // Its own footprint now: turned the way it is moving across, or as it was turned at the start (and swinging
+            // on for yawCarry) while that settles, whichever is more
+            const settling = egoYawPeak * Math.exp(-Math.max(0, t - o.yawCarry) / o.yawSettle);
+            const yaw = Math.max(o.yawLead * Math.atan(Math.abs(latVel) / Math.max(1, speed)), settling);
+            const ownAlong = footprintAlong(o, yaw), ownAcross = footprintAcross(o, yaw);
             for (let i = 0; i < nearCount; i++) {
               const ob = near[i];
               const ahead = ob.along + ob.vAlong * t - travelled;
               const across = ob.lateral + ob.vLateral * t - lat;
-              const gapAlong = Math.abs(ahead) - ob.length;
+              const length = ob.inside ? ob.length : ob.extentAlong + ownAlong + o.followMargin;
+              const reach = ob.inside ? ob.reach : ob.across + ownAcross + o.passMargin;
+              const gapAlong = Math.abs(ahead) - length;
               // (the further it has moved across, the less sure it is where on the keys it really is: the margin widens by
               // a share of the move so far. A split of the pair it is lined up on keeps the swimmer's margin; a swing
               // across a lane or two to a gap in the next row gets the room its error takes)
               const spread = o.planSpread * Math.abs(lat - carLat);
-              const gapAcross = Math.abs(across) - ob.reach - spread;
+              const gapAcross = Math.abs(across) - reach - spread;
               if (gapAlong < 0 && gapAcross < 0) {
                 hitAt = t;
                 break;
               }
-              if (hold > 0 && gapAlong < 0 && Math.abs(ob.lateral + ob.vLateral * t - carLat) < ob.reach) {
+              if (hold > 0 && gapAlong < 0 && Math.abs(ob.lateral + ob.vLateral * t - carLat) < reach) {
                 heldUntil = Math.min(heldUntil, t);
               }
               // A close call, as the swim mode scores it: the air beside the car while alongside it, then passing it
@@ -398,6 +442,9 @@ class DriftAutopilot {
           }
           score -= (Math.abs(y - carLat) + Math.abs(then - y)) * o.moveCost;
           if (this.lineUp) score -= Math.abs(y - this.entryLine) * o.lineUpCost;
+          // (a split coming up: it heads for the gap while the road is open, so it is on its line by the time it
+          // reaches the pair, rather than a lane off with too far to go across to thread it)
+          if (splitLine !== null) score -= Math.abs(y - splitLine) * o.splitLineUp;
           score += this.closeCallScore(nearCount);
           // A late flick: the move starts within lateWindow of reaching the car on the line it held, and still clears it
           if (hold > 0 && heldUntil - hold < o.lateWindow) score += o.lateBonus;
