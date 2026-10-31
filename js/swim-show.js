@@ -89,14 +89,16 @@ const SIM_STEPS_PER_SECOND = 240; // the drift model's step rate (controllers.js
 
 // The show's swimmer is sketchier than the autopilot's defaults (drift-autopilot.js AUTOPILOT): flat out at 90 mph,
 // threading gaps with a hand's width of air and going out of its way for a close pass, but sure of its line before it
-// commits to a split (planSpread: at that speed a row comes up every second or two)
+// commits to a split (planSpread: at that speed a row comes up every second or two), and heading for the gap of the
+// next pair while it is still out of reach (splitLineUp), so it isn't a lane off when it gets there
 const SHOW_SWIMMING = {
   cruiseSpeed: 40,
   planSpread: 0.2,
   lateBonus: 20,
   passMargin: 0.2,
   closeBonus: 60,
-  splitBonus: 100
+  splitBonus: 100,
+  splitLineUp: 20
 };
 
 const GATHER_RANGE = 130; // m round the car that traffic is handed to the AI (it plans 120 m ahead)
