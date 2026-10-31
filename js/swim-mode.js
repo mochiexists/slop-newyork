@@ -3,6 +3,7 @@ import { attribute, float, texture, vec3 } from 'three/tsl';
 import { avenueX, streetZ } from './city-config.js';
 import { BODY_SPECS } from './cars.js';
 import { PoliceCruiser, SwimShow, SHOW_SPOT, SHOW_SIGNAL_TIME } from './swim-show.js';
+import { HudFlash } from './swim-hud-flash.js';
 
 // Swimming: the BMW M5 weaving through traffic and drifting through Times Square to Careless Whisper. This module owns
 // everything about the mode except the car itself (controllers.js) and its physics (drift-physics.js): the
@@ -55,6 +56,7 @@ const SQUEEZE_ROUTE = [
 const DRIFT_SLIP = 12 * RAD; // body slip that counts as a drift
 const DRIFT_MIN_SPEED = 2.5; // m/s over the ground (a donut's tail swings round at about this)
 const DRIFT_GRACE = 0.7; // s a drift may straighten before it is banked
+const BANK_FLASH_MIN = 25; // points a banked drift needs to flash its score (a flick's +5 doesn't)
 const SKID_SLIDE = 3.2; // m/s of rear tire slide before rubber is laid
 const SMOKE_SLIDE = 5; // m/s of rear tire slide before smoke
 const CRASH_SPEED_CHANGE = 5; // m/s of velocity change in one frame
@@ -489,17 +491,22 @@ class CloseCalls {
   }
 }
 
+// Writes an element's text only when it changes (the score is rendered ten times a second)
+function setText(element, text) {
+  if (element && element.textContent !== text) element.textContent = text;
+}
+
 // Drift scoring: points for angle × speed while sliding, banked when the car straightens up, lost in a crash.
 class DriftScore {
   constructor(elements) {
     this.el = elements;
+    this.flasher = new HudFlash(elements.flash);
     this.points = 0;
     this.total = 0;
     this.best = 0;
     this.time = 0;
     this.grace = 0;
     this.active = false;
-    this.flashTimer = 0;
     this.render();
   }
 
@@ -516,14 +523,14 @@ class DriftScore {
       this.grace -= dt;
       if (this.grace <= 0) this.bank();
     }
-    if (this.flashTimer > 0) this.flashTimer -= dt;
   }
 
   bank() {
     if (this.points >= 1) {
       this.total += Math.round(this.points);
       this.best = Math.max(this.best, Math.round(this.points));
-      this.flash(`+${Math.round(this.points).toLocaleString('en-US')} SWIM`, 'banked');
+      // A flick's few points still count, they just don't flash over the close calls
+      if (this.points >= BANK_FLASH_MIN) this.flash(`+${Math.round(this.points).toLocaleString('en-US')} SWIM`, 'banked');
     }
     this.reset();
   }
@@ -548,21 +555,16 @@ class DriftScore {
   }
 
   flash(text, kind) {
-    if (!this.el.flash) return;
-    this.el.flash.textContent = text;
-    this.el.flash.dataset.kind = kind;
-    this.el.flash.classList.remove('show');
-    void this.el.flash.offsetWidth; // restart the animation
-    this.el.flash.classList.add('show');
+    this.flasher.show(text, kind);
   }
 
   render(slip = 0) {
     const { angle, points, total, best, chain } = this.el;
-    if (angle) angle.textContent = `${Math.round(Math.abs(slip) / RAD)}°`;
-    if (points) points.textContent = this.active ? Math.round(this.points).toLocaleString('en-US') : '—';
-    if (total) total.textContent = this.total.toLocaleString('en-US');
-    if (best) best.textContent = this.best.toLocaleString('en-US');
-    if (chain) chain.textContent = this.active ? `×${1 + Math.min(4, Math.floor(this.time / 2.5))}` : '';
+    setText(angle, `${Math.round(Math.abs(slip) / RAD)}°`);
+    setText(points, this.active ? Math.round(this.points).toLocaleString('en-US') : '—');
+    setText(total, this.total.toLocaleString('en-US'));
+    setText(best, this.best.toLocaleString('en-US'));
+    setText(chain, this.active ? `×${1 + Math.min(4, Math.floor(this.time / 2.5))}` : '');
   }
 }
 
@@ -744,6 +746,7 @@ class SwimDirector {
       }
     }
     this.screech.update(slide, Math.abs(c.speed), this.active);
+    this.score.flasher.update(dt);
     this.smoke.update(dt, camera);
     this.skids.update();
 
