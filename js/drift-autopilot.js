@@ -78,6 +78,8 @@ const AUTOPILOT = {
   lateralSwing: 6, // m/s² its sideways speed swings toward the move's at: the wheel winding on, the car turning to it
   swimSlip: 6 * RAD, // slip past which a swimming flick lifts off the gas until the tail is back in line
   slipCatch: 0.75, // wheel angle per radian of slip it counter-steers with, swimming
+  slideSpeed: 8, // m/s below which the body's slip is the geometry of a slow turn (about 10° on the lock at a crawl),
+  // not a slide: the swimming neither lifts for it nor counter-steers it, or a crawl off a curb never gets going again
   swimLock: 0.6, // share of the lock it swims with at most: the tires' grip peaks there (about 1.1 g) at any speed
   planSpread: 0.1, // m the passing margin widens by per metre a plan has moved across: how far a move on the keys
   // drifts off the line it was planned on (the lane-change probe: about half a metre over a 3-lane swing)
@@ -828,7 +830,8 @@ class DriftAutopilot {
     // (swimming, the wheel also leans against the car's own turning, so a flick is caught as it arrives, not after)
     // and against the nose swinging out past the way the car is going (slip), which a flick back across builds faster
     // than the travel turns
-    const wheel = error * o.steerGain - (this.cornering ? 0 : o.yawDamping * car.angularVel - o.slipCatch * slip);
+    const swimmingSlip = Math.abs(u) > o.slideSpeed ? slip : 0;
+    const wheel = error * o.steerGain - (this.cornering ? 0 : o.yawDamping * car.angularVel - o.slipCatch * swimmingSlip);
     // Pointing the wrong way (more off the street than the quickest move across points it): slow to a speed the front
     // tires can turn at, about 1 g of grip over the radius it takes to swing back. A move across itself never slows it.
     const widest = Math.atan2(moveSpeed, Math.max(1, Math.abs(u)));
@@ -905,7 +908,8 @@ class DriftAutopilot {
         // Easing off while the car is still sliding after a corner, so the tail comes back in line; and off the gas
         // altogether once a flick swings the tail out past swimSlip, as a player lifts: held into the slide, the keyboard
         // driver would let the rears spin, they'd lose their grip and the move across would never be caught
-        const sliding = slipAbs > o.swimSlip ? 0 : clamp(1 - (slipAbs - o.tractionSlip) / (12 * RAD), 0.05, 1);
+        const swimmingSlipAbs = Math.abs(swimmingSlip);
+        const sliding = swimmingSlipAbs > o.swimSlip ? 0 : clamp(1 - (swimmingSlipAbs - o.tractionSlip) / (12 * RAD), 0.05, 1);
         // (a plan flooring it is W held: the traction control and xDrive put down what the tires take)
         const flooring = feedForward >= o.pedals[o.pedals.length - 1];
         input.throttle = (flooring ? 1 : Math.min(1, force / fullDriveForce(car, p))) * sliding;

@@ -343,3 +343,28 @@ test('crawling up to a queue across the street, it knows it is queued; moving, o
   const oncoming = queue.map((v) => ({ ...v, yaw: Math.PI }));
   assert.equal(queued(0.5, oncoming), false, 'nose to nose with oncoming cars: the wrong lane, not a queue');
 });
+
+test('scraping along a wall at a crawl, the slide it reads is the wall\'s push: it stays on the gas to get away', () => {
+  // The browser show stuck here for a minute after a wide corner put it on the sidewalk: a building face held its
+  // velocity ~10° off its nose at 2-7 m/s, past swimSlip, so the swimmer lifted for a "slide" and sawed at the keys
+  const pilot = new DriftAutopilot();
+  pilot.setPath([{ x: 0, z: 0 }, { x: 0, z: 400 }]);
+  const driver = new physics.KeyboardDriver();
+  const c = car();
+  c.position.x = 4.7;
+  c.position.z = 20;
+  let gas = 0, frames = 0;
+  for (let t = 0; t < 2; t += FRAME) {
+    // the wall: 3 m/s along the street, its velocity pushed 10° off the car's heading every frame
+    c.heading = 0;
+    c.angularVel = 0;
+    c.speed = 3;
+    c.vx = 3 * Math.sin(10 * RAD);
+    c.vz = 3 * Math.cos(10 * RAD);
+    const keys = pilot.update(c, FRAME, [], driver);
+    driver.update(c, keys, FRAME);
+    gas += keys.forward;
+    frames++;
+  }
+  assert.ok(gas > frames * 0.8, `W held (${gas} of ${frames} frames)`);
+});
