@@ -15,6 +15,8 @@ const NO_HOLD = [0]; // a split or a step along its own line is flown at once
 const COMMIT_CLEARANCE = 0.05; // share of the lock it keeps short of the keyboard driver's power-over lock, swimming
 const COAST = 'coast'; // the pedal plan off both pedals (a lift)
 const FLINCH_MARGIN = 0.3; // m a driver adds round both cars, reckoning whether the swimmer will hit it (traffic.js)
+const CRAWL_BRAKE = 0.6; // m/s below which the brake key isn't pressed (it would reverse): it stops the car otherwise,
+const CRAWL_HOLD = 0.3; // ...holding it on the handbrake below this (drift-physics.js holds a braked car still there)
 
 const AUTOPILOT = {
   cruiseSpeed: 38, // m/s on the straights (85 mph)
@@ -708,6 +710,13 @@ class DriftAutopilot {
     }
     if (keys.backward) keys.forward = 0;
     keys.handbrake = want.handbrake > 0.5 ? 1 : 0;
+    // (at a crawl the brake key reverses instead, and the tires roll on for ever: a car creeping up to a queue is
+    // stopped as a player stops it, taps of S, whose push backwards slows it, then Space to hold it)
+    if (want.brake > 0 && want.reverse === 0 && car.speed > 0 && car.speed <= CRAWL_BRAKE) {
+      keys.forward = 0;
+      keys.backward = car.speed > CRAWL_HOLD ? 1 : 0;
+      keys.handbrake = car.speed > CRAWL_HOLD ? 0 : 1;
+    }
     return keys;
   }
 
