@@ -145,9 +145,10 @@ const DONUT = {
   burnoutLock: 0.3, // share of lock wound on during the burnout
   kickSpeed: 11, // m/s at which it flicks into the slide
   kickTime: 0.25, // s of handbrake
-  angle: 45 * RAD, // A held while the drift angle is below this (the driver's throttle settles it nearer 35°),
+  slideAngle: 20 * RAD, // a slide this deep while driving onto the circle is the drift already: no flick needed
+  angle: 40 * RAD, // A held while the drift angle is below this (the driver's throttle settles it nearer 35°),
   anglePerMetre: 2 * RAD, // more when it is outside the circle
-  liftAngle: 50 * RAD, // W lifted past this angle
+  liftAngle: 60 * RAD, // W lifted past this angle (short of it the keyboard driver's throttle holds the angle)
   speed: 10.5, // m/s: past this, and outside the circle, it taps the handbrake
   radialLead: 1.2, // s ahead the distance from the cop is read from how fast it is changing
   exitAngle: 25 * RAD // powering out, flat out and counter-steering until the slide is down to this
@@ -187,7 +188,9 @@ class DonutDriver {
       const aimX = this.center.x + Math.sin(bearing) * this.radius, aimZ = this.center.z + Math.cos(bearing) * this.radius;
       const error = wrapAngle(Math.atan2(aimX - car.position.x, aimZ - car.position.z) - travelHeading(car));
       want = Math.max(-1, Math.min(1, error * o.steerGain));
-      if (ground > o.kickSpeed) {
+      if (angle > o.slideAngle) {
+        this.phase = 'drift';
+      } else if (ground > o.kickSpeed) {
         this.phase = 'kick';
         this.kick = o.kickTime;
       }
