@@ -264,6 +264,16 @@ test('a close call kicks the follow view a few degrees wider and eases back insi
     closeCall.update(1 / 60);
   }
   assert.ok(split.fov > closeCall.fov * 1.4 && split.shake > closeCall.shake * 1.4, 'a split kicks harder');
+  // A frame with no time in it doesn't spend the kick, and odd timings stay finite
+  const paused = new ScoreKick();
+  paused.trigger();
+  paused.update(0);
+  assert.ok(paused.update(1 / 60).fov > 0, 'still kicks after a zero frame');
+  for (const options of [{ attack: 0 }, { attack: 0.3, time: 0.3 }]) {
+    const odd = new ScoreKick(options);
+    odd.trigger(true);
+    for (let i = 0; i < 30; i++) assert.ok(Number.isFinite(odd.update(i % 3 ? 1 / 60 : 0).fov), JSON.stringify(options));
+  }
 
   // In the camera: on top of the speed feel for a car in the chase view, and the view settles back to it after
   const h = cameraHarness({

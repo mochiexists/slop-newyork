@@ -9,6 +9,7 @@ const SCORE_KICK = {
   time: 0.3, // s from the kick until it has eased out
   split: 1.6 // a split kicks this many times as hard as a close call
 };
+const MIN_SPAN = 1e-3; // s: the shortest rise or fall the envelope divides by
 
 class ScoreKick {
   constructor(options = {}) {
@@ -30,8 +31,10 @@ class ScoreKick {
   envelope(age = this.age) {
     const o = this.o;
     if (!(age < o.time)) return 0;
-    const rise = Math.min(1, age / o.attack);
-    const fall = 1 - Math.max(0, age - o.attack) / (o.time - o.attack);
+    // (an attack of 0, or as long as the whole kick, can't divide by nothing)
+    const attack = Math.min(Math.max(o.attack, MIN_SPAN), o.time - MIN_SPAN);
+    const rise = Math.min(1, age / attack);
+    const fall = 1 - Math.max(0, age - attack) / (o.time - attack);
     return rise * fall * fall;
   }
 
@@ -41,7 +44,8 @@ class ScoreKick {
     const level = this.strength * this.envelope();
     this.fov = this.o.fov * level;
     this.shake = this.o.shake * level;
-    if (level === 0) this.strength = 0;
+    // (spent once the kick has run its time; a frame with no time in it at the start leaves it waiting to rise)
+    if (this.age >= this.o.time) this.strength = 0;
     return this;
   }
 }
