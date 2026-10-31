@@ -3,7 +3,7 @@ import { pass, mrt, output, normalView, positionView, metalness, roughness, vec2
 import { ssr } from 'three/addons/tsl/display/SSRNode.js';
 import { createPostProcessing } from './post-processing.js';
 import { ClusteredLighting } from 'three/addons/lighting/ClusteredLighting.js';
-import { getLocationLabel, isTypingInField, ROADS, NYC_LANDMARKS, SIGNAL_TIMING, TELEPORT_LOCATIONS } from './city-config.js';
+import { getLocationLabel, isTypingInField, ROADS, NYC_LANDMARKS, TELEPORT_LOCATIONS } from './city-config.js';
 import { buildCityGrid } from './city-grid.js';
 import { buildBoroughs } from './boroughs.js';
 import { buildLandmarks } from './landmarks.js';
@@ -19,12 +19,8 @@ import { LightingSystem } from './lighting.js';
 import { NYCMapSystem } from './nyc-map.js';
 import { setupSceneCulling, updateSceneCulling } from './scene-culling.js';
 import { CityAudioSystem } from './audio-system.js';
-import { bindSwimEngineToggle } from './swim-engine-toggle.js';
-import { shiftDown, shiftUp, toggleManual } from './drift-physics.js';
-import { SwimDirector, SWIM_STARTS, SQUEEZE_ROUTE, SHOW_SPOT, SHOW_SIGNAL_TIME } from './swim-mode.js';
-import { M5Cockpit } from './m5-cockpit.js';
-import { loadSwimCarModel } from './m3-model.js';
-import { installSessionRecorder } from './session-recorder.js';
+import { SwimDirector } from './swim-mode.js';
+import { SWIM_CONTROL_HINTS, SWIM_TOP_SPEED_MPH, bindSwimControls, setUpSwimCar } from './swim-controls.js';
 
 // Application setup, shader warm-up and frame loop.
 
@@ -168,15 +164,8 @@ async function initApp() {
     scene, controllerManager, audioSystem, trafficSystem, onShowCamera: (id) => selectCamera(id, true),
     onCloseCall: (split) => cameraSystem.scoreKick.trigger(split)
   });
-  const m5Cockpit = new M5Cockpit(controllerManager.entities.swim, swimDirector.radio);
-  // The swimming car's flight recorder: to the dev server's /session-log, and a file on L (session-recorder.js)
-  installSessionRecorder({ controllerManager, cameraSystem, isTypingInField, onSaved: () => swimDirector.score.flash('SESSION SAVED', 'banked') });
-  // Full build: the real M3 Competition model replaces the procedural car when assets/models/m3.glb is there
-  loadSwimCarModel(controllerManager.entities.swim, m5Cockpit).catch((error) => console.warn('M3 model not loaded:', error));
+  const m5Cockpit = setUpSwimCar({ controllerManager, cameraSystem, audioSystem, swimDirector, isTypingInField });
   updateSoundButton();
-  // The swimming car's engine sound, M3 or the GTA mod's M5: the button on the Careless Whisper card and K
-  audioSystem.onSwimEngineChange = bindSwimEngineToggle(document.getElementById('swim-engine'), audioSystem);
-  audioSystem.onSwimEngineChange();
   // pagehide also covers navigation away on mobile; preserve the context across back-forward cache restores.
   window.addEventListener('pagehide', (event) => {
     savePlayerState();
@@ -295,14 +284,12 @@ async function initApp() {
     person: [[['W', 'S'], 'Walk / Run'], [['A', 'D'], 'Turn'], [['Space'], 'Jump'], [['Drag'], 'Orbit']],
     car: [[['W', 'S'], 'Drive / Reverse'], [['A', 'D'], 'Steer'], [['B'], 'Horn'], [['Drag'], 'Orbit']],
     cyclist: [[['W', 'S'], 'Pedal / Brake'], [['A', 'D'], 'Lean & Turn'], [['Drag'], 'Orbit']],
-    helicopter: [[['W', 'S'], 'Pitch'], [['A', 'D'], 'Yaw'], [['Space', 'E'], 'Ascend'], [['Q', 'C'], 'Descend']],
-    swim: [[['W', 'S'], 'Gas / Brake'], [['W', 'S'], 'Both: burnout'], [['Space'], 'Handbrake'], [['P'], 'AI show'],
-      [['I'], 'AI drives / you drive'], [['F'], 'Flip off'], [['G'], 'George Michael'], [['K'], 'Engine sound'],
-      [['T'], 'Auto / manual'], [['Z', 'X'], 'Gear down / up']]
+    helicopter: [[['W', 'S'], 'Pitch'], [['A', 'D'], 'Yaw'], [['Space', 'E'], 'Ascend'], [['Q', 'C'], 'Descend']]
   };
-  // Top speeds in mph (controllers.js & drift-physics.js cap them at 8.2, 36, 19, 52 & 85 m/s): full scale of the
-  // speed meter
-  const topSpeedMph = { person: 18, car: 81, cyclist: 43, helicopter: 116, swim: 190 };
+  // Top speeds in mph (controllers.js caps them at 8.2, 36, 19 & 52 m/s): full scale of the speed meter
+  const topSpeedMph = { person: 18, car: 81, cyclist: 43, helicopter: 116 };
+  controlHints.swim = SWIM_CONTROL_HINTS; // (Swimming in Slop: swim-controls.js)
+  topSpeedMph.swim = SWIM_TOP_SPEED_MPH;
 
   function renderControlHints(mode) {
     if (!elControlsHint) return;
@@ -534,34 +521,9 @@ async function initApp() {
   const openMapBtn = document.getElementById('btn-open-map');
   if (openMapBtn) openMapBtn.addEventListener('click', () => mapSystem.toggleFullMap(true));
 
-  // The two reference clips: get in the M5 where each one starts. The map carries the Squeeze Benz drive.
-  document.querySelectorAll('[data-swim-start]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const start = SWIM_STARTS[btn.getAttribute('data-swim-start')];
-      if (!start) return;
-      selectMode('swim');
-      swimDirector.stopShow();
-      const at = teleportTo(start.x, start.z, start.heading);
-      swimDirector.parkCruiserNear(at.x, at.z, start.heading);
-      closePopovers();
-    });
-  });
-
-  // The AI show: donuts round the cop in Times Square, the escape, then the AI roams on until P or a driving key
-  function startSwimShow() {
-    selectMode('swim');
-    teleportTo(SHOW_SPOT.x, SHOW_SPOT.z, SHOW_SPOT.heading);
-    // The city clock jumps on to the show's point in the signal cycle, so its lights repeat along with its traffic
-    elapsed += (((SHOW_SIGNAL_TIME - elapsed) % SIGNAL_TIMING.cycle) + SIGNAL_TIMING.cycle) % SIGNAL_TIMING.cycle;
-    swimDirector.startShow();
-  }
-  document.querySelectorAll('[data-swim-show]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      startSwimShow();
-      closePopovers();
-    });
-  });
-  mapSystem.overlayRoutes.push({ points: SQUEEZE_ROUTE, color: '#ff4fa3' });
+  // Swimming in Slop: the swim buttons, the Squeeze route on the map and the mode's keys (swim-controls.js)
+  bindSwimControls({ controllerManager, swimDirector, m5Cockpit, audioSystem, mapSystem, isTypingInField, selectMode,
+    teleportTo, closePopovers, clock: { get: () => elapsed, set: (t) => { elapsed = t; } } });
 
   if (hudToggleBtn) {
     hudToggleBtn.addEventListener('click', () => {
@@ -614,43 +576,11 @@ async function initApp() {
       case 'KeyH':
         if (hudToggleBtn) hudToggleBtn.click();
         break;
-      case 'KeyP':
-        if (e.repeat || mapSystem.isFullMapOpen) break;
-        if (swimDirector.show.running) swimDirector.stopShow();
-        else startSwimShow();
-        break;
-      case 'KeyI': // swimming: the AI drives on from where the car is (swim-show.js roam), or gives the car back
-        if (!e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey && controllerManager.activeMode === 'swim') swimDirector.toggleAI();
-        break;
       case 'KeyN':
         if (!e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey) audioSystem.setEnabled(!audioSystem.enabled);
         break;
       case 'KeyB':
         if (!e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey && !mapSystem.isFullMapOpen) audioSystem.honk(controllerManager.getActiveEntity());
-        break;
-      case 'KeyG': // swimming: George Michael on / off
-        if (!e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey && controllerManager.activeMode === 'swim') {
-          if (swimDirector.radio.wanted) swimDirector.radio.pause();
-          else swimDirector.radio.play();
-        }
-        break;
-      case 'KeyF': // swimming: the driver's left hand up (toggle), see m5-cockpit.js
-        if (!e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey && controllerManager.activeMode === 'swim') m5Cockpit.toggleBird();
-        break;
-      case 'KeyK': // swimming: swap the engine sound, M3 / M5 (GTA mod), see swim-engine-toggle.js
-        if (!e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey && controllerManager.activeMode === 'swim') audioSystem.toggleSwimEngine();
-        break;
-      case 'KeyT': // swimming: automatic or manual gearbox
-        if (!e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey && controllerManager.activeMode === 'swim') {
-          const manual = toggleManual(controllerManager.entities.swim);
-          swimDirector.score.flash(manual ? 'MANUAL · X UP · Z DOWN' : 'AUTOMATIC', 'banked');
-        }
-        break;
-      case 'KeyX': // swimming, manual: shift up
-        if (!e.repeat && controllerManager.activeMode === 'swim' && controllerManager.entities.swim.manual) shiftUp(controllerManager.entities.swim);
-        break;
-      case 'KeyZ': // swimming, manual: shift down (refused if it would over-rev)
-        if (!e.repeat && controllerManager.activeMode === 'swim' && controllerManager.entities.swim.manual) shiftDown(controllerManager.entities.swim);
         break;
     }
   });
