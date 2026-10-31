@@ -6,6 +6,7 @@ const { loadModule } = require('./helpers/module.cjs');
 
 const source = readFileSync(join(__dirname, '../js/cameras.js'), 'utf8');
 const kick = loadModule(readFileSync(join(__dirname, '../js/swim-camera-kick.js'), 'utf8'));
+const swimCamera = loadModule(readFileSync(join(__dirname, '../js/swim-camera.js'), 'utf8'), { imports: { './swim-camera-kick.js': kick } });
 
 class Vector3 {
   constructor(x = 0, y = 0, z = 0) { this.set(x, y, z); }
@@ -60,7 +61,7 @@ function cameraHarness(entity = {
   window.innerHeight = 900;
   const { CameraSystem } = loadModule(source, {
     globals: { window, document },
-    imports: { 'three/webgpu': { Vector3, PerspectiveCamera }, './landmarks.js': {}, './swim-camera-kick.js': kick }
+    imports: { 'three/webgpu': { Vector3, PerspectiveCamera }, './landmarks.js': {}, './swim-camera.js': swimCamera }
   });
   const camera = new CameraSystem(canvas, { getActiveEntity: () => entity });
   return {
@@ -282,7 +283,7 @@ test('a close call kicks the follow view a few degrees wider and eases back insi
   });
   for (let i = 0; i < 240; i++) h.camera.update(1 / 60, i / 60);
   const settled = h.camera.camera.fov;
-  h.camera.scoreKick.trigger(true);
+  h.camera.swim.scoreKick.trigger(true);
   let widest = settled;
   for (let i = 0; i < 6; i++) {
     h.camera.update(1 / 60, 4 + i / 60);

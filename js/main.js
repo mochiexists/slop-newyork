@@ -162,7 +162,7 @@ async function initApp() {
   // The AI show cuts between the chase camera and the driver's seat
   swimDirector = new SwimDirector({
     scene, controllerManager, audioSystem, trafficSystem, onShowCamera: (id) => selectCamera(id, true),
-    onCloseCall: (split) => cameraSystem.scoreKick.trigger(split)
+    onCloseCall: (split) => cameraSystem.swim.scoreKick.trigger(split)
   });
   const m5Cockpit = setUpSwimCar({ controllerManager, cameraSystem, audioSystem, swimDirector, isTypingInField });
   updateSoundButton();

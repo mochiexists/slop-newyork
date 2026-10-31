@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { bryantParkLawn } from './landmarks.js';
-import { ScoreKick } from './swim-camera-kick.js';
+import { SwimCamera } from './swim-camera.js'; // (Swimming in Slop: speed feel, seat view, score kick)
 
 // Chase, action, cockpit, fixed-location and aerial cameras, with mouse/touch orbit and zoom.
 
@@ -18,16 +18,6 @@ const CAMERA_PRESETS = [
   { id: 'drone',       name: 'Auto-Director Aerial',     category: 'scenic', fov: 50 }
 ];
 
-const DEFAULT_NEAR = 0.35;
-const SEAT_NEAR = 0.05; // inside a cabin (entity.povEye): the wheel and hands are ~0.4 m from the eye
-const SEAT_BODY_FOLLOW = 0.5; // share of the chassis' pitch & roll the seated view turns with
-// Speed you can feel, for a car with drift physics (entity.longAccel): the follow views widen with speed and kick wider
-// as it pulls (a wider field of view reads as faster; motion blur reads as slower), the chase camera falls back as
-// the car launches, and the camera shivers with wheelspin and at speed
-const SPEED_FOV = { perSpeed: 12, speed: 40, perAccel: 7, accel: 9, rate: 4 }; // ° at `speed` m/s, ° at `accel` m/s²
-const LAUNCH_LAG = { perAccel: 0.4, rate: 3 }; // m the chase camera falls back per m/s² of acceleration
-const SHAKE = { amount: 0.02, speed: 40, seatShare: 0.3 }; // m at full wheelspin or `speed` m/s; a seat shakes less
-
 class CameraSystem {
   constructor(domElement, controllerManager) {
     this.domElement = domElement;
@@ -36,7 +26,7 @@ class CameraSystem {
     this.camera = new THREE.PerspectiveCamera(
       56,
       window.innerWidth / window.innerHeight,
-      DEFAULT_NEAR,
+      0.35,
       60000 // at 1:1 the boroughs & harbor run out ~20-40 km to the fogged horizon (reversed float depth keeps precision)
     );
 
@@ -59,10 +49,7 @@ class CameraSystem {
     this.smoothedSpeed = 0;
     this._desiredPos = new THREE.Vector3();
     this._desiredLook = new THREE.Vector3();
-    this.seatRoll = 0; // see seatView()
-    this.speedFov = 0; // ° added to the preset's field of view (SPEED_FOV)
-    this.launchLag = 0; // m the chase camera has fallen back (LAUNCH_LAG)
-    this.scoreKick = new ScoreKick(); // a close call's or split's punch: scoreKick.trigger(split)
+    this.swim = new SwimCamera(); // (Swimming in Slop: swim-camera.js)
 
     this.bindPointerControls();
   }
@@ -198,9 +185,7 @@ class CameraSystem {
     // The follow cameras pull back with speed, eased so that they drift back as the entity speeds up (and in as it
     // slows down); speedLag is about how far their former world-space smoothing left them trailing at 60 FPS
     this.smoothedSpeed += (Math.abs(entity.speed) - this.smoothedSpeed) * (1 - Math.exp(-dt * 3.0));
-    const pulling = Number.isFinite(entity.longAccel) ? Math.max(0, entity.longAccel) : 0;
-    this.launchLag += (LAUNCH_LAG.perAccel * pulling - this.launchLag) * (1 - Math.exp(-dt * LAUNCH_LAG.rate));
-    const speedLag = this.smoothedSpeed * 0.1 + this.launchLag;
+    const speedLag = this.smoothedSpeed * 0.1 + this.swim.fallBack(entity, dt);
 
     const totalYaw = entity.heading + this.orbitYawOffset;
 
@@ -209,22 +194,20 @@ class CameraSystem {
         const dist = entity.chaseDistance * this.zoomMultiplier * (1 + Math.min(0.25, this.smoothedSpeed * 0.01));
         const height = entity.chaseHeight * this.zoomMultiplier + Math.sin(this.orbitPitchOffset) * dist * 0.85;
         const horizDist = Math.cos(this.orbitPitchOffset) * dist + speedLag;
-        // A drifting car steers the chase camera by its own camera yaw, swung toward the direction of the slide
-        const chaseHeading = entity.cameraYaw ?? entity.heading;
-        const chaseYaw = chaseHeading + this.orbitYawOffset;
 
         desiredPos.set(
-          entity.position.x - Math.sin(chaseYaw) * horizDist,
+          entity.position.x - Math.sin(totalYaw) * horizDist,
           Math.max(0.65, entity.position.y + height),
-          entity.position.z - Math.cos(chaseYaw) * horizDist
+          entity.position.z - Math.cos(totalYaw) * horizDist
         );
 
         const lookUpBias = entity.type === 'helicopter' ? 0.2 : (entity.type === 'car' ? 0.52 : 1.55);
         desiredLook.set(
-          entity.position.x + Math.sin(chaseHeading) * 5.2,
+          entity.position.x + Math.sin(entity.heading) * 5.2,
           entity.position.y + entity.cameraTargetOffset.y + lookUpBias,
-          entity.position.z + Math.cos(chaseHeading) * 5.2
+          entity.position.z + Math.cos(entity.heading) * 5.2
         );
+        this.swim.swingChase(this, entity, desiredPos, desiredLook, horizDist); // (a drifting car's camera yaw)
         break;
       }
 
@@ -248,7 +231,7 @@ class CameraSystem {
 
       case 'pov': {
         if (entity.povEye) {
-          this.seatView(entity, desiredPos, desiredLook);
+          this.swim.seatView(this, entity, desiredPos, desiredLook);
           break;
         }
         let fwdOffset = 0.35;
@@ -381,78 +364,10 @@ class CameraSystem {
       this.currentLookAt.lerp(desiredLook, k);
     }
 
-    // A seat inside the vehicle has a dashboard and hands within half a metre of the eye
-    const seated = this.activePresetId === 'pov' && Boolean(entity.povEye);
-    const near = seated ? SEAT_NEAR : DEFAULT_NEAR;
-    if (this.camera.near !== near) {
-      this.camera.near = near;
-      this.camera.updateProjectionMatrix();
-    }
-
-    this.feelSpeed(entity, dt, elapsed, seated);
+    const seated = this.swim.frame(this, entity, dt, elapsed); // (the seat's near plane, the speed feel and shake)
     this.camera.position.copy(this.currentPos);
     this.camera.lookAt(this.currentLookAt);
-    if (seated) this.camera.rotateZ(-this.seatRoll);
-  }
-
-  // SPEED_FOV and SHAKE for a drift-physics car in a follow view; everything else keeps its preset's field of view
-  feelSpeed(entity, dt, elapsed, seated) {
-    const preset = this.getActivePreset();
-    const following = preset.category === 'follow' && Number.isFinite(entity.longAccel);
-    let wider = 0;
-    if (following) {
-      const clamp01 = (x) => Math.max(0, Math.min(1, x));
-      wider = SPEED_FOV.perSpeed * clamp01(Math.abs(entity.speed) / SPEED_FOV.speed)
-        + SPEED_FOV.perAccel * clamp01(entity.longAccel / SPEED_FOV.accel);
-    }
-    this.speedFov += (wider - this.speedFov) * (1 - Math.exp(-dt * SPEED_FOV.rate));
-    // (and the punch of a close call or split, on top: swim-camera-kick.js)
-    const kick = this.scoreKick.update(dt);
-    const fov = preset.fov + this.speedFov + (following ? kick.fov : 0);
-    if (Math.abs(this.camera.fov - fov) > 0.02) {
-      this.camera.fov = fov;
-      this.camera.updateProjectionMatrix();
-    }
-    if (!following) return;
-    const spin = entity.drift?.wheelspin ?? 0;
-    const fast = Math.min(1, (Math.abs(entity.speed) / SHAKE.speed) ** 2);
-    const shake = (SHAKE.amount * Math.min(1, spin + fast) + kick.shake) * (seated ? SHAKE.seatShare : 1);
-    if (shake > 0.0005) {
-      // (a few incommensurate sines: a rough, unrepeating shiver, no allocation)
-      this.currentPos.x += shake * (Math.sin(elapsed * 37.1) + Math.sin(elapsed * 23.3)) * 0.5;
-      this.currentPos.y += shake * (Math.sin(elapsed * 41.7) + Math.sin(elapsed * 29.9)) * 0.5;
-    }
-  }
-
-  // First person from a seat: entity.povEye is the eye in the vehicle's chassis frame (+z forward), entity.povPitch
-  // tips the view down. The eye rides the chassis' heave, pitch and roll (Euler XYZ: roll applied first); the view
-  // takes only part of the pitch and roll, so the cabin moves a little around the driver as it does in a real car.
-  seatView(entity, desiredPos, desiredLook) {
-    const eye = entity.povEye;
-    const chassis = entity.chassisPivot;
-    const pitch = chassis ? chassis.rotation.x : 0;
-    const roll = chassis ? chassis.rotation.z : 0;
-    const lift = chassis ? chassis.position.y : 0;
-    const x = eye.x * Math.cos(roll) - eye.y * Math.sin(roll);
-    const rolledY = eye.x * Math.sin(roll) + eye.y * Math.cos(roll);
-    const y = rolledY * Math.cos(pitch) - eye.z * Math.sin(pitch);
-    const z = rolledY * Math.sin(pitch) + eye.z * Math.cos(pitch);
-    const sin = Math.sin(entity.heading), cos = Math.cos(entity.heading);
-    desiredPos.set(
-      entity.position.x + x * cos + z * sin,
-      entity.position.y + lift + y,
-      entity.position.z - x * sin + z * cos
-    );
-
-    // povYaw: where the driver is looking (the swim show watching the cop); povGlance: a look out of the window (the bird)
-    const yaw = entity.heading + this.orbitYawOffset + (entity.povYaw ?? 0) + (entity.povGlance ?? 0);
-    const down = (entity.povPitch ?? 0) + pitch * SEAT_BODY_FOLLOW + (this.orbitPitchOffset - 0.09);
-    desiredLook.set(
-      desiredPos.x + Math.sin(yaw) * Math.cos(down) * 40.0,
-      desiredPos.y - Math.sin(down) * 40.0,
-      desiredPos.z + Math.cos(yaw) * Math.cos(down) * 40.0
-    );
-    this.seatRoll = roll * SEAT_BODY_FOLLOW;
+    if (seated) this.camera.rotateZ(-this.swim.seatRoll);
   }
 }
 
