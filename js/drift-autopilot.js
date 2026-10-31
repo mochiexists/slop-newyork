@@ -46,7 +46,8 @@ const AUTOPILOT = {
   carHalfWidth: 0.97, // m: the car's own half width and half length
   carHalfLength: 2.5,
   yawSettle: 0.5, // s: in a plan, how quickly the car straightens from the angle it is turned at now (the wheel's lag
-  // and the yaw damping catching a flick)
+  // and the yaw damping catching a flick),
+  yawCarry: 0.25, // ...after swinging on at its yaw rate for this long (the wheel takes that to catch it)
   yawLead: 2, // ...and how far its nose is turned in a move across, as a share of the angle it travels across at (in a
   // flick at 85 mph the nose leads: 12° at 8° of travel, the tail stepping out a little)
   passMargin: 0.35, // m of air it leaves between itself and a car it passes (a swimmer's margin, not a driver's)
@@ -229,11 +230,15 @@ class DriftAutopilot {
     // The swimmer's own footprint along and across the street, turned as it is (a flick turns it 10-20°, which widens it
     // by half a metre). In flight it is turned the way the plan moves across, or as it is now while that settles
     // (yawSettle): straight again by the time it reaches a pair a second ahead, it can split them.
-    const egoYaw = Math.abs(wrap(car.heading - Math.atan2(s.ux, s.uz)));
+    const egoYawSigned = wrap(car.heading - Math.atan2(s.ux, s.uz));
+    const egoYaw = Math.abs(egoYawSigned);
     const egoAlong = footprintAlong(o, egoYaw);
     const egoAcross = footprintAcross(o, egoYaw);
-    // (at its widest: turned as far as a move across ever turns it, or as it is now)
-    const egoWidest = footprintAcross(o, Math.max(egoYaw, Math.atan(o.crawlAcross)));
+    // (a car still swinging turns on for a moment before the wheel catches it: the turn it settles from is the most of
+    // now and where its yaw rate carries it over yawCarry)
+    const egoYawPeak = Math.max(egoYaw, Math.abs(egoYawSigned + (car.angularVel || 0) * o.yawCarry));
+    // (at its widest, however it turns: the half diagonal)
+    const egoWidest = Math.hypot(o.carHalfLength, o.carHalfWidth);
     // (entries are pooled: this runs several times a second with dozens of cars)
     const seen = this._seen ??= [];
     const band = this.corridor();
@@ -379,9 +384,10 @@ class DriftAutopilot {
             latVel = slideAcross(lat, latVel, goal, o.planStep, across, Math.min(lateralSpeed, speed * o.crawlAcross), swing,
               o.settleTime);
             lat += latVel * o.planStep;
-            // Its own footprint now: turned the way it is moving across, or as it was turned at the start while that
-            // settles, whichever is more
-            const yaw = Math.max(o.yawLead * Math.atan(Math.abs(latVel) / Math.max(1, speed)), egoYaw * Math.exp(-t / o.yawSettle));
+            // Its own footprint now: turned the way it is moving across, or as it was turned at the start (and swinging
+            // on for yawCarry) while that settles, whichever is more
+            const settling = egoYawPeak * Math.exp(-Math.max(0, t - o.yawCarry) / o.yawSettle);
+            const yaw = Math.max(o.yawLead * Math.atan(Math.abs(latVel) / Math.max(1, speed)), settling);
             const ownAlong = footprintAlong(o, yaw), ownAcross = footprintAcross(o, yaw);
             for (let i = 0; i < nearCount; i++) {
               const ob = near[i];

@@ -230,6 +230,30 @@ test('turned 8° in a flick, the swimmer still plans the split of a pair a secon
   assert.ok(Math.abs(pilot.targetOffset) < 0.4, `through the gap (${pilot.targetOffset.toFixed(2)} m)`);
 });
 
+test('still swinging from a flick, the swimmer counts its own turn carrying on: no plan through a gap it would clip', () => {
+  // Codex's round-1 reproduction (2026-11-01): 8° across and swinging on at 1.2 rad/s, two parked cars either side 7 m
+  // ahead; settling straight from 8° the gap looked safe, and the car touched one 0.08 s later at 13°
+  const { vehicleContact } = loadModule(readFileSync(join(__dirname, '../js/vehicle-physics.js'), 'utf8'));
+  const traffic = [-2.4, 2.4].map((x) => ({ x, z: 7, speed: 0, yaw: 0, half: 2.3, halfWidth: 0.92 }));
+  const c = car(8 * RAD);
+  c.speed = 30;
+  c.vx = -Math.sin(c.heading) * c.speed;
+  c.vz = (1 - Math.cos(c.heading)) * c.speed;
+  c.angularVel = 1.2;
+  const pilot = new DriftAutopilot({ passMargin: 0.2, closeBonus: 60, splitBonus: 100, lateBonus: 20, planSpread: 0.2 });
+  pilot.setPath([{ x: 0, z: 0 }, { x: 0, z: 1000 }], { corridors: [{ left: 7, right: -7, centre: null }] });
+  const plan = pilot.planGap(c, traffic);
+  assert.equal(plan.safe, false, 'no safe way through');
+  const driver = new physics.KeyboardDriver();
+  let touched = false;
+  for (let n = 0; n < 6 && !touched; n++) {
+    frame(pilot, driver, c, traffic);
+    const a = { x: c.position.x, z: c.position.z, sin: Math.sin(c.heading), cos: Math.cos(c.heading), halfW: 0.97, halfL: 2.5 };
+    touched = traffic.some((o) => vehicleContact(a, { x: o.x, z: o.z, sin: 0, cos: 1, halfW: 0.92, halfL: 2.3 }, {}));
+  }
+  assert.ok(touched, 'and indeed there is none: the car clips one');
+});
+
 test('a pair to split coming up beyond its plans\' reach: the show\'s swimmer heads for the gap while the road is open', () => {
   // At 35 m/s a lane right of a pair's gap 110 m ahead, open road between
   const pair = [-2.6, 2.6].map((x) => ({ x, z: 110, speed: 6, yaw: 0, half: 2.3, halfWidth: 0.92 }));
