@@ -7,7 +7,8 @@ import { SWIM_BOX } from './swim-car.js';
 // driving freely gets none of this: the staging is the show's alone.
 
 // Math, as traffic.js sees it: every random choice traffic makes (where cars appear, their turns, lane changes) comes
-// from trafficMath.random, so reseed() can make a scene repeat. Everything else is the real Math.
+// from trafficMath.random, so reseed() can make a scene repeat. Everything else is the real Math. (One source for the
+// module: the page makes a single traffic system; a second one would share the seeded sequence.)
 const trafficMath = Object.create(Math);
 trafficMath.random = Math.random;
 
