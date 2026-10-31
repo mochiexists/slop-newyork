@@ -159,7 +159,7 @@ class SessionRecorder {
  * out when the game is served from this machine (the dev server's /session-log).
  */
 function installSessionRecorder({ controllerManager, cameraSystem, onSaved = () => {}, isTypingInField = () => false }) {
-  const local = ['127.0.0.1', 'localhost'].includes(location.hostname);
+  const local = ['127.0.0.1', 'localhost'].includes(globalThis.location?.hostname);
   const recorder = new SessionRecorder({ camera: () => cameraSystem.activePresetId, post: local ? undefined : () => {} });
   controllerManager.swimRecorder = recorder;
   setInterval(() => recorder.flush(), FLUSH_SECONDS * 1000);
@@ -170,8 +170,12 @@ function installSessionRecorder({ controllerManager, cameraSystem, onSaved = () 
   window.addEventListener('keydown', (e) => {
     if (e.code !== 'KeyL' || e.repeat || e.metaKey || e.ctrlKey || e.altKey || isTypingInField(e)) return;
     recorder.flush();
-    recorder.download();
-    onSaved();
+    try {
+      recorder.download();
+      onSaved();
+    } catch {
+      // no Blob or object URLs here: the session still went to the dev server
+    }
   });
   return recorder;
 }
