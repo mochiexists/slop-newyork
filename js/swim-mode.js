@@ -5,6 +5,7 @@ import { BODY_SPECS } from './cars.js';
 import { PoliceCruiser, SwimShow, SHOW_SPOT, SHOW_SIGNAL_TIME } from './swim-show.js';
 import { HudFlash } from './swim-hud-flash.js';
 import { MusicDuck, MusicFader } from './swim-music-fade.js';
+import { SwimExhaust } from './swim-exhaust.js';
 
 // Swimming: the BMW M5 weaving through traffic and drifting through Times Square to Careless Whisper. This module owns
 // everything about the mode except the car itself (controllers.js) and its physics (drift-physics.js): the
@@ -653,6 +654,8 @@ class SwimDirector {
     this.smoke = new TireSmoke(scene);
     this.skids = new SkidMarks(scene);
     this.screech = new TireScreech(audioSystem);
+    // Pops, crackles and flames from the tips, on the pedal as driven (after any AI driver), like the engine voice
+    this.exhaust = new SwimExhaust({ car: this.car, audioSystem, controls: () => controllerManager.swimDriver?.input });
     this.closeCalls = new CloseCalls();
     this.radio = new SwimRadio(document.getElementById('swim-radio'));
     this.audio = audioSystem;
@@ -807,6 +810,7 @@ class SwimDirector {
     this.score.flasher.update(dt);
     this.radio.update(dt);
     this.duck.update(this.audio, this.radio.fader.gain);
+    this.exhaust.update(dt, camera, this.active);
     this.smoke.update(dt, camera);
     this.skids.update();
 
