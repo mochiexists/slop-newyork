@@ -75,9 +75,12 @@ const M5_DRIFT = {
   exitDamping: 3, // 1/s of yaw damping as a slide comes back toward straight, so the tail doesn't swing through
   minSlipSpeed: 2.5, // m/s floor of the slip-angle denominator, which keeps a crawl stable
   // Engine and gearbox: the G80 M3 Competition's S58 (650 Nm flat from 2,750 to 5,500 rpm, 375 kW at 6,250 rpm, a
-  // 7,200 rpm limiter) on a stage-2 tune to 850 Nm, through the ZF 8HP76 eight-speed and a 3.154 final drive to
-  // 275/35 R19 rears. `power` and `launchForce` above still cap the drive (the cop car is detuned with them).
-  peakTorque: 850, // Nm
+  // 7,200 rpm limiter) on a cartoon stage-3 tune to 1,100 Nm, through the ZF 8HP76 eight-speed and a 3.154 final drive
+  // to 275/35 R19 rears. At 850 Nm 4th and 5th couldn't spin the rears: no power-over above 67 mph; now one goes up to
+  // 90 mph. The launch is traction-limited, so 0-60 barely moves (2.9 -> 2.8 s); 0-100 km/h on all four 2.6 -> 2.4 s,
+  // and 8th now pulls to the 220 mph limiter. `power` and `launchForce` above still cap the drive (the cop car is
+  // detuned with them).
+  peakTorque: 1100, // Nm
   torqueCurve: [[1000, 0.45], [1800, 0.7], [2750, 1], [5500, 1], [6250, 0.88], [7200, 0.74]], // rpm, share of peak
   idleRpm: 800,
   stallRpm: 3200, // the torque converter lets the engine rev to this at full throttle before the wheels catch up
@@ -87,7 +90,8 @@ const M5_DRIFT = {
   slideUpshiftRpm: 5400, // or past this while the spinning rears bounce off the limiter going straight (not in a slide)
   slideHoldTime: 0.5, // s after a slide the automatic still holds its gear
   downshiftRpm: 2400, // downshift when the next gear down would turn below this off the throttle,
-  kickdownRpm: 5000, // or below this at full throttle
+  kickdownRpm: 5000, // or below this at full throttle,
+  drifterRpm: 6600, // or below this as the driver commits to a power-over (input.downshift)
   drivelineEfficiency: 0.9,
   gears: [5.0, 3.2, 2.143, 1.72, 1.313, 1.0, 0.823, 0.64],
   finalDrive: 3.154,
@@ -166,7 +170,9 @@ function frontDriveShare(bodySlip, params) {
 // slide (and for slideHoldTime after one, so a dip in the angle doesn't shift it) it never shifts up early, as a drifter
 // holds a gear on the limiter: a taller gear can't keep the rears spinning and the car grips up and straightens. It
 // still shifts up when the road speed alone reaches the shift point, and down when the revs fall to downshiftRpm.
-function autoShift(car, u, throttle, sliding, dt, params) {
+// A driver committing to a power-over (`drifterDownshift`, from the keyboard driver) takes the gear below as long as it
+// turns under drifterRpm: a drifter's downshift, more torque at the rears to break them loose at speed.
+function autoShift(car, u, throttle, sliding, drifterDownshift, dt, params) {
   car.slideHold = sliding ? params.slideHoldTime : Math.max(0, (car.slideHold || 0) - dt);
   const road = rpmAt(u, car.gear, params);
   const last = params.gears.length;
@@ -177,7 +183,9 @@ function autoShift(car, u, throttle, sliding, dt, params) {
   } else if (car.gear > 1) {
     // (no kickdown in a slide: the torque jump would throw the tail out further, and back as it shifts up again)
     const kickdown = car.slideHold > 0 ? 0 : (params.kickdownRpm - params.downshiftRpm) * throttle;
-    if (rpmAt(u, car.gear - 1, params) < params.downshiftRpm + kickdown) car.gear--;
+    const below = rpmAt(u, car.gear - 1, params);
+    const drifter = drifterDownshift && !(car.slideHold > 0) && below < params.drifterRpm;
+    if (below < params.downshiftRpm + kickdown || drifter) car.gear--;
   }
 }
 
@@ -225,7 +233,8 @@ function driveForce(speed, throttle, params) {
  * input: throttle 0..1, brake 0..1, reverse 0..1, steer -1..1 (+ left), handbrake 0..1, burnout 0..1 (line lock:
  * front brakes hold while the throttle spins the rears), assist 0..1 (counter-steer and slide limit; default 1, the
  * autopilot turns it off for donuts), xDrive 0..1 (share of xDrive's front split engaged; default 1, the keyboard
- * driver opens the centre clutch as the driver commits to a slide, as M xDrive's 4WD Sport does).
+ * driver opens the centre clutch as the driver commits to a slide, as M xDrive's 4WD Sport does), downshift 0/1 (the
+ * keyboard driver asks the automatic for a drifter's downshift as the driver commits to a power-over).
  * Returns the step's telemetry (the same object each call): body slip angle, rear slide speed, wheelspin and loads.
  */
 function stepDriftCar(car, input, dt, params = M5_DRIFT, out = stepDriftCar.telemetry) {
@@ -298,7 +307,7 @@ function stepDriftCar(car, input, dt, params = M5_DRIFT, out = stepDriftCar.tele
     car.rpm = params.idleRpm + (params.stallRpm - params.idleRpm) * input.reverse * 0.5;
   } else {
     if (!(car.gear >= 1)) car.gear = cruiseGear(u, params);
-    if (!car.manual) autoShift(car, u, Math.max(0, throttle), slide >= 1, dt, params);
+    if (!car.manual) autoShift(car, u, Math.max(0, throttle), slide >= 1, input.downshift > 0, dt, params);
     const turning = rpmAt(Math.max(0, u + wheelSlip), car.gear, params);
     // (the torque converter lets the engine run up to its stall speed with the wheels slower, from half throttle)
     const converter = params.idleRpm + (params.stallRpm - params.idleRpm) * Math.min(1, Math.max(0, throttle) * 2);
@@ -483,7 +492,7 @@ class KeyboardDriver {
   constructor(params = KEYBOARD_DRIVER, model = M5_DRIFT) {
     this.params = params;
     this.model = model; // the drift model's car parameters
-    this.input = { throttle: 0, brake: 0, reverse: 0, steer: 0, handbrake: 0, burnout: 0, assist: 1, xDrive: 1 };
+    this.input = { throttle: 0, brake: 0, reverse: 0, steer: 0, handbrake: 0, burnout: 0, assist: 1, xDrive: 1, downshift: 0 };
     this.reset();
   }
 
@@ -591,6 +600,8 @@ class KeyboardDriver {
     // (not while a save unwinds: the counter-steer key still held is wound on, but it isn't asking for a slide)
     if (handbrake > 0 || (sliding && this.exitTimer === 0 && (this.commit > 0.5 || wound))) this.commit = 1;
     else this.commit = approach(this.commit, this.lockHeld > p.commitDelay ? 1 : 0, dt / p.commitTime);
+    // A power-over at speed takes a drifter's downshift: the gear below, if it has the revs (the gearbox decides)
+    input.downshift = this.lockHeld > p.commitDelay ? 1 : 0;
     input.throttle = this.throttle * Math.min(1, controlled + (1 - controlled) * this.commit);
     // The centre clutch closes for a straight-line pull and opens with the lock wound on (the front tires keep their
     // grip for turning) and as the driver commits to a slide: the rears take the drive

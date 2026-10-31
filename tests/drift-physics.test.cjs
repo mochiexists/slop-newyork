@@ -33,7 +33,7 @@ test('the tire curve peaks at its slip angle and keeps sliding grip past it', ()
   assert.equal(tireCurve(-0.3, M5_DRIFT), -tireCurve(0.3, M5_DRIFT));
 });
 
-test('full throttle on all four (xDrive) reaches 100 km/h in a tuned M3 Competition\'s time through the gears to a drag-limited top speed', () => {
+test('full throttle on all four (xDrive) reaches 100 km/h in a tuned M3 Competition\'s time through the gears to its 220 mph limiter', () => {
   const c = car();
   let t = 0;
   while (c.speed < 100 / 3.6 && t < 10) {
@@ -47,7 +47,8 @@ test('full throttle on all four (xDrive) reaches 100 km/h in a tuned M3 Competit
   assert.equal(c.gear, 3);
   assert.equal(c.heading, 0);
   drive(c, 40, { ...idle, throttle: 1 });
-  assert.ok(c.speed > 85 && c.speed < M5_DRIFT.topSpeed, `top speed ${c.speed}`);
+  // (1,100 Nm pulls 8th past the drag to the limiter; 850 Nm ran out of shove just short of it)
+  assert.ok(c.speed > 85 && c.speed < M5_DRIFT.topSpeed + 0.1, `top speed ${c.speed}`);
   assert.ok(c.gear >= 7, `in gear ${c.gear}`);
 });
 
