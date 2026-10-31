@@ -183,13 +183,13 @@ test('a power-over steps the tail out from 70 to 90 mph, either way', () => {
   }
 });
 
-test('committing to a power-over takes a drifter\'s downshift that the plain kickdown would not', () => {
-  // 63 mph in 4th: 3rd would turn 5,300 rpm, past the full-throttle kickdown's 5,000
-  const cruising = () => ({ position: { x: 0, z: 0 }, heading: 0, speed: 28, vx: 0, vz: 0, angularVel: 0, steerAngle: 0, longAccel: 0, drift: {}, gear: 4 });
-  const straight = play(28, [[1, 'W']], cruising());
-  assert.equal(straight.at(-1).gear, 4, 'straight on the gas it holds 4th');
-  const committed = play(28, [[1, 'WA']], cruising());
-  assert.equal(Math.min(...committed.map((r) => r.gear)), 3, 'gas and lock held: down to 3rd');
+test('a power-over shifts up through the box once per gear, never back and forth', () => {
+  // (a drifter's downshift below 6,600 rpm took turns with the limiter's upshift: 23 shifts in 1.5 s, Codex review)
+  for (const speed of [15, 25, 35]) {
+    const rows = play(speed, [[3, 'WA']]);
+    const shifts = rows.filter((r, i) => i > 0 && r.gear !== rows[i - 1].gear).length;
+    assert.ok(shifts <= 3, `${speed} m/s: ${shifts} gear changes in a 3 s power-over`);
+  }
 });
 
 test('the opposite key held on the gas swings a drift through straight into one the other way (a manji)', () => {
