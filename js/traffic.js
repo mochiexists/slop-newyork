@@ -24,6 +24,8 @@ import {
   createBusWheelMaterial,
   createLoftedBusMaterial
 } from './bus.js';
+// Swimming in Slop: `Math` in this file is Math with a random() the AI show can seed, so its scene repeats
+import { SWIM_BOX, createShowTraffic, trafficMath as Math } from './swim-traffic.js';
 
 // Cars and buses follow the road graph, obey signals, yield at crossings and react to collisions.
 // Vehicles replenish around the player; pedestrian-system.js manages the nearby walking population.
@@ -57,8 +59,6 @@ const CAR_KINDS = {
 
 // Retire distant actors even when looking their way: keeping them indefinitely starves upcoming streets.
 // Replacements may enter the far view, but nearby visible roads and sidewalks are protected from pop-in.
-// Player half-width & half-length against traffic, by mode (the swimming M5 is bigger than the taxi)
-const PLAYER_BOXES = { person: [0.32, 0.32], cyclist: [0.35, 0.85], car: [0.86, 2.18], swim: [0.97, 2.52] };
 const VEHICLE_RADIUS = 380;
 const NEAR_RADIUS = 350;
 const VEHICLE_SPAWN_DISTANCE = 250;
@@ -106,77 +106,7 @@ function createBusDestinationTexture() {
 
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 
-// A small seeded generator (mulberry32): the same seed gives the same sequence
-function seededRandom(seed) {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-// The AI show's traffic down one leg of its route (a → b, swim-show.js): rows of two cars side by side in neighbouring
-// lanes every `spacing` metres or so, each keeping to its lane's outer edge, so the gap between them is a split (under
-// a metre of air either side of the swim car). Lanes in other directions, and `startGap`/`endGap` metres at the leg's
-// ends (the corners the show holds clear), are left alone. Returns the placements, { edge, lane, s, bias, row }, from
-// `random` () → [0, 1), and the stretch of each edge they take over, from the leg's start to the last row:
-// { edge, from, to }.
-const SHOW_ROWS = {
-  spacing: 50, // m between rows, give or take 30%, on a road `wideLanes` wide (further apart on a narrower one, where
-  wideLanes: 4, // a row fills more of it, so the swim car can straighten up between them). Far enough apart for the
-  // swim car to line up on the next split at 80 mph; at 22 m it met a row every half second and crawled at 45 mph
-  bias: 0.8, // m toward its lane's outer edge each car keeps: 5.2 m centre to centre, 0.7 m of air either side
-  pace: 6, // m/s the staged cars drive at (Midtown's crawl): the swim car comes up on them fast, and they are still
-  // on the stretch when it gets there
-  startGap: 30,
-  endGap: 35,
-  maxLength: 320, // m of a leg laid out at most (traffic further than this from the car is retired anyway)
-  end: 3 // m kept clear of an edge's ends (the crosswalks)
-};
-const PAIR_LANES = 4; // m between neighbouring lanes' centres at most for a row (lanes are 3.6 m apart)
-const ALONG_LEG = 0.98; // an edge runs down the leg if its direction is this close to the leg's (cosine)
-const ON_LEG = 12; // m from the leg's line at most for the middle of an edge's lanes
-
-function showTrafficLayout(edges, a, b, options, random) {
-  const o = { ...SHOW_ROWS, ...options };
-  const length = Math.hypot(b.x - a.x, b.z - a.z) || 1;
-  const ux = (b.x - a.x) / length, uz = (b.z - a.z) / length;
-  const last = Math.min(length - o.endGap, o.startGap + o.maxLength);
-  const placements = [];
-  const stretches = [];
-  let row = 0;
-  for (const e of edges) {
-    const dot = e.dx * ux + e.dz * uz;
-    if (dot < ALONG_LEG || e.lanes.length < 2) continue;
-    const middle = (e.lanes[0] + e.lanes[e.lanes.length - 1]) / 2;
-    const cx = e.sx + e.dx * e.len / 2 + e.rx * middle, cz = e.sz + e.dz * e.len / 2 + e.rz * middle;
-    if (Math.abs((cx - a.x) * uz - (cz - a.z) * ux) > ON_LEG) continue;
-    const along0 = (e.sx - a.x) * ux + (e.sz - a.z) * uz;
-    const from = Math.max(o.end, (o.startGap - along0) / dot);
-    const to = Math.min(e.len - o.end, (last - along0) / dot);
-    if (to < 0 || -along0 / dot > e.len) continue;
-    stretches.push({ edge: e, from: -along0 / dot, to });
-    const pairs = [];
-    for (let k = 0; k + 1 < e.lanes.length; k++) if (e.lanes[k + 1] - e.lanes[k] < PAIR_LANES) pairs.push(k);
-    if (!pairs.length) continue;
-    const spacing = o.spacing * Math.max(1, o.wideLanes / e.lanes.length);
-    for (let s = from + random() * spacing * 0.5; s <= to; s += spacing * (0.7 + random() * 0.6)) {
-      const k = pairs[Math.floor(random() * pairs.length)];
-      // (lanes count rightward: the left car keeps left, the right one right)
-      placements.push({ edge: e, lane: k, s, bias: -o.bias, row }, { edge: e, lane: k + 1, s, bias: o.bias, row });
-      row++;
-    }
-  }
-  return { placements, stretches };
-}
-
 function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
-  // Every random choice traffic makes (where cars appear, their turns, lane changes) comes from here, so reseed()
-  // can make a scene repeat
-  let random = Math.random;
   const group = new THREE.Group();
   group.name = 'ManhattanTrafficAndPedestrians';
   let collisionListener = null;
@@ -241,14 +171,12 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
       bus, half, halfWidth, axle, driver, v0,
       edge: null, lane: 0, s: 0, speed: 0, acc: 0, gap: Infinity, leaderSpeed: 0,
       move: null, out: 0, conn: null, cs: 0, trail: null, commit: null, claimed: false, yielding: false, yieldAt: 0,
-      wait: 0, laneTimer: random() * 0.5,
-      dl: 0, dlv: 0, blink: 0, blinkPhase: random() * 0.8,
-      evade: 0, alarm: 0, panicUntil: 0, panicAcc: 0, reaction: 0.6 + random() * 0.4,
-      bias: 0, // m right of its lane centre it keeps to (a show row's car holding its lane's outer edge, see stageRoute)
-      staged: false, // placed in a show row (stageRoute) until releaseStaged or its next placement
+      wait: 0, laneTimer: Math.random() * 0.5,
+      dl: 0, dlv: 0, blink: 0, blinkPhase: Math.random() * 0.8,
+      evade: 0, alarm: 0, panicUntil: 0, panicAcc: 0, reaction: 0.6 + Math.random() * 0.4,
       x: 0, z: 0, prevX: 0, prevZ: 0, tx: 0, tz: 1, nose: 0, yaw: 0, yawRate: 0, steer: 0, delta: 0,
       pitch: 0, roll: 0, pitchVel: 0, rollVel: 0, vx: 0, vz: 0, yawOffset: 0, yawVel: 0, impactTime: 0,
-      pAhead: Infinity, pRight: 0, pSpeed: 0, wheelSpin: random() * Math.PI * 2
+      pAhead: Infinity, pRight: 0, pSpeed: 0, wheelSpin: Math.random() * Math.PI * 2
     };
   }
 
@@ -419,16 +347,16 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     for (let k = 0; k < count; k++) {
       const sp = sparks[sparkCursor];
       sparkCursor = (sparkCursor + 1) % MAX_SPARKS;
-      const spread = (random() - 0.5) * 2.2;
-      const outBoost = (0.3 + random() * 0.9) * Math.min(14.0, impactSpeed * 0.65);
+      const spread = (Math.random() - 0.5) * 2.2;
+      const outBoost = (0.3 + Math.random() * 0.9) * Math.min(14.0, impactSpeed * 0.65);
       const tanBoost = spread * Math.min(12.0, impactSpeed * 0.55);
-      sp.x = x + (random() - 0.5) * 0.35;
-      sp.y = y + (random() - 0.5) * 0.18;
-      sp.z = z + (random() - 0.5) * 0.35;
+      sp.x = x + (Math.random() - 0.5) * 0.35;
+      sp.y = y + (Math.random() - 0.5) * 0.18;
+      sp.z = z + (Math.random() - 0.5) * 0.35;
       sp.vx = nx * outBoost + tx * tanBoost;
-      sp.vy = 2.4 + random() * 5.4;
+      sp.vy = 2.4 + Math.random() * 5.4;
       sp.vz = nz * outBoost + tz * tanBoost;
-      sp.maxLife = 0.28 + random() * 0.24;
+      sp.maxLife = 0.28 + Math.random() * 0.24;
       sp.life = sp.maxLife;
     }
   }
@@ -504,9 +432,11 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
   // =========================================================================
   const player = { active: false, entity: null, x: 0, z: 0, vx: 0, vz: 0, fx: 0, fz: 1,
     halfW: 0.86, halfL: 2.18 };
-  // A stunt area kept clear for the swimming show (swim-mode.js): { x, z, r } or null. Traffic stops short of it and
-  // nothing spawns inside it.
-  let clearZone = null;
+  // Swimming in Slop: the AI show's hold on traffic (swim-traffic.js), a corner kept clear and its streets staged
+  const show = createShowTraffic({ vehicles, cars, edges, player, place, locate, buildOccupancy, lookahead: LOOKAHEAD,
+    spawnNear: (v, rMin, protectView) => spawnVehicle(v, rMin, NEAR_RADIUS, protectView),
+    inView: (v) => nearView(v.x, v.z, v.half + 4, VEHICLE_SPAWN_DISTANCE), focus: () => [focusX, focusZ],
+    jumpTo(x, z) { focusX = lastFocusX = x; focusZ = lastFocusZ = z; nearX = Infinity; refreshNear(); } });
   const nearEdges = [];
   const nearSignals = [];
   const pedestrianSystem = createPedestrianSystem(network, {
@@ -585,7 +515,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
   // Half way through a lane change a vehicle still occupies the lane it is leaving (-1 left, 1 right)
   function straddle(v) {
     if (v.conn) return 0;
-    const off = v.dl - v.bias; // (a show row's lane edge is still its lane)
+    const off = v.dl - (v.bias || 0); // (a show row's lane edge is still its lane)
     if (off > 0.5 && v.lane + 1 < v.edge.lanes.length) return 1;
     if (off < -0.5 && v.lane > 0) return -1;
     return 0;
@@ -733,17 +663,6 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     v.pSpeed = Math.max(0, player.vx * fx + player.vz * fz);
   }
 
-  // Distance to the edge of the clear zone if v's path runs into it
-  function zoneGap(v) {
-    if (!clearZone) return Infinity;
-    const dx = clearZone.x - v.x, dz = clearZone.z - v.z;
-    const fx = Math.sin(v.yaw), fz = Math.cos(v.yaw);
-    const along = dx * fx + dz * fz;
-    const across = Math.abs(dz * fx - dx * fz);
-    if (along < 0 || across > clearZone.r || along > LOOKAHEAD + clearZone.r) return Infinity;
-    return along - Math.sqrt(clearZone.r ** 2 - across ** 2) - v.half;
-  }
-
   // Gap to the player if it is ahead in the lane whose centre is `off` metres to the right of v
   function playerGap(v, off) {
     if (v.pAhead < 0 || v.pAhead > LOOKAHEAD) return Infinity;
@@ -829,7 +748,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
       weights[k] = w;
       total += w;
     }
-    let r = random() * total;
+    let r = Math.random() * total;
     let pick = null;
     for (let k = 0; k < e.moves.length; k++) {
       if (weights[k] <= 0) continue;
@@ -1189,7 +1108,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
       }
       cap = bendSpeed(v, v.conn);
     }
-    const zg = zoneGap(v);
+    const zg = show.zoneGap(v);
     if (zg < LOOKAHEAD) worst = Math.min(worst, stopAt(v, Math.max(0, zg), 0.5));
     const pg = playerGap(v, 0);
     if (pg > 0 && pg < LOOKAHEAD) { // (a player alongside, not yet clear ahead, isn't one to follow)
@@ -1334,7 +1253,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
   function drive(v, dt) {
     v.laneTimer -= dt;
     if (v.laneTimer <= 0) {
-      v.laneTimer = 0.4 + random() * 0.3;
+      v.laneTimer = 0.4 + Math.random() * 0.3;
       changeLanes(v);
     }
     accelerate(v);
@@ -1379,9 +1298,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     previewPoint(v, c + ahead + 2, bendB);
     let bend = Math.atan2(bendB.dx, bendB.dz) - Math.atan2(bendA.dx, bendA.dz);
     bend -= Math.round(bend / (Math.PI * 2)) * Math.PI * 2;
-    // ...plus how far right of its path it heads, and how far right of where it should be it is (nose and dl - evade,
-    // less the lane edge a show row's car keeps to)
-    const off = v.dl - (v.evade || 0) - (v.bias || 0);
+    // ...plus how far right of its path it heads, and how far right of where it should be it is (nose and dl - evade)
+    const off = v.dl - (v.evade || 0) - (v.bias || 0); // (less the lane edge a show row's car keeps to: swim-traffic.js)
     const want = Math.atan((wheelbase * bend) / 2) + v.nose + Math.atan(((panic ? 3 : 1.2) * off) / (1 + v.speed));
     const lateral = panic ? v.driver.grip : 1.3 * v.driver.aLat; // the sideways acceleration it steers up to
     const most = Math.min(v.driver.lock, Math.atan((lateral * wheelbase) / Math.max(v.speed * v.speed, 1e-3)));
@@ -1460,7 +1378,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
 
     const turn = v.move.turn;
     if (v.evade) v.blink = 0; // no time to signal a swerve
-    else if (Math.abs(v.dl - (v.bias || 0)) > 0.3 && Math.abs(v.dlv) > 0.05) v.blink = v.dl > v.bias ? -1 : 1;
+    else if (Math.abs(v.dl - (v.bias || 0)) > 0.3 && Math.abs(v.dlv) > 0.05) v.blink = v.dl > (v.bias || 0) ? -1 : 1;
     else if (turn !== 'S' && (v.conn || v.edge.len - v.s < 35)) v.blink = turn === 'R' ? 1 : -1;
     else v.blink = 0;
 
@@ -1628,9 +1546,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     v.commit = null;
     v.yielding = false;
     v.wait = 0;
-    v.v0 = v.ownV0 ??= v.v0; // (a show pair may have set it to its partner's, see stageRoute)
-    v.bias = 0;
-    v.staged = false;
+    show.unstage(v);
     v.speed = v.v0 * 0.5;
     v.acc = 0;
     v.impactTime = 0;
@@ -1649,20 +1565,20 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
   // Put v in a free lane around the focus. Normal replenishment protects the near view; teleports can fill it.
   function spawnVehicle(v, rMin, rMax, protectView) {
     for (let attempt = 0; attempt < 12; attempt++) {
-      const e = nearEdges[Math.floor(random() * nearEdges.length)];
+      const e = nearEdges[Math.floor(Math.random() * nearEdges.length)];
       if (!e || (v.bus && e.axis !== 'ave') || e.len < 2 * v.half + 10) continue;
-      const lane = Math.floor(random() * e.lanes.length);
+      const lane = Math.floor(Math.random() * e.lanes.length);
       const along = (focusX - e.sx) * e.dx + (focusZ - e.sz) * e.dz;
       const minS = Math.max(v.half + 5, along - rMax);
       const maxS = Math.min(e.len - v.half - 5, along + rMax);
       if (minS > maxS) continue;
-      const s = minS + random() * (maxS - minS);
+      const s = minS + Math.random() * (maxS - minS);
       const x = e.sx + e.dx * s + e.rx * e.lanes[lane];
       const z = e.sz + e.dz * s + e.rz * e.lanes[lane];
       const d = Math.hypot(x - focusX, z - focusZ);
       if (d < rMin || d > rMax || (protectView && nearView(x, z, v.half + 4, VEHICLE_SPAWN_DISTANCE))) continue;
       if (player.active && Math.hypot(x - player.x, z - player.z) < 25) continue;
-      if (clearZone && Math.hypot(x - clearZone.x, z - clearZone.z) < clearZone.r + 15) continue;
+      if (show.keepsClear(x, z)) continue;
       if (!laneClear(e.occ[lane], s, v.half + 8)) continue;
       place(v, e, lane, s);
       return true;
@@ -2001,9 +1917,9 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
       player.vx = player.fx * speed + (playerEntity.vx || 0);
       player.vz = player.fz * speed + (playerEntity.vz || 0);
     }
-    const playerBox = PLAYER_BOXES[activeMode] || PLAYER_BOXES.car;
-    player.halfW = playerBox[0];
-    player.halfL = playerBox[1];
+    player.halfW = activeMode === 'cyclist' ? 0.35 : activeMode === 'person' ? 0.32 : 0.86;
+    player.halfL = activeMode === 'cyclist' ? 0.85 : activeMode === 'person' ? 0.32 : 2.18;
+    if (activeMode === 'swim') [player.halfW, player.halfL] = SWIM_BOX; // (the swimming M5 is bigger than the taxi)
 
     // 1. Cars & buses
     // Limit attempted placements, not just successes, and rotate through the pool so an awkward location
@@ -2107,94 +2023,11 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     updateSparks(dt);
   }
 
-  // Clear (or with null release) a stunt area: vehicles inside it now are moved elsewhere, the rest hold short of it
-  function setClearZone(zone) {
-    clearZone = zone ? { x: zone.x, z: zone.z, r: zone.r } : null;
-    if (!clearZone) return;
-    for (const v of vehicles) {
-      if (v.edge && Math.hypot(v.x - clearZone.x, v.z - clearZone.z) < clearZone.r + v.half) {
-        // No free lane right now: park it off the road until the regular respawn finds it a place
-        if (!spawnVehicle(v, clearZone.r + 40, NEAR_RADIUS, true)) v.edge = null;
-      }
-    }
-  }
-
-  // Lay the same traffic out round a spot every time (the AI show's opening), and keep every later choice (turns,
-  // lane timers) on the same sequence. Vehicles are re-placed in pool order on the edges near the spot.
-  function reseed(seed, x, z) {
-    random = seededRandom(seed);
-    focusX = lastFocusX = x;
-    focusZ = lastFocusZ = z;
-    nearX = Infinity;
-    refreshNear();
-    for (const v of vehicles) {
-      v.edge = null;
-      // The per-driver randomness drawn when the pool was made, drawn again from the seed
-      v.laneTimer = random() * 0.5;
-      v.blinkPhase = random() * 0.8;
-      v.reaction = 0.6 + random() * 0.4;
-    }
-    buildOccupancy();
-    const playerWasActive = player.active;
-    player.active = false;
-    for (const v of vehicles) spawnVehicle(v, 0, NEAR_RADIUS, false);
-    player.active = playerWasActive;
-  }
-
-  // Lay out the AI show's traffic down a leg of its route (showTrafficLayout), taking over whatever is on that stretch
-  // now: the cars there make way, then the rows are filled from them and from the cars furthest away and out of view
-  // (never buses). They all drive at the same crawl, so a row stays side by side. Returns the cars placed.
-  function stageRoute(a, b, options = {}) {
-    const rows = { ...SHOW_ROWS, ...options };
-    const { placements, stretches } = showTrafficLayout(edges, a, b, rows, random);
-    if (!placements.length) return 0;
-    const spare = [];
-    for (const v of cars) {
-      const r = v.edge && !v.conn ? stretches.find((stretch) => stretch.edge === v.edge) : null;
-      if (r && v.s > r.from - v.half && v.s < r.to + 15) {
-        v.edge = null;
-        spare.push(v);
-      }
-    }
-    const away = (v) => (v.edge ? Math.hypot(v.x - focusX, v.z - focusZ) : Infinity);
-    const others = cars.filter((v) => !spare.includes(v) && (!v.edge || !nearView(v.x, v.z, v.half + 4, VEHICLE_SPAWN_DISTANCE)));
-    others.sort((p, q) => away(q) - away(p));
-    spare.push(...others);
-    let placed = 0;
-    for (let i = 0; i < placements.length && placed < spare.length; i++) {
-      const p = placements[i];
-      const v = spare[placed++];
-      place(v, p.edge, p.lane, p.s);
-      v.bias = p.bias;
-      v.dl = p.bias;
-      v.v0 = Math.min(v.v0, rows.pace);
-      v.speed = v.v0;
-      v.staged = true;
-      locate(v);
-      v.prevX = v.x;
-      v.prevZ = v.z;
-    }
-    return placed;
-  }
-
-  // The show is over: its staged rows drive on as ordinary traffic, back at their own pace and free to change lanes
-  function releaseStaged() {
-    for (const v of cars) {
-      if (!v.staged) continue;
-      v.staged = false;
-      v.bias = 0;
-      v.v0 = v.ownV0 ?? v.v0;
-    }
-  }
-
   return {
     group,
     update,
     setCollisionListener,
-    setClearZone,
-    reseed,
-    stageRoute,
-    releaseStaged,
+    ...show.api, // (Swimming in Slop: setClearZone, reseed, stageRoute, releaseStaged)
     cars,
     buses,
     peds: pedestrianSystem.peds,
@@ -2648,4 +2481,4 @@ function createHighwayTraffic(scene, lanes) {
   return { group, update, cars, lanes };
 }
 
-export { createTrafficSystem, createHighwayTraffic, showTrafficLayout };
+export { createTrafficSystem, createHighwayTraffic };

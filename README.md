@@ -44,6 +44,27 @@ For the car, download [the model](https://skfb.ly/pNwqZ) from Sketchfab as glTF 
 `zsh tools/prepare-m3-model.sh ~/Downloads/bmw_m3_competition__hassan_visuals_3d.zip`: it bakes, simplifies and
 compresses it into `assets/models/m3.glb` (about 2.6 MB, gitignored).
 
+### What this fork adds, and merging upstream
+
+The fork keeps its logic in its own files so [upstream](https://github.com/mrdoob/slop-newyork) can be pulled in
+cleanly. Ours: `js/swim-*.js`, `js/drift-*.js`, `js/m5-*.js`, `js/m3-model.js`, `js/session-recorder.js`,
+`css/swim.css`, the `tests/` named after them and `tools/` (sound, model and build scripts). The swimming car is
+`swim-car.js`, its traffic staging `swim-traffic.js`, its keys and page wiring `swim-controls.js`, its camera
+`swim-camera.js`, its engine sound `swim-engine-sounds.js`, its body spec `m5-body.js`.
+
+Upstream files carry only hooks: an import, a registration line, a one-line dispatch, the fifth mode in a list. Most
+are marked `Swimming in Slop` (`grep -n "Swimming in Slop" js/*.js` lists them); the rest name the `'swim'` mode.
+`traffic.js` imports its `Math` from `swim-traffic.js` (the real one, with a `random()` the show can seed), so its
+`Math.random()` lines stay upstream's. `index.html` has the mode's markup and the fork's module preloads in one block.
+
+To merge: `git fetch upstream && git merge upstream/main`, resolve any conflict at a hook by keeping upstream's line
+and re-adding the hook, then `node --test tests/*.test.cjs tests/*.test.mjs` (boot.test.cjs checks that every module
+is preloaded).
+
+Note on traffic: the AI show stages its streets. Before each street of its run it holds the corner clear and lays
+the street out as rows of two cars side by side, a split apart, at Midtown's crawl (`swim-traffic.js`). A player
+driving freely gets the city's ordinary traffic, not that.
+
 ## Make it your own
 
 Fork it, remix it, improve it, break it. Make games, animations, films, experiments, or something completely different. Use it as a starting point and take it wherever you want. Have fun!
