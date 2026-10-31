@@ -82,6 +82,7 @@ const STUCK_TIME = 2; // s standing still before the AI backs out
 const HOLD_BACK = 15; // m the cop keeps behind the car it chases
 const CORNER_CLEAR_DISTANCE = 110; // m out from a drift corner that the show starts holding its traffic
 const CORNER_CLEAR_RADIUS = 26;
+const HELD_QUEUE_REACH = 40; // m short of that zone that a queue may be cars held for it (not a red light's: see unstick)
 // m past a corner where the street's staged traffic starts (traffic.js stageRoute): past a drifted corner, more, so the
 // car has caught the slide and is running straight before the first pair to split
 const STAGE_GAP = 30;
@@ -808,7 +809,8 @@ class SwimShow {
   // Pinned against a bus or a wall, or boxed in by traffic that is waiting for it: back out for a moment, steering
   // the other way, and try again: S held at a standstill reverses, with the wheel set to swing the nose toward the route
   // ahead (backing up turns the car the opposite way to the wheel), longer each time it is still stuck. The show never
-  // means to stand still, but in a queue (a red light's, across every lane: the AI's planner tells) it waits its turn.
+  // means to stand still, but in a queue (a red light's, across every lane: the AI's planner tells) it waits its turn,
+  // unless that queue is short of the corner the show holds clear: those cars are waiting for it to go round first.
   unstick(car, dt, keys) {
     if (this.reversing > 0) {
       this.reversing -= dt;
@@ -819,7 +821,10 @@ class SwimShow {
       return;
     }
     if (car.speed > UNSTUCK_SPEED) this.unstickTries = 0;
-    this.stuck = Math.abs(car.speed) < 1 && !this.pilot.queued ? (this.stuck || 0) + dt : 0;
+    const held = this.clearedCorner !== undefined ? this.pilot.path[this.clearedCorner] : null;
+    const heldQueue = held && Math.hypot(held.x - car.position.x, held.z - car.position.z) < CORNER_CLEAR_RADIUS + HELD_QUEUE_REACH;
+    const waiting = this.pilot.queued && !heldQueue;
+    this.stuck = Math.abs(car.speed) < 1 && !waiting ? (this.stuck || 0) + dt : 0;
     if (this.stuck > STUCK_TIME) {
       this.stuck = 0;
       this.unstickTries = (this.unstickTries || 0) + 1;

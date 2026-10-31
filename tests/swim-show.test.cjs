@@ -353,6 +353,27 @@ test('roaming into a red light\'s queue across every lane, the AI waits behind i
   assert.ok(car.speed > 8, `and drives on after it (${car.speed.toFixed(1)} m/s)`);
 });
 
+test('a queue held short of the corner the show keeps clear is waiting for the AI: it backs out rather than wait for good', () => {
+  // Rolling south down 7th Ave, cars stopped across every lane at the edge of its first corner's clear zone
+  const car = makeCar({ x: config.avenueX('7'), z: config.streetZ(36), heading: 0 });
+  car.speed = 13;
+  const { swimShow, controllers, driver } = makeShow(car);
+  assert.equal(swimShow.roam(5), true);
+  const corner = swimShow.pilot.path[1];
+  const sign = Math.sign(corner.z - car.position.z);
+  // (on down the avenue to 140 m short of that corner)
+  car.position.z = corner.z - sign * 140;
+  swimShow.obstacles = [-7.2, -3.6, 0, 3.6, 7.2].map((x) => ({
+    x: config.avenueX('7') + x, z: corner.z - sign * 30, yaw: 0, speed: 0, half: 2.3, halfWidth: 0.92, edge: true
+  }));
+  let reversed = false;
+  for (let n = 0; n < 20 * 60 && !reversed; n++) {
+    frame(car, controllers, driver);
+    reversed = car.speed < -0.2;
+  }
+  assert.ok(reversed, 'it backs out to find a way round');
+});
+
 test('a frame with no time in it leaves the keyboard driver unharmed', () => {
   const car = { position: { x: 0, z: 0 }, heading: 0, speed: 12, vx: 3, vz: 0, angularVel: 0, steerAngle: 0, longAccel: 0, drift: {} };
   const driver = new physics.KeyboardDriver();
