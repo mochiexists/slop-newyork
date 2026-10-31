@@ -610,10 +610,13 @@ class SwimShow {
       this.traffic.setClearZone({ x: corner.x, z: corner.z, r: CORNER_CLEAR_RADIUS });
       // ...and the street past it is laid out for swimming: pairs of cars side by side to split, staged as the car
       // comes up to the corner (round it, out of sight; down 7th Ave, as it powers out of the drift)
-      const before = path[index - 1], after = path[index + 1];
-      const turn = wrapAngle(Math.atan2(after.x - corner.x, after.z - corner.z) - Math.atan2(corner.x - before.x, corner.z - before.z));
-      const drifted = Math.abs(turn) > this.pilot.options.sharpTurn;
-      this.traffic.stageRoute?.(corner, after, { startGap: drifted ? STAGE_GAP_AFTER_DRIFT : STAGE_GAP });
+      const before = path[index - 1], after = path[index + 1], beyond = path[index + 2];
+      const drifted = this.isDrifted(before, corner, after);
+      // (and short of a drifted corner at its far end by the AI's line-up for it: a pair there would sit in its braking,
+      // held up at the corner, where it can't be split at speed)
+      const options = { startGap: drifted ? STAGE_GAP_AFTER_DRIFT : STAGE_GAP };
+      if (beyond && this.isDrifted(corner, after, beyond)) options.endGap = this.pilot.options.lineUpDistance;
+      this.traffic.stageRoute?.(corner, after, options);
     } else if (!near && this.clearedCorner !== undefined && this.clearedCorner !== index) {
       const last = path[this.clearedCorner];
       if (Math.hypot(last.x - car.position.x, last.z - car.position.z) > CORNER_CLEAR_RADIUS + 20) {
@@ -621,6 +624,12 @@ class SwimShow {
         this.traffic.setClearZone(null);
       }
     }
+  }
+
+  // Whether the route's turn at b (from a, on to c) is sharp enough for the AI to drift it
+  isDrifted(a, b, c) {
+    const turn = wrapAngle(Math.atan2(c.x - b.x, c.z - b.z) - Math.atan2(b.x - a.x, b.z - a.z));
+    return Math.abs(turn) > this.pilot.options.sharpTurn;
   }
 
   // Pinned against a bus or a wall, or boxed in by traffic that is waiting for it: back out for a moment, steering
