@@ -1,10 +1,11 @@
 // A flight recorder for the swimming car: every frame of the driving (the keys fed to the keyboard driver, the car's
 // state before the frame's physics, the camera) kept in memory and sent in chunks to the local dev server, so a
-// physics change can be replayed against the player's real driving (tools/replay-session.mjs in the scratch).
+// physics change can be replayed against the player's real driving (replay-session.cjs in the drift-physics scratch,
+// fujira/scratch/2026-11-01/drift-physics/tools, with the dev server that takes the POSTs).
 //
-// controllers.js calls frame() once per swim frame before the keyboard driver runs; main.js calls flush() every
-// FLUSH_SECONDS and on pagehide, and download() on L (a file of the whole session, for a server without the endpoint).
-// A failed POST does nothing: the game never waits on, or complains about, the recorder.
+// controllers.js calls frame() once per swim frame before the keyboard driver runs; installSessionRecorder() (main.js's
+// one call) flushes every FLUSH_SECONDS and as the page hides or closes, and downloads the session on L (a file, for a
+// server without the endpoint). A failed POST does nothing: the game never waits on, or complains about, the recorder.
 //
 // Each frame is an array in FIELDS order. A frame's state is the state the frame started from, so frame i's keys and
 // dt applied to frame i's state should give frame i + 1's (collisions with buildings and traffic aside). The keyboard
@@ -17,14 +18,14 @@ const FIELDS = [
   'x', 'z', 'heading', 'speed', 'vx', 'vz', 'angularVel', 'steerAngle', 'longAccel', 'gear', 'rpm', 'wheelSlip',
   'limiterTime', 'manual', 'slipAngle', 'wheelspin', 'camera'
 ];
-const FLUSH_SECONDS = 10;
+const FLUSH_SECONDS = 5; // (short enough that what's left when the page closes fits one keepalive request)
 const KEYFRAME_EVERY = 30; // frames between snapshots of the keyboard driver
-const CHUNK_FRAMES = 300; // frames per POST: ~45 KB of JSON
+const CHUNK_FRAMES = 300; // frames per POST as the page closes: ~45 KB of JSON
 const MAX_FRAMES = 60 * 60 * 30; // frames kept in memory for download(): the last half hour at 60 fps
 const GAP_SECONDS = 0.5; // a pause longer than this between swim frames starts a new segment
 const TELEPORT_SLACK = 5; // m a frame may move beyond its speed before it reads as a teleport
 const ENDPOINT = '/session-log';
-const KEEPALIVE_BYTES = 60000; // a keepalive request's body must stay under the browser's 64 KB
+const KEEPALIVE_BYTES = 60000; // the browser lets 64 KB of keepalive requests be in flight at once
 
 // Rounds to a fixed number of decimals, keeping the JSON small
 function round(value, decimals) {
@@ -42,15 +43,21 @@ function snapshotDriver(driver) {
   return out;
 }
 
+// The session's name: the local time it started, 2026-11-01T14-05-09-123
 function sessionStamp(date = new Date()) {
-  return date.toISOString().replace(/[:.]/g, '-').replace('Z', '');
+  const two = (n) => String(n).padStart(2, '0');
+  const day = `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())}`;
+  const time = `${two(date.getHours())}-${two(date.getMinutes())}-${two(date.getSeconds())}`;
+  return `${day}T${time}-${String(date.getMilliseconds()).padStart(3, '0')}`;
 }
 
 class SessionRecorder {
   constructor({ now = () => performance.now() / 1000, post = null, camera = () => '' } = {}) {
     this.now = now;
     this.camera = camera; // () => the active camera preset's id
-    this.post = post ?? ((body) => fetch(ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: body.length < KEEPALIVE_BYTES }));
+    this.post = post ?? ((body, keepalive) => fetch(ENDPOINT, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: keepalive && body.length < KEEPALIVE_BYTES
+    }));
     this.session = sessionStamp();
     this.startedAt = now();
     this.chunk = 0;
@@ -107,16 +114,20 @@ class SessionRecorder {
     return JSON.stringify({ session: this.session, chunk, fields: FIELDS, drivers, frames });
   }
 
-  /** Sends the frames since the last flush; nothing to send, or a failed POST, does nothing. */
-  flush() {
-    // in pieces of CHUNK_FRAMES, so each POST fits a keepalive request (64 KB), which outlives the page closing
-    for (let start = 0; start < this.pending.length; start += CHUNK_FRAMES) {
-      const end = start + CHUNK_FRAMES;
+  /**
+   * Sends the frames since the last flush in one POST; nothing to send, or a failed POST, does nothing. As the page
+   * closes (closing) only keepalive requests get out, and the browser lets 64 KB of them be in flight: the frames go in
+   * pieces of CHUNK_FRAMES, the first of which fits.
+   */
+  flush(closing = false) {
+    const size = closing ? CHUNK_FRAMES : Math.max(1, this.pending.length);
+    for (let start = 0; start < this.pending.length; start += size) {
+      const end = start + size;
       const drivers = this.pendingDrivers.filter(([index]) => index >= start && index < end)
         .map(([index, snapshot]) => [index - start, snapshot]);
       const body = this.body(this.pending.slice(start, end), drivers, this.chunk++);
       try {
-        Promise.resolve(this.post(body)).catch(() => {});
+        Promise.resolve(this.post(body, closing)).catch(() => {});
       } catch {
         // no server, no network: the recorder stays quiet
       }
@@ -152,9 +163,9 @@ function installSessionRecorder({ controllerManager, cameraSystem, onSaved = () 
   const recorder = new SessionRecorder({ camera: () => cameraSystem.activePresetId, post: local ? undefined : () => {} });
   controllerManager.swimRecorder = recorder;
   setInterval(() => recorder.flush(), FLUSH_SECONDS * 1000);
-  window.addEventListener('pagehide', () => recorder.flush());
+  window.addEventListener('pagehide', () => recorder.flush(true));
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) recorder.flush();
+    if (document.hidden) recorder.flush(true);
   });
   window.addEventListener('keydown', (e) => {
     if (e.code !== 'KeyL' || e.repeat || e.metaKey || e.ctrlKey || e.altKey || isTypingInField(e)) return;

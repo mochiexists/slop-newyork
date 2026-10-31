@@ -16,7 +16,7 @@ function newCar(speed = 20) {
 function record(frames, { car = newCar(), teleportAt = -1 } = {}) {
   let clock = 0;
   const posts = [];
-  const recorder = new SessionRecorder({ now: () => clock, post: (body) => posts.push(JSON.parse(body)), camera: () => 'pov' });
+  const recorder = new SessionRecorder({ now: () => clock, post: (body, keepalive) => posts.push({ ...JSON.parse(body), keepalive }), camera: () => 'pov' });
   const driver = new physics.KeyboardDriver();
   for (let i = 0; i < frames; i++) {
     if (i === teleportAt) car.position.x += 500;
@@ -42,17 +42,27 @@ test('the recorder keeps every frame with its keys, state and camera, and keyfra
   assert.ok('steer' in recorder.allDrivers[5][1] && 'commit' in recorder.allDrivers[5][1]);
 });
 
-test('a flush posts the frames in pieces small enough for a keepalive request, and a failing POST is swallowed', () => {
+test('a flush posts the frames since the last one; as the page closes, in keepalive pieces that fit; a failing POST is swallowed', () => {
   const { recorder, posts } = record(700);
   recorder.flush();
-  assert.equal(posts.length, 3);
-  assert.deepEqual(posts.map((p) => p.frames.length), [300, 300, 100]);
-  assert.deepEqual(posts.map((p) => p.chunk), [0, 1, 2]);
-  for (const p of posts) assert.ok(JSON.stringify(p).length < 60000, `chunk ${p.chunk}: ${JSON.stringify(p).length} bytes`);
-  // keyframes land in the chunk they belong to, indexed within it
-  assert.deepEqual(posts[1].drivers.map(([i]) => i), [0, 30, 60, 90, 120, 150, 180, 210, 240, 270]);
+  assert.equal(posts.length, 1, 'one plain POST while the page is open');
+  assert.equal(posts[0].frames.length, 700);
+  assert.equal(posts[0].keepalive, false);
   recorder.flush();
-  assert.equal(posts.length, 3, 'nothing pending, nothing sent');
+  assert.equal(posts.length, 1, 'nothing pending, nothing sent');
+
+  const closing = record(700);
+  closing.recorder.flush(true);
+  const pieces = closing.posts;
+  assert.deepEqual(pieces.map((p) => p.frames.length), [300, 300, 100]);
+  assert.deepEqual(pieces.map((p) => p.chunk), [0, 1, 2]);
+  assert.ok(pieces.every((p) => p.keepalive === true));
+  for (const p of pieces) assert.ok(JSON.stringify(p).length < 60000, `chunk ${p.chunk}: ${JSON.stringify(p).length} bytes`);
+  // keyframes land in the chunk they belong to, indexed within it
+  assert.deepEqual(pieces[1].drivers.map(([i]) => i), [0, 30, 60, 90, 120, 150, 180, 210, 240, 270]);
+  // the session is named for the local time it started
+  assert.match(closing.recorder.session, /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}$/);
+  assert.equal(recorderModule.sessionStamp(new Date(2026, 10, 1, 14, 5, 9, 7)), '2026-11-01T14-05-09-007');
 
   const failing = new SessionRecorder({ now: () => 0, post: () => Promise.reject(new Error('no server')) });
   failing.frame(newCar(), { forward: 1 }, 1 / 60, null);
