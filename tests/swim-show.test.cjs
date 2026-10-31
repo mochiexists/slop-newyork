@@ -374,6 +374,22 @@ test('a queue held short of the corner the show keeps clear is waiting for the A
   assert.ok(reversed, 'it backs out to find a way round');
 });
 
+test('a queue that stands longer than any red light is not one: the AI stops waiting and backs out', () => {
+  const car = makeCar({ x: config.avenueX('7'), z: config.streetZ(36), heading: 0 });
+  car.speed = 13;
+  const { swimShow, controllers, driver } = makeShow(car);
+  assert.equal(swimShow.roam(5), true);
+  swimShow.obstacles = [-7.2, -3.6, 0, 3.6, 7.2].map((x) => ({
+    x: config.avenueX('7') + x, z: car.position.z + 60, yaw: 0, speed: 0, half: 2.3, halfWidth: 0.92, edge: true
+  }));
+  let reversedAt = null;
+  for (let n = 0; n < 70 * 60 && reversedAt === null; n++) {
+    frame(car, controllers, driver);
+    if (car.speed < -0.2) reversedAt = n / 60;
+  }
+  assert.ok(reversedAt !== null && reversedAt > 30, `it waited a red light's length, then backed out (at ${reversedAt?.toFixed(1)} s)`);
+});
+
 test('a frame with no time in it leaves the keyboard driver unharmed', () => {
   const car = { position: { x: 0, z: 0 }, heading: 0, speed: 12, vx: 3, vz: 0, angularVel: 0, steerAngle: 0, longAccel: 0, drift: {} };
   const driver = new physics.KeyboardDriver();
