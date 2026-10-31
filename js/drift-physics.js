@@ -57,7 +57,12 @@ const M5_DRIFT = {
   // slide they visibly point the way the key says (the fronts saturate and scrub a little speed: a tighter line)
   selfAlignSlip: 8 * RAD, // front slip the wheels self-align to in a slide with no key: short of the axle's path, so the
   // front tires keep some bite into the turn (the tire's peak is at 8°)
-  intoFade: 5 * RAD, // body slip short of slipLimit over which the key into the turn gives way to the self-alignment
+  // Body slip short of slipLimit over which the key into the turn gives way to the self-alignment: from 35° the wheel
+  // walks out toward counter-lock as the angle grows, a hand easing its grip, rather than snapping there at 50° (5° of
+  // fade threw 46° of wheel against the held key in a quarter of a second)
+  intoFade: 20 * RAD,
+  alignRate: 1.6, // rad/s the self-alignment swings the wheels against a held key in a slide (the hands feed it
+  // through, as fast as the keyboard's counter-steer winds; steerRate is the bare caster's snap with no key)
   slipLimit: 55 * RAD, // body slip beyond which the assist yaws the car back, so a slide doesn't become a spin
   stability: 22, // 1/s² of yaw correction per radian past the limit
   slideLock: 0.7, // rad of front-wheel lock in a slide (a drift car's angle kit, 40°): the counter-steer follows the
@@ -268,7 +273,9 @@ function stepDriftCar(car, input, dt, params = M5_DRIFT, out = stepDriftCar.tele
   const drifting = turnSide * (aligned + (into - aligned) * intoTurn + (outward - aligned) * counter);
   const lock = params.maxSteer + (params.slideLock - params.maxSteer) * slide;
   const target = Math.max(-lock, Math.min(lock, grip + (drifting - grip) * slide));
-  const steerStep = params.steerRate * dt;
+  // (in a slide the wheel swings against a held key no faster than the hands let it through)
+  const against = input.steer * (target - car.steerAngle) < 0 ? Math.abs(input.steer) * slide : 0;
+  const steerStep = (params.steerRate + (params.alignRate - params.steerRate) * against) * dt;
   car.steerAngle += Math.max(-steerStep, Math.min(steerStep, target - car.steerAngle));
   const delta = car.steerAngle;
 
