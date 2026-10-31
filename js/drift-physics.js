@@ -487,6 +487,7 @@ const KEYBOARD_DRIVER = {
   counterThrottle: 0, // and a slide the counter-steer key is ending
   saveHold: 0.25, // s of counter-steer held into the end of a slide that makes it a save,
   exitHold: 0.4, // after which the still-held key reads as straighten for this long (not a power-over the other way)
+  transitionSpeed: 8, // m/s below which the counter key held on the gas is still a save (a donut pivots slower)
   swingTime: 0.4, // s after a transition's slide ends (the counter key held on the gas through it) the driver's hands
   swingSteer: 0.5, // hold the wheel at this share of the key while the car swings through straight: the yaw it
   // carries is already throwing it into the new slide (the whole key there overshoots the new side to ~70°)
@@ -595,12 +596,14 @@ class KeyboardDriver {
     // swings through straight and the gas lights the rears the other way.
     this.counterHeld = lockDirection !== 0 && lockDirection === this.slideSide ? this.counterHeld + dt : 0;
     const ending = !sliding || this.slip + this.slipRate * p.angleLead < p.slideSlip;
-    if (this.wasSliding && ending && !forward && this.counterHeld > p.saveHold && this.exitTimer === 0) {
+    // (at a crawl the side the tail is out on flickers through a donut's pivot: no transitions there)
+    const transition = forward > 0 && speed > p.transitionSpeed;
+    if (this.wasSliding && ending && !transition && this.counterHeld > p.saveHold && this.exitTimer === 0) {
       this.commit = 0;
       this.lockHeld = 0;
       this.exitTimer = p.exitHold;
     }
-    if (this.wasSliding && !sliding && forward > 0 && this.counterHeld > p.saveHold && this.swingTimer === 0) {
+    if (this.wasSliding && !sliding && transition && this.counterHeld > p.saveHold && this.swingTimer === 0) {
       this.swingTimer = p.swingTime;
     }
     this.swingTimer = Math.max(0, this.swingTimer - dt);
