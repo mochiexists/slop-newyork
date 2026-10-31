@@ -5,10 +5,8 @@ import {
   getIslandBoundsAtZ,
   isTypingInField,
   blockAt,
-  streetZ,
-  TELEPORT_LOCATIONS
+  streetZ
 } from './city-config.js';
-import { M5_DRIFT, KeyboardDriver, shiftDown, shiftUp, stepDriftCar, toggleManual } from './drift-physics.js';
 import { cityUniforms, createCarPaintMaterial, createContactShadowMaterial } from './tsl-materials.js';
 import {
   BODY_SPECS,
@@ -29,6 +27,7 @@ import { PersonCrowd, PersonRig } from './pedestrians.js';
 import { HEADLIGHTS, createVehicleHeadlight, placeVehicleHeadlight } from './vehicle-lights.js';
 import { bryantParkLawn } from './landmarks.js';
 import { polygonContact } from './building-collision.js';
+import { SWIM_BOX, createSwimEntity, resetSwimCar, updateSwim } from './swim-car.js'; // (Swimming in Slop: the M5)
 
 // Player models, animation and movement for walking, driving, cycling and flying.
 
@@ -42,8 +41,6 @@ const CAR_DRIVE = {
   rolling: 0.18, drag: 0.0012, coast: 0.6, brake: 9,
   wheelbase: 2.76, grip: 9.5, cornering: 10.5 // Wheelbase (m), tire and steering acceleration limits (m/s²).
 };
-const M5_PAINT = 0x1b4fa8; // BMW Marina Bay Blue metallic
-const SWIM_STEPS_PER_SECOND = 240; // the drift model wants short steps: slip angles change fast in a slide
 const BICYCLE_DRIVE = {
   speed: 19, reverseSpeed: 4.5, acceleration: 9,
   rolling: 0.08, drag: 0.004, coast: 0.2, brake: 7.5 // Backward input is scaled to 0.6, giving 4.5 m/s² braking.
@@ -72,7 +69,7 @@ function driveSpeed(speed, throttle, dt, drive) {
 const personGround = (controllers, x, z) => controllers.getGroundHeight(x, z, 'person');
 
 // Half-width & half-length of the drivable cars' collision boxes, by mode
-const CAR_BOXES = { car: [0.86, 2.18], swim: [0.97, 2.52] };
+const CAR_BOXES = { car: [0.86, 2.18], swim: SWIM_BOX };
 
 function collisionBody(mode, radius, heading, margin = 0) {
   const box = CAR_BOXES[mode];
@@ -174,7 +171,7 @@ function createTaxiDoorDecalTexture() {
   return tex;
 }
 
-function createNYLicensePlateTexture(number = '7Y48A', footer = 'NYC T&LC') {
+function createNYLicensePlateTexture() {
   const c = document.createElement('canvas');
   c.width = 256;
   c.height = 128;
@@ -189,9 +186,9 @@ function createNYLicensePlateTexture(number = '7Y48A', footer = 'NYC T&LC') {
   ctx.fillText('NEW YORK', 128, 23);
   ctx.fillStyle = '#0d2244';
   ctx.font = '900 48px JetBrains Mono, monospace';
-  ctx.fillText(number, 128, 82);
+  ctx.fillText('7Y48A', 128, 82);
   ctx.font = '700 13px Inter, Arial, sans-serif';
-  ctx.fillText(footer, 128, 114);
+  ctx.fillText('NYC T&LC', 128, 114);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 16;
@@ -203,7 +200,7 @@ class ThirdPersonControllerManager {
     this.scene = scene;
     this.colliders = colliders;
     this._colliderCells = null; // built on first use, see nearColliders()
-    this.activeMode = 'car'; // 'person' | 'car' | 'cyclist' | 'helicopter' | 'swim'
+    this.activeMode = 'car'; // 'person' | 'car' | 'cyclist' | 'helicopter'
 
     this.keys = {
       forward: false,
@@ -218,9 +215,9 @@ class ThirdPersonControllerManager {
       person: this.createPersonEntity(),
       car: this.createCarEntity(),
       cyclist: this.createCyclistEntity(),
-      helicopter: this.createHelicopterEntity(),
-      swim: this.createSwimEntity()
+      helicopter: this.createHelicopterEntity()
     };
+    this.entities.swim = createSwimEntity(this.scene); // (Swimming in Slop: swim-car.js)
 
     Object.values(this.entities).forEach((ent) => {
       if (ent.mesh) {
@@ -378,14 +375,7 @@ class ThirdPersonControllerManager {
       ent.prevX = ent.position.x;
       ent.prevZ = ent.position.z;
       ent.vx = ent.vz = ent.angularVel = ent.steerAngle = 0;
-      if (ent.drift) {
-        ent.longAccel = 0;
-        ent.cameraYaw = ent.heading;
-        ent.drift.slipAngle = ent.drift.rearSlide = ent.drift.wheelspin = 0;
-        ent.wheelSlip = 0;
-        ent.gear = 0; // the automatic picks the gear for the speed again
-        this.swimDriver?.reset();
-      }
+      if (ent.drift) resetSwimCar(this, ent);
       ent.pitchVel = ent.rollVel = ent.heaveY = ent.heaveVel = 0;
       ent.chassisPivot.rotation.x = ent.chassisPivot.rotation.z = 0;
       ent.chassisPivot.position.y = 0;
@@ -625,114 +615,6 @@ class ThirdPersonControllerManager {
       cameraTargetOffset: new THREE.Vector3(0, 0.96, 0),
       chaseDistance: 6.9,
       chaseHeight: 2.12
-    };
-  }
-
-  // =========================================================================
-  // 2b. SWIMMING (BMW M5 SUPER SALOON WITH DRIFT PHYSICS, see drift-physics.js)
-  // =========================================================================
-  createSwimEntity() {
-    const root = new THREE.Group();
-    root.name = 'PlayerSwimmingM5';
-
-    const chassisPivot = new THREE.Group();
-    root.add(chassisPivot);
-
-    const spec = BODY_SPECS.m5;
-    // the glass lets the driver (m5-cockpit.js) be seen from outside
-    const paint = createLoftedCarMaterial(spec, M5_PAINT, { seeThrough: true });
-    const body = new THREE.Mesh(buildCarGeometry(spec, false), paint);
-    chassisPivot.add(body);
-
-    const plateMat = new THREE.MeshStandardNodeMaterial({ map: createNYLicensePlateTexture('SWIM', 'EMPIRE STATE'), roughness: 0.28 });
-    for (const front of [true, false]) {
-      const y = spec.plates[front ? 0 : 1];
-      const plate = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.14, 0.008), plateMat);
-      plate.position.set(0, y, carTipZ(spec, y, front) + (front ? 0.003 : -0.003));
-      plate.rotation.x = Math.atan((carTipZ(spec, y + 0.07, front) - carTipZ(spec, y - 0.07, front)) / 0.14);
-      chassisPivot.add(plate);
-    }
-
-    // Quad tailpipes under the rear bumper, two either side
-    const pipeMat = new THREE.MeshStandardNodeMaterial({ color: 0x2b2e33, metalness: 0.92, roughness: 0.28, side: THREE.DoubleSide });
-    const pipeGeo = new THREE.CylinderGeometry(0.047, 0.05, 0.16, 16, 1, true).rotateX(Math.PI * 0.5);
-    const pipeY = 0.3;
-    const pipeZ = carTipZ(spec, pipeY, false) + 0.03;
-    for (const x of [-0.56, -0.43, 0.43, 0.56]) {
-      const pipe = new THREE.Mesh(pipeGeo, pipeMat);
-      pipe.position.set(x, pipeY, pipeZ);
-      chassisPivot.add(pipe);
-    }
-
-    const leftWheelGeo = buildSteerableWheelGeo(spec, -1);
-    const rightWheelGeo = buildSteerableWheelGeo(spec, 1);
-    const wheelMat = createCarWheelMaterial({ wheelRadius: spec.wheelRadius });
-    const wheels = [];
-    for (const [side, z, isFront] of [[-1, spec.wheelZ, true], [1, spec.wheelZ, true], [-1, -spec.wheelZ, false], [1, -spec.wheelZ, false]]) {
-      const steerPivot = new THREE.Group();
-      steerPivot.position.set(side * spec.wheelX, spec.wheelRadius, z);
-      const tire = new THREE.Mesh(side < 0 ? leftWheelGeo : rightWheelGeo, wheelMat);
-      steerPivot.add(tire);
-      root.add(steerPivot);
-      wheels.push({ steerPivot, tire, isFront });
-    }
-
-    const shadowGeo = new THREE.PlaneGeometry(2.3, 5.45);
-    shadowGeo.rotateX(-Math.PI * 0.5);
-    const shadow = new THREE.Mesh(shadowGeo, createContactShadowMaterial());
-    shadow.position.y = 0.02;
-    shadow.renderOrder = 998;
-    root.add(shadow);
-
-    const headLights = [];
-    for (const side of [-1, 1]) {
-      const spot = createVehicleHeadlight();
-      placeVehicleHeadlight(spot, spec, side);
-      chassisPivot.add(spot, spot.target);
-      headLights.push(spot);
-    }
-
-    this.scene.add(root);
-
-    // Parked on 7th Ave just north of Times Square, facing south down the avenue: the opening of the Squeeze clip
-    const start = TELEPORT_LOCATIONS.timessq;
-    return {
-      type: 'car',
-      mode: 'swim',
-      label: 'BMW M3 Competition · Swimming',
-      paint: M5_PAINT,
-      mesh: root,
-      chassisPivot,
-      carState: paint.userData.carState,
-      headLights,
-      wheels,
-      position: new THREE.Vector3(start.x, 0, start.z - 40),
-      prevX: start.x,
-      prevZ: start.z - 40,
-      heading: start.heading,
-      cameraYaw: start.heading,
-      speed: 0,
-      vx: 0,
-      vz: 0,
-      angularVel: 0,
-      longAccel: 0,
-      pitchVel: 0,
-      rollVel: 0,
-      heaveY: 0,
-      heaveVel: 0,
-      lastCollisionSpark: null,
-      steerAngle: 0,
-      wheelSpin: 0,
-      gear: 1, // the gearbox (drift-physics.js): 1-8, -1 reversing; manual holds it until the driver shifts
-      rpm: 800,
-      manual: false,
-      drift: {
-        slipAngle: 0, rearSlide: 0, wheelspin: 0, rpm: 800, gear: 1, limiter: false, steer: 0, loadFront: 0, loadRear: 0,
-        lateralAccel: 0
-      },
-      cameraTargetOffset: new THREE.Vector3(0, 0.92, 0),
-      chaseDistance: 7.6,
-      chaseHeight: 2.05
     };
   }
 
@@ -1222,7 +1104,7 @@ class ThirdPersonControllerManager {
     if (this.activeMode === 'car') {
       this.updateCar(dt, elapsed);
     } else if (this.activeMode === 'swim') {
-      this.updateSwim(dt);
+      updateSwim(this, dt);
     } else if (this.activeMode === 'cyclist') {
       this.updateCyclist(dt, elapsed);
     } else if (this.activeMode === 'helicopter') {
@@ -1377,86 +1259,6 @@ class ThirdPersonControllerManager {
         w.steerPivot.rotation.y = c.steerAngle;
       }
     }
-  }
-
-  // Swimming: the M5 on the drift model. W throttle, S brakes then reverses, A/D steer, Space/E handbrake; W and S
-  // together at a stop is a burnout. The keyboard driver turns the on/off keys into a driver's hands and feet (see
-  // the keyboard driver in drift-physics.js), so a tap of A is a grip turn and a slide takes a deliberate input.
-  updateSwim(dt) {
-    if (dt <= 0) return;
-    const c = this.entities.swim;
-    const driver = this.swimDriver ??= new KeyboardDriver();
-    const keys = this._swimKeys ??= { forward: 0, backward: 0, left: 0, right: 0, handbrake: 0 };
-    keys.forward = this.keys.forward;
-    keys.backward = this.keys.backward;
-    keys.left = this.keys.left;
-    keys.right = this.keys.right;
-    keys.handbrake = this.keys.up;
-    // The AI driver (the swim show) drives through the same keys: it sees the player's and presses its own in their place
-    this.swimPilot?.(c, dt, keys, driver);
-    // The flight recorder (session-recorder.js, set by main.js) notes the frame's keys and the state they act on
-    this.swimRecorder?.frame(c, keys, dt, driver, Boolean(this.swimPilot));
-    const input = driver.update(c, keys, dt);
-
-    const prevX = c.position.x;
-    const prevZ = c.position.z;
-    c.prevX = prevX;
-    c.prevZ = prevZ;
-    const steps = Math.ceil(dt * SWIM_STEPS_PER_SECOND);
-    const step = dt / steps;
-    for (let i = 0; i < steps; i++) {
-      const telemetry = stepDriftCar(c, input, step, M5_DRIFT, c.drift);
-      this.resolveHorizontalCollision(c.position, 1.35, c);
-
-      // Squat under power, dive under braking, lean out of the corner; collisions kick the same springs (the squat is
-      // played up: the nose lifting off the line is half of what makes a launch look violent)
-      const targetPitch = -Math.max(-1, Math.min(1, c.longAccel / 9)) * 0.055;
-      const targetRoll = Math.max(-0.07, Math.min(0.07, telemetry.lateralAccel * 0.009));
-      c.pitchVel += ((targetPitch - c.chassisPivot.rotation.x) * 68 - c.pitchVel * 11.2) * step;
-      c.rollVel += ((targetRoll - c.chassisPivot.rotation.z) * 68 - c.rollVel * 11.2) * step;
-      c.chassisPivot.rotation.x = Math.max(-0.22, Math.min(0.22, c.chassisPivot.rotation.x + c.pitchVel * step));
-      c.chassisPivot.rotation.z = Math.max(-0.26, Math.min(0.26, c.chassisPivot.rotation.z + c.rollVel * step));
-      c.heaveVel += (-c.heaveY * 85 - c.heaveVel * 12) * step;
-      c.heaveY = Math.max(-0.08, Math.min(0.14, c.heaveY + c.heaveVel * step));
-    }
-    c.position.y = this.getGroundHeight(c.position.x, c.position.z, 'swim');
-    c.chassisPivot.position.y = c.heaveY;
-
-    if (c.carState) {
-      c.carState.value.x = input.brake > 0 || input.handbrake > 0 ? 1 : 0;
-      c.carState.value.w = c.speed < -0.2 ? 1 : 0;
-    }
-
-    // The chase camera swings out with the slide, so a drift is seen from the side rather than from straight behind
-    // (the AI show sets its own angles for the burnout and donuts)
-    const cameraTarget = c.cameraYawOverride ?? c.heading + c.drift.slipAngle * 0.6;
-    const turn = Math.atan2(Math.sin(cameraTarget - c.cameraYaw), Math.cos(cameraTarget - c.cameraYaw));
-    c.cameraYaw += turn * (1 - Math.exp(-dt * 5));
-
-    // Front wheels roll with the ground; the driven rears spin up with wheelspin and stop under the handbrake
-    const forwardDist = (c.position.x - prevX) * Math.sin(c.heading) + (c.position.z - prevZ) * Math.cos(c.heading);
-    const roll = forwardDist / BODY_SPECS.m5.wheelRadius;
-    c.wheelSpin = (c.wheelSpin + Math.sign(roll) * Math.min(Math.abs(roll), 0.48)) % (Math.PI * 2);
-    const rearRoll = input.handbrake > 0.05 ? 0 : roll + c.drift.wheelspin * dt * 40;
-    c.rearWheelSpin = ((c.rearWheelSpin || 0) + Math.sign(rearRoll) * Math.min(Math.abs(rearRoll), 0.48)) % (Math.PI * 2);
-    for (const w of c.wheels) {
-      w.tire.rotation.x = w.isFront ? c.wheelSpin : c.rearWheelSpin;
-      if (w.isFront) w.steerPivot.rotation.y = c.steerAngle;
-    }
-  }
-
-  // Swimming gearbox (an eight-speed automatic by default): manual mode holds the gear, so the revs sit on the limiter
-  // until the driver shifts; a downshift that would over-rev the engine is refused. Each returns whether it did it.
-  shiftSwimUp() {
-    return this.entities.swim.manual === true && shiftUp(this.entities.swim, M5_DRIFT);
-  }
-
-  shiftSwimDown() {
-    return this.entities.swim.manual === true && shiftDown(this.entities.swim, M5_DRIFT);
-  }
-
-  toggleSwimManual() {
-    return toggleManual(this.entities.swim);
   }
 
   updateCyclist(dt) {

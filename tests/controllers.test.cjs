@@ -6,7 +6,6 @@ const { loadModule } = require('./helpers/module.cjs');
 
 const source = readFileSync(join(__dirname, '../js/controllers.js'), 'utf8');
 const polygonCollision = loadModule(readFileSync(join(__dirname, '../js/building-collision.js'), 'utf8'));
-const driftPhysics = loadModule(readFileSync(join(__dirname, '../js/drift-physics.js'), 'utf8'));
 
 function eventTarget() {
   const listeners = new Map();
@@ -41,8 +40,7 @@ function keyboardHarness(nyc = {}) {
       './vehicle-lights.js': {},
       './landmarks.js': {},
       './building-collision.js': polygonCollision,
-      './drift-physics.js': driftPhysics,
-      './drift-autopilot.js': {}
+      './swim-car.js': {}
     }
   });
   // Exercise the production event handlers without constructing the scene's 3D models.
