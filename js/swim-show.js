@@ -12,7 +12,7 @@ import {
 } from './cars.js';
 import { createContactShadowMaterial } from './tsl-materials.js';
 import { KEYBOARD_DRIVER, KeyboardDriver, M5_DRIFT, stepDriftCar } from './drift-physics.js';
-import { DriftAutopilot, steeringKey, travelHeading } from './drift-autopilot.js';
+import { DriftAutopilot, Hands, steeringKey, travelHeading } from './drift-autopilot.js';
 import { resolveVehicleContact, vehicleContact } from './vehicle-physics.js';
 import { RoamRoute } from './swim-roam.js';
 
@@ -177,8 +177,9 @@ const DONUT = {
   decideEvery: 0.1, // s between choices (the handbrake dab lasts one)
   horizon: 1.6, // s it looks ahead (a donut lap takes ~6)
   pedalTime: 0.3, // s a lift off W lasts in its look ahead, before W goes down again
-  frame: 1 / 60, // s per look-ahead frame,
-  substeps: 2, // ... each this many physics steps
+  // (the look-ahead plays the game's own frames, as long as the last one: its hands press keys a frame at a time, and a
+  // tap lasts a whole number of them, 83 ms at 60 Hz, 100 ms at 40)
+  physicsStep: 1 / 120, // s per look-ahead physics step, about
   // The cost of a moment of the look-ahead: the square of each metre off the circle, of a slide dying (under
   // minAngle, per 10°) or spinning (over maxAngle), and of a crawl
   minAngle: 22 * RAD,
@@ -189,6 +190,10 @@ const DONUT = {
   crawlCost: 2,
   exitAngle: 20 * RAD // powering out, flat out and counter-steering until the slide is down to this
 };
+
+// s: the frame times the donuts' look-ahead plays, at most and least (a hitch of a frame doesn't make it a coarse one)
+const MAX_LOOK_FRAME = 1 / 30;
+const MIN_LOOK_FRAME = 1 / 240;
 
 // The car's own state, the numbers stepDriftCar and the keyboard driver read and write, copied out for a look-ahead
 function snapshotCar(car, into = {}) {
@@ -221,9 +226,12 @@ function copyDriver(driver, into) {
 }
 
 class DonutDriver {
-  // entry: the bearing from the centre where the car joins the circle; the roll comes up to it along the tangent
-  constructor(center, radius, entry, options = {}) {
+  // entry: the bearing from the centre where the car joins the circle; the roll comes up to it along the tangent.
+  // hands: the Hands that press its keys (drift-autopilot.js), which it reads to choose keys they can press, and whose
+  // copy its look-ahead plays its keys through
+  constructor(center, radius, entry, options = {}, hands = new Hands()) {
     this.o = { ...DONUT, ...options };
+    this.hands = hands;
     this.center = center;
     this.radius = radius;
     this.entry = entry;
@@ -250,32 +258,36 @@ class DonutDriver {
     this.time = 0;
   }
 
-  // The hands and feet to use for the next moment of the drift: each choice played ahead on a copy of the car and of
-  // its keyboard driver (the wheel tapped toward its share of lock all the way, W up only for pedalTime, the handbrake
-  // only for one decision), the one whose look-ahead stays sideways on the circle wins
-  choose(car, driver) {
+  // The hands and feet to use for the next moment of the drift: each choice played ahead on a copy of the car, of its
+  // keyboard driver and of its hands (the wheel tapped toward its share of lock all the way, W up only for pedalTime,
+  // the handbrake only for one decision, every key as the hands can press it), the one whose look-ahead stays sideways
+  // on the circle wins
+  choose(car, driver, frame) {
     const o = this.o;
     const model = driver.model;
     const base = this._base = snapshotCar(car, this._base);
     const sim = this._sim ??= snapshotCar(car);
     const keys = this._keys ??= { forward: 0, backward: 0, left: 0, right: 0, handbrake: 0 };
+    const simHands = this._simHands ??= new Hands();
     const telemetry = this._telemetry ??= {};
-    const frames = Math.round(o.horizon / o.frame);
-    const step = o.frame / o.substeps;
+    const frames = Math.round(o.horizon / frame);
+    const substeps = Math.max(1, Math.round(frame / o.physicsStep));
+    const step = frame / substeps;
     let best = null;
     for (const wheel of o.wheels) for (const forward of [1, 0]) for (const handbrake of [0, 1]) {
       restoreCar(base, sim);
       const simDriver = this._simDriver = copyDriver(driver, this._simDriver);
+      simHands.copyFrom(this.hands);
       let cost = 0;
       for (let f = 0; f < frames; f++) {
-        const t = f * o.frame;
-        const key = steeringKey(simDriver, wheel, sim.speed, o.frame);
+        const t = f * frame;
+        const key = steeringKey(simDriver, wheel, sim.speed, frame, simHands);
         keys.left = key > 0 ? 1 : 0;
         keys.right = key < 0 ? 1 : 0;
         keys.forward = t < o.pedalTime ? forward : 1;
         keys.handbrake = t < o.decideEvery ? handbrake : 0;
-        const input = simDriver.update(sim, keys, o.frame);
-        for (let i = 0; i < o.substeps; i++) stepDriftCar(sim, input, step, model, telemetry);
+        const input = simDriver.update(sim, simHands.press(keys, frame), frame);
+        for (let i = 0; i < substeps; i++) stepDriftCar(sim, input, step, model, telemetry);
         const distance = Math.hypot(sim.position.x - this.center.x, sim.position.z - this.center.z);
         const v = Math.hypot(sim.speed, sim.vx, sim.vz);
         const lateral = sim.vx * Math.cos(sim.heading) - sim.vz * Math.sin(sim.heading);
@@ -341,7 +353,7 @@ class DonutDriver {
     } else if (this.phase === 'drift') {
       this.sinceChoice = (this.sinceChoice ?? Infinity) + dt;
       if (this.sinceChoice >= o.decideEvery) {
-        this.choice = this.choose(car, driver);
+        this.choice = this.choose(car, driver, Math.min(MAX_LOOK_FRAME, Math.max(MIN_LOOK_FRAME, dt)));
         this.sinceChoice = 0;
       }
       want = this.choice.wheel;
@@ -351,7 +363,7 @@ class DonutDriver {
       keys.forward = 1;
       want = angle > o.exitAngle ? -1 : 0;
     }
-    const key = steeringKey(driver, want, car.speed, dt);
+    const key = steeringKey(driver, want, car.speed, dt, this.hands);
     keys.left = key > 0 ? 1 : 0;
     keys.right = key < 0 ? 1 : 0;
     return keys;
@@ -530,9 +542,9 @@ class PoliceCruiser {
         gap = (quarry.position.x - c.position.x) * fx + (quarry.position.z - c.position.z) * fz;
         if (gap < -3) this.giveUp();
       }
-      // The cop drives on the keys too: the autopilot's keys, with the brake pressed (for its share of the frames) to
-      // hold back, or to stop (let go at a standstill, where S would reverse)
-      const keys = this.pilot.update(c, dt, obstacles, this.driver);
+      // The cop drives on the keys too, through its own hands: the autopilot's keys, with the brake pressed (for its
+      // share of the frames) to hold back, or to stop (let go at a standstill, where S would reverse)
+      const keys = this.pilot.drive(c, dt, obstacles, this.driver);
       let brake = 0;
       if (this.state === 'stopping') brake = 0.5;
       else if (gap < HOLD_BACK && c.speed > Math.abs(quarry.speed) - 2) brake = Math.min(1, (HOLD_BACK - gap) / HOLD_BACK + 0.2);
@@ -542,7 +554,7 @@ class PoliceCruiser {
         keys.backward = this.holdBrake >= 0.5 && c.speed > 0.6 ? 1 : 0;
         if (keys.backward) this.holdBrake -= 1;
       }
-      const input = this.driver.update(c, keys, dt);
+      const input = this.driver.update(c, this.pilot.hands.press(keys, dt), dt);
       const steps = Math.ceil(dt * SIM_STEPS_PER_SECOND);
       for (let i = 0; i < steps; i++) stepDriftCar(c, input, dt / steps, COP_DRIFT, c.drift);
       if (this.state === 'stopping' && Math.abs(c.speed) < 0.2) this.state = 'parked';
@@ -578,6 +590,8 @@ class SwimShow {
     this.onCamera = onCamera; // (preset id) the show cuts between the chase camera and the driver's seat
     // The avenues are four or five lanes wide: weave across all of them, faster and closer than a driver would
     this.pilot = new DriftAutopilot({ ...SHOW_SWIMMING, lanes: 2, laneWidth: 2.8 });
+    // One pair of hands for everything the show presses: the swimming, the donuts, backing out (fly)
+    this.hands = this.pilot.hands;
     this.phase = 'off';
     this.time = 0;
     this.total = 0;
@@ -598,7 +612,7 @@ class SwimShow {
     this.cruiser.park(COP_SPOT.x, COP_SPOT.z, COP_HEADING);
     this.takeWheel();
     this.roamer = null;
-    this.donut = new DonutDriver(COP_SPOT, DRIFT_RADIUS, ENTRY_BEARING);
+    this.donut = new DonutDriver(COP_SPOT, DRIFT_RADIUS, ENTRY_BEARING, {}, this.hands);
     this.onCamera?.('chase');
     this.setPhase('roll');
   }
@@ -629,6 +643,7 @@ class SwimShow {
     const c = this.controllers.entities.swim;
     this.controllers.swimPilot = (car, dt, keys, driver) => this.fly(car, dt, keys, driver);
     this.controllers.swimDriver?.reset();
+    this.hands.reset();
     if (this.phase === 'off') this.playerManual = Boolean(c.manual);
     c.manual = false;
     this.traffic.releaseStaged?.();
@@ -679,7 +694,8 @@ class SwimShow {
   }
 
   // One frame of the show: called with the player's keys before the keyboard driver reads them; the AI presses its own
-  // in their place, so it drives the car exactly as the player can
+  // in their place, so it drives the car exactly as the player can. Whatever drives this frame (the donuts, the
+  // swimmer, backing out) says which keys it wants; the show's one pair of hands presses them, as a player's can.
   fly(car, dt, keys, driver) {
     this.lastKeys = keys;
     // Any driving key takes the wheel (the key itself goes through to the car this frame)
@@ -690,6 +706,14 @@ class SwimShow {
     }
     this.time += dt;
     this.total += dt;
+    const wanted = this.wanted ??= { forward: 0, backward: 0, left: 0, right: 0, handbrake: 0 };
+    for (const key in wanted) wanted[key] = 0;
+    this.drive(car, dt, wanted, driver);
+    if (this.phase !== 'off') Object.assign(keys, this.hands.press(wanted, dt));
+  }
+
+  // The keys the show wants this frame, by phase (fly)
+  drive(car, dt, keys, driver) {
     // Show cameras look across the car toward the cruiser, so the cop is in the shot
     const cop = this.cruiser.car.position;
     const towardCop = Math.atan2(cop.x - car.position.x, cop.z - car.position.z);
@@ -754,7 +778,7 @@ class SwimShow {
         }
         this.extendRoute();
         this.clearNextCorner(car);
-        Object.assign(keys, this.pilot.update(car, dt, this.obstacles, driver));
+        Object.assign(keys, this.pilot.drive(car, dt, this.obstacles, driver));
         this.unstick(car, dt, keys);
         // Off the end of the streets the roam knows: start over from wherever the car is (or give the car back)
         if (this.pilot.finished && !this.roam()) {

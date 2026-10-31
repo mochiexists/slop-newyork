@@ -18,6 +18,7 @@ const FLINCH_MARGIN = 0.3; // m a driver adds round both cars, reckoning whether
 const CRAWL_BRAKE = 0.6; // m/s below which the brake key isn't pressed (it would reverse): it stops the car otherwise,
 const SAME_WAY = Math.cos(45 * RAD); // a car headed within this of the street's direction is going its way
 const CRAWL_HOLD = 0.3; // ...holding it on the handbrake below this (drift-physics.js holds a braked car still there)
+const BRAKE_TAP = 0.05; // s of full brake: the least a tap of the brake key is worth (taps and holds, not a 60 Hz duty)
 
 const AUTOPILOT = {
   cruiseSpeed: 38, // m/s on the straights (85 mph)
@@ -127,6 +128,100 @@ const AUTOPILOT = {
   oncomingCost: 25 // score against the oncoming half of a two-way street: used to pass, not to cruise in
 };
 
+// The AI's hands on the keys. Every key the AI presses (the swimmer, the show's donuts and its backing out, the cop)
+// goes through a Hands, so it presses them as a player's fingers can: a key once pressed, or let go, stays that way
+// for at least minHold (a quick tap on a keyboard), and changes at most maxRate times in any second. Without it the
+// AI picked each key afresh every frame: A and D changing 21 times a second and W 8, one-frame presses, the brake
+// pulsed at 60 Hz. That is pulse-width modulation, an analog wheel and pedal and an ABS on a keyboard, which no
+// player has (review 2026-11-01, finding 1).
+const HANDS = {
+  minHold: 0.08, // s a key stays down, or up, at least
+  maxRate: 6, // changes of one key in any second at most
+  changeCost: 0.02 // share of the lock a steering change has to gain over keeping the key it holds (no fidgeting)
+};
+const KEY_NAMES = ['forward', 'backward', 'left', 'right', 'handbrake'];
+const TIME_EPSILON = 1e-6;
+
+class Hands {
+  constructor(options = {}) {
+    this.o = { ...HANDS, ...options };
+    this.keys = { forward: 0, backward: 0, left: 0, right: 0, handbrake: 0 };
+    this.lastChange = {}; // per key: the clock's time it last changed
+    this.recent = {}; // per key: the clock's times of its changes within the last second
+    this.reset();
+  }
+
+  reset() {
+    this.clock = 0;
+    for (const key of KEY_NAMES) {
+      this.keys[key] = 0;
+      this.lastChange[key] = -Infinity;
+      this.recent[key] = [];
+    }
+    return this;
+  }
+
+  // The same hands in another body: a look-ahead plays its keys through a copy, so it plans presses it can make
+  copyFrom(other) {
+    this.o = other.o;
+    this.clock = other.clock;
+    for (const key of KEY_NAMES) {
+      this.keys[key] = other.keys[key];
+      this.lastChange[key] = other.lastChange[key];
+      const recent = this.recent[key];
+      recent.length = 0;
+      for (const time of other.recent[key]) recent.push(time);
+    }
+    return this;
+  }
+
+  // Whether a key may change now: held its state for minHold, and fewer than maxRate changes in the last second
+  free(key) {
+    if (this.clock - this.lastChange[key] < this.o.minHold - TIME_EPSILON) return false;
+    const recent = this.recent[key];
+    while (recent.length && this.clock - recent[0] >= 1 - TIME_EPSILON) recent.shift();
+    return recent.length < this.o.maxRate;
+  }
+
+  // Whether a key could be in `state` after this frame
+  reaches(key, state) {
+    return this.keys[key] === state || this.free(key);
+  }
+
+  // The steering key down now: +1 A (left), -1 D (right), 0 neither
+  get steering() {
+    return this.keys.left - this.keys.right;
+  }
+
+  // Whether the steering can be `key` (+1, -1, 0) after this frame: the other key up, this one down
+  canSteer(key) {
+    return this.reaches('left', key > 0 ? 1 : 0) && this.reaches('right', key < 0 ? 1 : 0);
+  }
+
+  change(key, state) {
+    if (this.keys[key] === state || !this.free(key)) return;
+    this.keys[key] = state;
+    this.lastChange[key] = this.clock;
+    this.recent[key].push(this.clock);
+  }
+
+  // One frame `dt` long: the keys it wants down (each 0 or 1), as far as the hands can follow. Returns its keys (the
+  // same object each call). A and D are never down together, nor W and S (gas and brake together at a stop is a burnout):
+  // a key waits until the other one has come up.
+  press(wanted, dt) {
+    this.clock += dt;
+    const want = (key) => (wanted[key] ? 1 : 0);
+    // (releases first, so the other key of a pair can go down in the same frame)
+    for (const key of KEY_NAMES) if (!want(key)) this.change(key, 0);
+    if (want('left') && !want('right') && !this.keys.right) this.change('left', 1);
+    if (want('right') && !want('left') && !this.keys.left) this.change('right', 1);
+    if (want('forward') && !this.keys.backward) this.change('forward', 1);
+    if (want('backward') && !this.keys.forward) this.change('backward', 1);
+    if (want('handbrake')) this.change('handbrake', 1);
+    return this.keys;
+  }
+}
+
 const wrap = (angle) => Math.atan2(Math.sin(angle), Math.cos(angle));
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 
@@ -203,8 +298,10 @@ class DriftAutopilot {
     this.model = this.options.model ?? M5_DRIFT; // the car's drift model parameters
     // What it wants of the wheel and pedals (the driver's steer -1..1 and pedal 0..1), and the keys it presses for it
     this.want = { throttle: 0, brake: 0, reverse: 0, steer: 0, handbrake: 0 };
-    this.keys = { forward: 0, backward: 0, left: 0, right: 0, handbrake: 0 };
-    this.brakeDuty = 0;
+    this.keys = { forward: 0, backward: 0, left: 0, right: 0, handbrake: 0 }; // the keys it wants down this frame
+    this.hands = new Hands(this.options.hands); // ...and the hands that press them
+    this.brakeDebt = 0; // s of full brake it wanted and hasn't pressed yet (- pressed and didn't want)
+    this.braking = 0; // the brake key it wants down
     this.keepSpeed = 0; // m/s its plans should not slow below (0: no such wish)
     this.path = [];
     this.segment = 0;
@@ -246,7 +343,9 @@ class DriftAutopilot {
     return { a, b, ux: dx / length, uz: dz / length, length };
   }
 
-  // Track progress: move on to the next segment once the car is past the end of this one
+  // Track progress: move on to the next segment once the car is past the end of this one, or round the corner onto the
+  // next one (a slide can carry it onto the new street a few metres short of the old one's end: it is on the new street
+  // once it is past the corner along it and nearer its line than the old one's)
   advance(car) {
     while (this.segment < this.path.length - 2) {
       const s = this.seg(this.segment);
@@ -660,10 +759,6 @@ class DriftAutopilot {
     return (car.position.x - s.a.x) * s.ux + (car.position.z - s.a.z) * s.uz;
   }
 
-  /**
-   * One frame of driving: decides the wheel and pedals it wants, and returns the keys to press this frame for the
-   * car's KeyboardDriver (`driver`, whose wheel and pedal it reads). Call once per frame, before driver.update.
-   */
   // What a flown plan's passes are worth: each close call (passed at speed with under closeGap of air) more the closer
   // it is, and a split (close calls on both sides within splitWindow: threading the gap between two cars) on top
   closeCallScore(count) {
@@ -681,21 +776,30 @@ class DriftAutopilot {
     return score;
   }
 
+  // One frame of driving: decides the wheel and pedals it wants, and returns the keys its hands press this frame for
+  // the car's KeyboardDriver (`driver`, whose wheel and pedal it reads). Call once per frame, before driver.update.
   update(car, dt, obstacles = [], driver) {
+    return this.hands.press(this.drive(car, dt, obstacles, driver), dt);
+  }
+
+  // The keys it wants this frame, before its hands press them (the show presses them itself, after its own say: see
+  // swim-show.js fly)
+  drive(car, dt, obstacles, driver) {
     this.decide(car, dt, obstacles, driver);
     return this.press(car, dt, driver);
   }
 
-  // The keys that move the driver's wheel and pedal toward what it wants. A key is on or off for a whole frame, so it
-  // taps them: each frame it picks the steering key (left, right or neither) whose wind-on or self-centring lands the
-  // wheel nearest the wanted lock, holds W while the pedal is short of the wanted throttle, and pulses the brake for
-  // its share of the frames. (Gas with the lock wound past the driver's commitLock is a power-over; swimming, decide
-  // keeps the wheel short of it, so W stays held through a flick.)
+  // The keys that move the driver's wheel and pedal toward what it wants, as its hands can press them: each key it
+  // changes stays that way a moment (Hands). So it picks the steering key (left, right or neither) whose hold for that
+  // moment lands the wheel nearest the wanted lock, W by where the pedal goes in that moment held or lifted, and the
+  // brake as taps and holds whose share of the time is the braking it wants. (Gas with the lock wound past the
+  // driver's commitLock is a power-over; swimming, decide keeps the wheel short of it, so W stays held through a flick.)
   press(car, dt, driver) {
     const want = this.want;
     const keys = this.keys;
     const p = driver.params;
-    const best = steeringKey(driver, want.steer, car.speed, dt);
+    const hands = this.hands;
+    const best = steeringKey(driver, want.steer, car.speed, dt, hands);
     keys.left = best > 0 ? 1 : 0;
     keys.right = best < 0 ? 1 : 0;
 
@@ -703,14 +807,23 @@ class DriftAutopilot {
     // it wants after that, reading last frame's share as a driver feels the car hold back
     const passed = driver.throttle > MIN_PEDAL ? clamp(driver.input.throttle / driver.throttle, MIN_PASSED, 1) : 1;
     const pedal = Math.min(1, want.throttle / passed);
-    const up = approachValue(driver.throttle, 1, dt / p.throttleTime);
-    const down = approachValue(driver.throttle, 0, dt / p.liftTime);
+    const hold = dt * Math.max(1, Math.ceil(hands.o.minHold / dt - TIME_EPSILON));
+    const up = approachValue(driver.throttle, 1, hold / p.throttleTime);
+    const down = approachValue(driver.throttle, 0, hold / p.liftTime);
     keys.forward = pedal > 0 && Math.abs(up - pedal) <= Math.abs(down - pedal) ? 1 : 0;
 
-    // The brake key is all or nothing: pressed for its share of the frames (never at a stop, where S reverses)
-    this.brakeDuty = want.brake > 0 && car.speed > 0.6 ? this.brakeDuty + want.brake : 0;
-    keys.backward = this.brakeDuty >= 0.5 ? 1 : 0;
-    if (keys.backward) this.brakeDuty -= 1;
+    // The brake key is all or nothing: held for its share of the time, as taps and holds of at least brakeTap's worth
+    // of braking (the debt between the brake it wanted and the brake it pressed swings past ±brakeTap before the key
+    // changes). Never at a stop, where S reverses.
+    if (want.brake > 0 && car.speed > CRAWL_BRAKE) {
+      this.brakeDebt = clamp(this.brakeDebt + (want.brake - hands.keys.backward) * dt, -2 * BRAKE_TAP, 2 * BRAKE_TAP);
+      if (this.brakeDebt > BRAKE_TAP || want.brake >= 1) this.braking = 1;
+      else if (this.brakeDebt < -BRAKE_TAP) this.braking = 0;
+    } else {
+      this.brakeDebt = 0;
+      this.braking = 0;
+    }
+    keys.backward = this.braking;
     if (want.reverse > 0) {
       keys.backward = 1;
       keys.forward = 0;
@@ -931,11 +1044,20 @@ function nextSteer(steer, key, speed, dt, p) {
   return approachValue(steer, key, windOn);
 }
 
-/** The steering key (+1 left, -1 right, 0 neither) that lands a keyboard driver's wheel nearest `want` next frame. */
-function steeringKey(driver, want, speed, dt) {
-  let best = 0, bestError = Infinity;
+/**
+ * The steering key (+1 left, -1 right, 0 neither) that lands a keyboard driver's wheel nearest `want`: next frame, or
+ * with `hands` (Hands), at the end of the least time a key it changes to stays that way, among the keys the hands can
+ * reach now; and changing keys has to gain changeCost over keeping the one it holds.
+ */
+function steeringKey(driver, want, speed, dt, hands = null) {
+  const frames = hands ? Math.max(1, Math.ceil(hands.o.minHold / dt - TIME_EPSILON)) : 1;
+  const holding = hands ? hands.steering : 0;
+  let best = holding, bestError = Infinity;
   for (const key of [0, 1, -1]) {
-    const error = Math.abs(nextSteer(driver.steer, key, Math.abs(speed), dt, driver.params) - want);
+    if (hands && !hands.canSteer(key)) continue;
+    let steer = driver.steer;
+    for (let i = 0; i < frames; i++) steer = nextSteer(steer, key, Math.abs(speed), dt, driver.params);
+    const error = Math.abs(steer - want) + (hands && key !== holding ? hands.o.changeCost : 0);
     if (error < bestError - 1e-9) {
       best = key;
       bestError = error;
@@ -955,4 +1077,4 @@ function travelHeading(car) {
   return Math.hypot(vx, vz) > 1 ? Math.atan2(vx, vz) : car.heading;
 }
 
-export { AUTOPILOT, DriftAutopilot, driverLock, steeringKey, travelHeading };
+export { AUTOPILOT, DriftAutopilot, HANDS, Hands, driverLock, steeringKey, travelHeading };
