@@ -20,8 +20,8 @@ function setUpSwimCar({ controllerManager, cameraSystem, audioSystem, swimDirect
   // Full build: the real M3 Competition model replaces the procedural car when assets/models/m3.glb is there
   loadSwimCarModel(controllerManager.entities.swim, m5Cockpit).catch((error) => console.warn('M3 model not loaded:', error));
   // The swimming car's engine sound, M3 or the GTA mod's M5: the button on the Careless Whisper card and K
-  audioSystem.onSwimEngineChange = bindSwimEngineToggle(document.getElementById('swim-engine'), audioSystem);
-  audioSystem.onSwimEngineChange();
+  audioSystem.swimSounds.onChange = bindSwimEngineToggle(document.getElementById('swim-engine'), audioSystem.swimSounds);
+  audioSystem.swimSounds.onChange();
   return m5Cockpit;
 }
 
@@ -93,7 +93,7 @@ function bindSwimControls(app) {
         if (plain && swimming) m5Cockpit.toggleBird();
         break;
       case 'KeyK': // swap the engine sound, M3 / M5 (GTA mod), see swim-engine-toggle.js
-        if (plain && swimming) audioSystem.toggleSwimEngine();
+        if (plain && swimming) audioSystem.swimSounds.toggle();
         break;
       case 'KeyT': // automatic or manual gearbox
         if (plain && swimming) {

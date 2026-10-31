@@ -1,4 +1,5 @@
 import { signalPhase, walkSignal } from './city-config.js';
+import { swimThrottle } from './swim-engine-sounds.js'; // (Swimming in Slop: the M5's pedal)
 
 const MOTOR_RANGE = 180;
 const SIREN_RANGE = 220;
@@ -100,15 +101,6 @@ class CityAudioSources {
     };
   }
 
-  // The swimming car's pedal as driven this frame: the keyboard driver's output (controllers.js swimDriver, after any
-  // AI driver has pressed its keys); before the first swim frame, the keys.
-  swimControls() {
-    const input = this.controllers.swimDriver?.input;
-    const controls = this.swimPedal ??= { throttle: 0 };
-    controls.throttle = input ? unit(Math.max(input.throttle, input.reverse)) : unit(+this.controllers.keys.forward);
-    return controls;
-  }
-
   distanceSq(x, y, z) {
     const dx = x - this.listener.x;
     const dy = y - this.listener.y;
@@ -192,10 +184,8 @@ class CityAudioSources {
         const kind = entity.mode === 'swim' ? 'swim' : entity.type === 'car' ? 'sedan' : entity.type;
         const helicopter = kind === 'helicopter';
         const verticalSpeed = player && helicopter ? helicopterVerticalSpeed(entity) : 0;
-        let load = 0;
-        if (player && helicopter) load = helicopterLoad(entity, keys, verticalSpeed);
-        else if (player && kind === 'swim') load = this.swimControls().throttle;
-        else if (player) load = driveLoad(keys, entity.speed, kind === 'cyclist');
+        let load = player ? helicopter ? helicopterLoad(entity, keys, verticalSpeed) : driveLoad(keys, entity.speed, kind === 'cyclist') : 0;
+        if (player && kind === 'swim') load = swimThrottle(this.controllers); // (its pedal as the driver presses it)
         const gain = player ? 1 : helicopter ? 0.22 : 0.5;
         const range = helicopter ? (player ? 500 : 200) : 160;
         this.motor(entity, kind, x, y + (helicopter ? 2.66 : 0.7), z, player ? entity.speed : 0, load, entity.heading,
