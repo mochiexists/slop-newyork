@@ -183,10 +183,12 @@ test('the donuts hold the circle at other frame rates and on a looser or steerie
   }
 });
 
-test('out of the last lap it drifts onto 7th Ave and pulls off flat out: 50 mph within 3 s', () => {
+test('out of the last lap it drifts onto 7th Ave and pulls off flat out: 50 mph within 3.5 s', () => {
+  // (the slide ends on a lift with the counter-steer held, as the handling has it: the counter key on the gas is a
+  // manji, W alone holds the slide; then floored. 3 s before the hands and the lift)
   const o = runOpening();
   const reached = o.exitSpeeds.findIndex((v) => v * MPH >= 50);
-  assert.ok(reached >= 0 && reached / 60 < 3, `50 mph ${(reached / 60).toFixed(1)} s after the power-out`);
+  assert.ok(reached >= 0 && reached / 60 < 3.5, `50 mph ${(reached / 60).toFixed(1)} s after the power-out`);
   assert.ok(o.exitSpeeds[o.exitSpeeds.length - 1] * MPH > 70, `and on (${(o.exitSpeeds[o.exitSpeeds.length - 1] * MPH).toFixed(0)} mph 6 s on)`);
 });
 

@@ -66,8 +66,8 @@ const BIRD_TO_LAP = 1.85;
 const CHASE_ACROSS = 0.45; // rad the chase camera turns past the line to the cop, so the car and the cop share the shot
 const COP_GLANCE_LIMIT = 70 * RAD; // how far round from the windshield the driver turns to watch the cop
 const GLANCE_RATE = 2.5; // 1/s easing of the driver's look
-const EXIT_WINDOW = 25 * RAD; // the way out this far ahead of the direction of travel: power out (later in the lap,
-// the slide comes out already pointing down the avenue and the car can floor it)
+const EXIT_WINDOW = 45 * RAD; // the way out this far ahead of the direction of travel: drive out (the lift that ends
+// the slide takes a moment, and the car comes round on it; at 25° it came out pointing past the avenue)
 const EXIT_TIME_LIMIT = 3; // s of powering out before the autopilot takes over however straight the car is
 const EXIT_SLIP = 10 * RAD; // the slide is over below this drift angle,
 const EXIT_ALIGN = 60 * RAD; // and with the car travelling roughly the way out, the autopilot steers it back onto the avenue
@@ -188,7 +188,7 @@ const DONUT = {
   spinCost: 10,
   minSpeed: 6, // m/s
   crawlCost: 2,
-  exitAngle: 20 * RAD // powering out, flat out and counter-steering until the slide is down to this
+  exitAngle: 12 * RAD // powering out, off the gas and counter-steering until the slide is down to this, then flat out
 };
 
 // s: the frame times the donuts' look-ahead plays, at most and least (a hitch of a frame doesn't make it a coarse one)
@@ -360,8 +360,12 @@ class DonutDriver {
       keys.forward = this.choice.forward;
       keys.handbrake = this.choice.handbrake;
     } else if (this.phase === 'powerOut') {
-      keys.forward = 1;
-      want = angle > o.exitAngle ? -1 : 0;
+      // Out of the slide as the handling has it (drift-physics.js): off the gas with the counter-steer held the rears
+      // grip and the car straightens (the counter key with the gas still on throws it into a slide the other way, a
+      // manji, and W alone holds the slide); then floored, the wheel let go to follow the car
+      const unwinding = angle > o.exitAngle;
+      keys.forward = unwinding ? 0 : 1;
+      want = unwinding ? -1 : 0;
     }
     const key = steeringKey(driver, want, car.speed, dt, this.hands);
     keys.left = key > 0 ? 1 : 0;
