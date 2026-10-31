@@ -16,6 +16,7 @@ const COMMIT_CLEARANCE = 0.05; // share of the lock it keeps short of the keyboa
 const COAST = 'coast'; // the pedal plan off both pedals (a lift)
 const FLINCH_MARGIN = 0.3; // m a driver adds round both cars, reckoning whether the swimmer will hit it (traffic.js)
 const CRAWL_BRAKE = 0.6; // m/s below which the brake key isn't pressed (it would reverse): it stops the car otherwise,
+const SAME_WAY = Math.cos(45 * RAD); // a car headed within this of the street's direction is going its way
 const CRAWL_HOLD = 0.3; // ...holding it on the handbrake below this (drift-physics.js holds a braked car still there)
 
 const AUTOPILOT = {
@@ -342,6 +343,7 @@ class DriftAutopilot {
       entry.length = inside ? Math.max(extentAlong + egoAlong, Math.abs(along) - 0.2) : length;
       entry.across = extentAcross;
       entry.extentAlong = extentAlong;
+      entry.sameWay = ob.yaw !== undefined && Math.cos(rel) > SAME_WAY;
       entry.inside = inside;
       entry.reach = inside ? Math.max(extentAcross + egoAcross, Math.min(reach, Math.abs(lateral - carLat) - 0.05)) : reach;
       // (the most it reaches across in any flight: see the footprint in the flight below)
@@ -368,7 +370,8 @@ class DriftAutopilot {
         const ob = seen[i];
         const gap = ob.along - ob.extentAlong - egoAlong;
         const inLine = Math.abs(ob.lateral - carLat) < ob.across + egoAcross;
-        this.queued = ob.along > 0 && gap < o.queueGap && inLine && Math.abs(ob.vAlong) < o.queueSpeed;
+        // (and facing the same way: nose to nose with oncoming cars at their red light it is in the wrong lane)
+        this.queued = ob.along > 0 && gap < o.queueGap && inLine && Math.abs(ob.vAlong) < o.queueSpeed && ob.sameWay;
       }
     }
 

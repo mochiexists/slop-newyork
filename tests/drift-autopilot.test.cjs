@@ -340,4 +340,6 @@ test('crawling up to a queue across the street, it knows it is queued; moving, o
   assert.equal(queued(0.5, queue), true, 'stopped behind it');
   assert.equal(queued(12, queue), false, 'still rolling at 12 m/s');
   assert.equal(queued(0.5, []), false, 'nothing ahead (pinned some other way: the show may back out)');
+  const oncoming = queue.map((v) => ({ ...v, yaw: Math.PI }));
+  assert.equal(queued(0.5, oncoming), false, 'nose to nose with oncoming cars: the wrong lane, not a queue');
 });
