@@ -16,19 +16,19 @@ const COMMIT_CLEARANCE = 0.05; // share of the lock it keeps short of the keyboa
 
 const AUTOPILOT = {
   cruiseSpeed: 38, // m/s on the straights (85 mph)
-  cornerSpeed: 15, // m/s it brakes to for a drifted 90° corner, by the point it turns in: the slide scrubs it to ~12
+  cornerSpeed: 16, // m/s it brakes to for a drifted 90° corner, by the point it turns in: the slide scrubs it to ~12
   braking: 7.5, // m/s² it plans to brake at before a corner
   turnGrip: 10.5, // m/s²: the lateral grip a drifted corner is planned with (its radius, so where it turns in)
   sharpTurn: 40 * RAD, // corners sharper than this are drifted
-  kickTime: 0.32, // s of handbrake to break the rear loose
+  kickTime: 0.25, // s of handbrake to break the rear loose
   kickSteer: 0.25, // share of the lock the wheel is wound on to before the handbrake flick
-  driftAngle: 39 * RAD, // drift angle it holds through a corner (the yaw it carries out of the flick peaks ~6° past it)
+  driftAngle: 35 * RAD, // drift angle it holds through a corner (the yaw it carries out of the flick peaks ~8° past it)
   angleGain: 1 / (10 * RAD), // share of the lock per radian of drift angle short of (into the turn) or past (counter-steer) it
-  slipLead: 0.15, // s ahead it reads the drift angle from how fast it is swinging
-  counterLock: 0.3, // share of the lock it counter-steers with at most: the wheel takes half a second to wind back into
-  // the turn from a full counter-steer, and by then the rears have gripped and the slide is over
+  slipLead: 0.35, // s ahead it reads the drift angle from how fast it is swinging
+  counterLock: 1, // share of the lock it counter-steers with at most (with no key the wheels self-align and the fronts
+  // still bite into the turn: catching the flick's swing takes the counter-steer key, drift-physics.js)
   slipRateFilter: 20, // 1/s: how quickly its feel for that swing follows the car
-  liftAngle: 20 * RAD, // read ahead this far past the angle it wants, it lifts off W
+  liftAngle: 10 * RAD, // read ahead this far past the angle it wants, it lifts off W
   driftSpeed: 20, // m/s it holds a slide to: the gas comes off as the slide's ground speed rises to it (a faster slide is
   // a wider one)
   driftThrottleGain: 0.5, // share of the pedal per m/s under driftSpeed
