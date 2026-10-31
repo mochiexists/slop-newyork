@@ -321,6 +321,38 @@ test('I hands the car back to the AI: it roams on from wherever the car is', () 
   assert.equal(controllers.swimPilot, null);
 });
 
+test('roaming into a red light\'s queue across every lane, the AI waits behind it instead of backing out, then goes', () => {
+  // Rolling south down 7th Ave at 30 mph, a queue standing across all its lanes 60 m ahead
+  const car = makeCar({ x: config.avenueX('7'), z: config.streetZ(36), heading: 0 });
+  car.speed = 13;
+  const { swimShow, controllers, driver } = makeShow(car);
+  assert.equal(swimShow.roam(5), true);
+  const queue = [-7.2, -3.6, 0, 3.6, 7.2].map((x) => ({
+    x: config.avenueX('7') + x, z: car.position.z + 60, yaw: 0, speed: 0, half: 2.3, halfWidth: 0.92, edge: true
+  }));
+  swimShow.obstacles = queue;
+  let reversing = 0, waited = 0, queued = 0;
+  for (let n = 0; n < 12 * 60; n++) {
+    frame(car, controllers, driver);
+    if (car.speed < -0.2) reversing++;
+    if (Math.abs(car.speed) < 1) waited++;
+    if (swimShow.pilot.queued) queued++;
+  }
+  assert.equal(reversing, 0, 'it never backs out of the queue');
+  assert.ok(waited > 3 * 60, `it waits its turn (${(waited / 60).toFixed(1)} s at a crawl)`);
+  assert.ok(queued > 0, 'its planner knows it is queued');
+  assert.ok(car.position.z < queue[0].z - 4, 'behind the queue, not in it');
+  // Green: the queue pulls away, and so does the AI
+  for (let n = 0; n < 8 * 60; n++) {
+    for (const v of queue) {
+      v.speed = Math.min(12, v.speed + 2 / 60);
+      v.z += v.speed / 60;
+    }
+    frame(car, controllers, driver);
+  }
+  assert.ok(car.speed > 8, `and drives on after it (${car.speed.toFixed(1)} m/s)`);
+});
+
 test('a frame with no time in it leaves the keyboard driver unharmed', () => {
   const car = { position: { x: 0, z: 0 }, heading: 0, speed: 12, vx: 3, vz: 0, angularVel: 0, steerAngle: 0, longAccel: 0, drift: {} };
   const driver = new physics.KeyboardDriver();

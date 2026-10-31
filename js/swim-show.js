@@ -808,7 +808,7 @@ class SwimShow {
   // Pinned against a bus or a wall, or boxed in by traffic that is waiting for it: back out for a moment, steering
   // the other way, and try again: S held at a standstill reverses, with the wheel set to swing the nose toward the route
   // ahead (backing up turns the car the opposite way to the wheel), longer each time it is still stuck. The show never
-  // means to stand still.
+  // means to stand still, but in a queue (a red light's, across every lane: the AI's planner tells) it waits its turn.
   unstick(car, dt, keys) {
     if (this.reversing > 0) {
       this.reversing -= dt;
@@ -819,7 +819,7 @@ class SwimShow {
       return;
     }
     if (car.speed > UNSTUCK_SPEED) this.unstickTries = 0;
-    this.stuck = Math.abs(car.speed) < 1 ? (this.stuck || 0) + dt : 0;
+    this.stuck = Math.abs(car.speed) < 1 && !this.pilot.queued ? (this.stuck || 0) + dt : 0;
     if (this.stuck > STUCK_TIME) {
       this.stuck = 0;
       this.unstickTries = (this.unstickTries || 0) + 1;

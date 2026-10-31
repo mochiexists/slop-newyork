@@ -95,6 +95,8 @@ const AUTOPILOT = {
   splitLineUp: 0, // score per metre a plan ends off the gap of the nearest pair to split ahead (0: it doesn't seek them)
   keepSpeedWeight: 12, // score per m/s a plan slows below keepSpeed (set while the show counts down the hand-over)
   brakeSteerLoss: 0.6, // share of the sideways grip lost to the brake key held down (all or nothing: 1.05 g)
+  queueSpeed: 2, // m/s: below this, behind a car no faster this close ahead in its line, it is waiting in a queue
+  queueGap: 6, // m of bumper-to-bumper gap
   hitCost: 200, // score against a plan that touches a car
   oncomingCost: 25 // score against the oncoming half of a two-way street: used to pass, not to cruise in
 };
@@ -155,6 +157,7 @@ class DriftAutopilot {
     this.kick = 0; // s of handbrake left in the current drift entry
     this.driftedCorner = -1;
     this.finished = false;
+    this.queued = false; // waiting behind a queue (planGap)
   }
 
   // corridors: optional per-leg street bounds, see corridor()
@@ -281,6 +284,18 @@ class DriftAutopilot {
       // (the most it reaches across in any flight: see the footprint in the flight below)
       entry.widestReach = inside ? entry.reach : extentAcross + egoWidest + o.passMargin;
       count++;
+    }
+    // Waiting in a queue: barely moving, lined up along the street, a car stopped or crawling just ahead in its line (a
+    // red light's queue across every lane). Then the way on is to wait, or thread through if a line opens, not to back
+    // out (the show's unstick reads this)
+    this.queued = false;
+    if (u < o.queueSpeed && egoYaw < ALONG_STREET) {
+      for (let i = 0; i < count && !this.queued; i++) {
+        const ob = seen[i];
+        const gap = ob.along - ob.extentAlong - egoAlong;
+        const inLine = Math.abs(ob.lateral - carLat) < ob.across + egoAcross;
+        this.queued = ob.along > 0 && gap < o.queueGap && inLine && Math.abs(ob.vAlong) < o.queueSpeed;
+      }
     }
 
     const oncoming = band.centre !== null && band.centre !== undefined ? band.centre : Infinity;
