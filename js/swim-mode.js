@@ -449,7 +449,14 @@ class SwimRadio {
     const source = this.source ?? 0;
     const options = { videoId: CARELESS_WHISPER.videoIds[source], startSeconds: CARELESS_WHISPER.chorus[source] };
     if (this.wanted) this.player.loadVideoById(options);
-    else this.player.cueVideoById(options);
+    else this.stopped(() => this.player.cueVideoById(options));
+  }
+
+  // Sends a command that stops the sound (pause, cue) and stops counting the player as playing at once: a play()
+  // before YouTube's state change arrives must start it again, not just turn the fade round
+  stopped(command) {
+    command();
+    this.sounding = false;
   }
 
   // Fades the song out, then pauses it (unless it was asked to play again meanwhile)
@@ -460,7 +467,7 @@ class SwimRadio {
     this.setStatus('paused');
     if (!this.ready) return;
     this.fader.fadeOut(() => {
-      if (!this.wanted) this.player.pauseVideo();
+      if (!this.wanted) this.stopped(() => this.player.pauseVideo());
     });
   }
 
@@ -826,4 +833,4 @@ class SwimDirector {
   }
 }
 
-export { CARELESS_WHISPER, SWIM_STARTS, SQUEEZE_ROUTE, SHOW_SPOT, SHOW_SIGNAL_TIME, CloseCalls, SwimDirector };
+export { CARELESS_WHISPER, SWIM_STARTS, SQUEEZE_ROUTE, SHOW_SPOT, SHOW_SIGNAL_TIME, CloseCalls, SwimRadio, SwimDirector };
