@@ -2,7 +2,7 @@ import * as THREE from 'three/webgpu';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { BODY_SPECS, carLayout } from './cars.js';
 import { CARELESS_WHISPER } from './swim-mode.js';
-import { driverView, birdStep, birdLift } from './m5-driver.js';
+import { driverView, birdStep, birdLift, wheelFollow } from './m5-driver.js';
 
 // The M5's cabin and its driver: the body and glasshouse are single-sided lofts, so from the driver's seat they vanish
 // and leave the hood floating in front of the road. This builds what the driver sees instead (a G90 interior in red
@@ -426,6 +426,7 @@ class M5Cockpit {
     this.bird = false;
     this.birdAmount = 0;
     this.redrawTimer = 0;
+    this.wheelHands = { angle: 0, rate: 0 }; // the steering wheel following the front wheels (m5-driver.js wheelFollow)
     // useModelCabin() moves these onto the full build's M3 model
     this.modelCabin = false;
     this.wheelRadius = WHEEL_RADIUS;
@@ -718,7 +719,10 @@ class M5Cockpit {
     if (!view.body) return;
 
     const c = this.entity;
-    const turn = THREE.MathUtils.clamp(c.steerAngle * WHEEL_RATIO, -WHEEL_MAX_TURN, WHEEL_MAX_TURN);
+    // the hands follow the front wheels smoothly (critically damped): a tap or a slide's catch turns the wheel, never
+    // snaps it
+    const followed = wheelFollow(this.wheelHands, c.steerAngle, dt);
+    const turn = THREE.MathUtils.clamp(followed * WHEEL_RATIO, -WHEEL_MAX_TURN, WHEEL_MAX_TURN);
     // + steerAngle turns left: counter-clockwise as the driver sees it, which is -z about the wheel's axis here
     this.wheelSpin.rotation.z = -turn;
     this.wheelMount.updateMatrix();

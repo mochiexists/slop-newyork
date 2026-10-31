@@ -35,4 +35,21 @@ function birdLift(amount) {
   return amount * amount * (3 - 2 * amount);
 }
 
-export { GLASS_SEE_THROUGH, BIRD_TIME, driverView, birdStep, birdLift };
+// rad/s of the hands' follow of the front wheels: critically damped, so the steering wheel settles on a new angle in
+// about 0.3 s (4.7 / WHEEL_FOLLOW) without overshooting, and a tap's jolt of the wheels becomes a smooth turn
+const WHEEL_FOLLOW = 16;
+
+/**
+ * The steering wheel's angle one frame on, following `target` (the front wheels' angle) as a critically damped spring:
+ * `follow` holds { angle, rate } and is updated in place. Exact for any dt, so a long frame can't make it ring.
+ */
+function wheelFollow(follow, target, dt, omega = WHEEL_FOLLOW) {
+  const offset = follow.angle - target;
+  const kick = (follow.rate + omega * offset) * dt;
+  const decay = Math.exp(-omega * dt);
+  follow.rate = (follow.rate - omega * kick) * decay;
+  follow.angle = target + (offset + kick) * decay;
+  return follow.angle;
+}
+
+export { GLASS_SEE_THROUGH, BIRD_TIME, WHEEL_FOLLOW, driverView, birdStep, birdLift, wheelFollow };
