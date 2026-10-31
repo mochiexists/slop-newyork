@@ -361,17 +361,18 @@ class DriftAutopilot {
       }
       count++;
     }
-    // Waiting in a queue: barely moving, lined up along the street, a car stopped or crawling just ahead in its line (a
-    // red light's queue across every lane). Then the way on is to wait, or thread through if a line opens, not to back
-    // out (the show's unstick reads this)
+    // Waiting in a queue: barely moving, lined up along the street, a car headed its way just ahead in its line (a red
+    // light's queue across every lane). Then the way on is to wait, or thread through if a line opens, not to back out
+    // (the show's unstick reads this)
     this.queued = false;
     if (u < o.queueSpeed && egoYaw < ALONG_STREET) {
       for (let i = 0; i < count && !this.queued; i++) {
         const ob = seen[i];
         const gap = ob.along - ob.extentAlong - egoAlong;
         const inLine = Math.abs(ob.lateral - carLat) < ob.across + egoAcross;
-        // (and facing the same way: nose to nose with oncoming cars at their red light it is in the wrong lane)
-        this.queued = ob.along > 0 && gap < o.queueGap && inLine && Math.abs(ob.vAlong) < o.queueSpeed && ob.sameWay;
+        // (and facing the same way: nose to nose with oncoming cars at their red light it is in the wrong lane. A queue
+        // pulling away on the green is still one: backing out then puts it into the queue behind)
+        this.queued = ob.along > 0 && gap < o.queueGap && inLine && ob.vAlong > -o.queueSpeed && ob.sameWay;
       }
     }
 
