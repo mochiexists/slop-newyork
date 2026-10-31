@@ -470,17 +470,26 @@ const KEYBOARD_DRIVER = {
   commitLock: 0.5, // with the wheel wound past this share of its lock (a 0.35 s flick at 35 m/s reaches 0.36)
   commitTime: 0.25, // s over which it lets go (and takes over again)
   slideSlip: 10 * RAD, // body slip that counts as a slide under way: the throttle may hold it
-  // In a slide W is the player's: the driver only lifts once the angle runs past what the keys ask for. Steering into
-  // the slide asks for the most angle, letting go of the keys a little less, and the counter-steer a shallow one; lifting
-  // off W lets the rears grip and straighten the car.
-  driftAngle: 30 * RAD, // (the key into the turn rotates the car on its own: the gas aims a little short of the angle)
+  // In a slide W is the player's angle lever: time on the gas is the pedal a keyboard doesn't have. A slide starts out
+  // allowed looseAngle; every second W stays down lets it out angleRamp further, up to topAngleMargin short of the slip
+  // limit, and off the gas it comes back in as fast. The traction control only lifts once the angle runs past that (a
+  // spin coming, not a preset), and never below minDriftThrottle, so a held W always reads as gas. The counter-steer
+  // key asks for a shallow angle; lifting off W lets the rears grip and straighten the car.
   looseAngle: 25 * RAD,
+  angleRamp: 12 * RAD, // per second of W held in a slide (25° to 50° in two seconds)
+  angleDrop: 24 * RAD, // per second off W (a half-second lift takes back a second's worth)
+  topAngleMargin: 5 * RAD,
   counterAngle: 12 * RAD,
   angleRange: 10 * RAD, // angle past the asked one over which the throttle comes down to the minimum
   angleLead: 0.6, // s ahead the driver reads the angle from how fast it's changing (lifts before the tail overshoots)
-  minDriftThrottle: 0.3,
+  minDriftThrottle: 0.5,
+  catchThrottle: 0.3, // the least it gives a slide the driver hasn't committed to while it catches it,
+  counterThrottle: 0, // and a slide the counter-steer key is ending
   saveHold: 0.25, // s of counter-steer held into the end of a slide that makes it a save,
   exitHold: 0.4, // after which the still-held key reads as straighten for this long (not a power-over the other way)
+  swingTime: 0.4, // s after a transition's slide ends (the counter key held on the gas through it) the driver's hands
+  swingSteer: 0.5, // hold the wheel at this share of the key while the car swings through straight: the yaw it
+  // carries is already throwing it into the new slide (the whole key there overshoots the new side to ~70°)
   burnoutSpeed: 3 // m/s below which gas and brake together is a burnout
 };
 
@@ -507,7 +516,9 @@ class KeyboardDriver {
     this.wasSliding = false;
     this.slideSide = 0; // the side the tail was last out on
     this.exitTimer = 0; // s left of a save's unwinding
+    this.swingTimer = 0; // s left of a transition's swing through straight
     this.counterHeld = 0; // s the counter-steer key has been held
+    this.angleTarget = this.params.looseAngle; // the drift angle the gas may hold, let out by time on W
     for (const key of Object.keys(this.input)) this.input[key] = 0;
     this.input.assist = 1;
     this.input.xDrive = 1;
@@ -576,23 +587,31 @@ class KeyboardDriver {
     const wound = Math.abs(this.steer) > p.commitLock;
     this.lockHeld = forward > 0 && wound && lockDirection !== 0 && lockDirection === this.lockDirection ? this.lockHeld + dt : 0;
     this.lockDirection = forward > 0 ? lockDirection : 0;
-    // A slide that ends with the counter-steer held on (not a tap to unwind the wheel) is a save: the traction control
-    // comes back, and the held key unwinds the wheel for a moment instead of throwing the car into a slide the other way.
-    // The driver sees the end coming (the angle read angleLead ahead, as the throttle does below) and unwinds before the
-    // rears bite: the counter-steer still on as they grip is what snaps a car into a tank-slapper.
+    // A slide that ends with the counter-steer held on (not a tap to unwind the wheel) and off the gas is a save: the
+    // traction control comes back, and the held key unwinds the wheel for a moment instead of throwing the car into a
+    // slide the other way. The driver sees the end coming (the angle read angleLead ahead, as the throttle does below)
+    // and unwinds before the rears bite: the counter-steer still on as they grip is what snaps a car into a
+    // tank-slapper. With the gas still on it is a transition (a manji): the held key is the new slide's way in, the car
+    // swings through straight and the gas lights the rears the other way.
     this.counterHeld = lockDirection !== 0 && lockDirection === this.slideSide ? this.counterHeld + dt : 0;
     const ending = !sliding || this.slip + this.slipRate * p.angleLead < p.slideSlip;
-    if (this.wasSliding && ending && this.counterHeld > p.saveHold && this.exitTimer === 0) {
+    if (this.wasSliding && ending && !forward && this.counterHeld > p.saveHold && this.exitTimer === 0) {
       this.commit = 0;
       this.lockHeld = 0;
       this.exitTimer = p.exitHold;
     }
+    if (this.wasSliding && !sliding && forward > 0 && this.counterHeld > p.saveHold && this.swingTimer === 0) {
+      this.swingTimer = p.swingTime;
+    }
+    this.swingTimer = Math.max(0, this.swingTimer - dt);
+    if (this.swingTimer > 0) input.steer = this.steer * p.swingSteer;
     // (the handbrake asks for a new slide: a transition, not a save)
     this.exitTimer = handbrake > 0 ? 0 : Math.max(0, this.exitTimer - dt);
     if (this.exitTimer > 0 && lockDirection === this.slideSide) {
       this.steer = approach(this.steer, 0, dt / p.centreTime);
       input.steer = this.steer;
     }
+    const newSlide = !this.wasSliding || Math.sign(slip) !== this.slideSide;
     this.wasSliding = sliding;
     if (sliding) this.slideSide = Math.sign(slip);
     // A slide is the driver's when they asked for it: the handbrake, a power-over, or the wheel wound well on as the
@@ -614,14 +633,29 @@ class KeyboardDriver {
     // straight is the target. The traction control alone budgets only the drive, and would let the gas spin the
     // still-sliding rears and throw the car back into the slide.
     const committed = this.commit > 0.5 && this.exitTimer === 0;
+    // (a new slide, or the tail swung out the other side, starts from looseAngle)
+    const topAngle = this.model.slipLimit - p.topAngleMargin;
+    if (!sliding || newSlide) this.angleTarget = p.looseAngle;
+    else {
+      const ramp = forward > 0 ? p.angleRamp : -p.angleDrop;
+      this.angleTarget = Math.max(p.counterAngle, Math.min(topAngle, this.angleTarget + ramp * dt));
+    }
     if (sliding && !handbrake) {
-      let target = p.looseAngle;
-      if (lockDirection === -Math.sign(slip)) target = p.driftAngle;
-      else if (lockDirection === Math.sign(slip)) target = p.counterAngle;
+      let target = this.angleTarget;
+      let base = committed ? p.minDriftThrottle : p.catchThrottle;
+      // (the counter-steer key asks for less angle and the driver lifts as far as it takes: in a transition the rears
+      // grip and swing the car back through straight)
+      if (lockDirection === Math.sign(slip)) {
+        target = Math.min(target, p.counterAngle);
+        base = Math.min(base, p.counterThrottle);
+      }
       if (!committed) target = 0;
       const ahead = this.slip + this.slipRate * p.angleLead;
       const hold = 1 - Math.max(0, ahead - target) / p.angleRange;
-      input.throttle = this.throttle * Math.max(p.minDriftThrottle, Math.min(1, hold));
+      // (the floor gives way only to a spin coming: the angle read ahead past the top one)
+      const spinning = Math.max(0, Math.min(1, (ahead - topAngle) / p.angleRange));
+      const floor = base * (1 - spinning);
+      input.throttle = this.throttle * Math.max(floor, Math.min(1, hold));
     }
     return input;
   }
