@@ -214,3 +214,35 @@ test('two cars side by side at their lanes\' outer edges: the swimmer splits the
   assert.equal(contacts, 0);
   assert.ok(c.position.z > traffic[1].z + 10, 'and it went through');
 });
+
+test('turned 8° in a flick, the swimmer still plans the split of a pair a second ahead: it will be straight by then', () => {
+  // The same pair, 35 m ahead at 30 m/s, the car lined up on the gap and running straight along the street, but its
+  // nose swung 8° across it (the slide a flick leaves behind)
+  const pair = [-2.6, 2.6].map((x) => ({ x, z: 35, speed: 6, yaw: 0, half: 2.3, halfWidth: 0.92 }));
+  const c = car(8 * RAD);
+  c.speed = 30;
+  c.vx = -Math.sin(c.heading) * c.speed;
+  c.vz = (1 - Math.cos(c.heading)) * c.speed;
+  const pilot = new DriftAutopilot({ passMargin: 0.2, closeBonus: 60, splitBonus: 100 });
+  pilot.setPath([{ x: 0, z: 0 }, { x: 0, z: 1000 }], { corridors: [{ left: 7, right: -7, centre: null }] });
+  const plan = pilot.planGap(c, pair);
+  assert.equal(plan.safe, true);
+  assert.ok(Math.abs(pilot.targetOffset) < 0.4, `through the gap (${pilot.targetOffset.toFixed(2)} m)`);
+});
+
+test('a pair to split coming up beyond its plans\' reach: the show\'s swimmer heads for the gap while the road is open', () => {
+  // At 35 m/s a lane right of a pair's gap 110 m ahead, open road between
+  const pair = [-2.6, 2.6].map((x) => ({ x, z: 110, speed: 6, yaw: 0, half: 2.3, halfWidth: 0.92 }));
+  function target(options) {
+    const c = car(0);
+    c.position.x = -3.6;
+    c.speed = 35;
+    const pilot = new DriftAutopilot({ passMargin: 0.2, closeBonus: 60, splitBonus: 100, ...options });
+    pilot.setPath([{ x: 0, z: 0 }, { x: 0, z: 1000 }], { corridors: [{ left: 7, right: -7, centre: null }] });
+    pilot.targetOffset = c.position.x; // (the line it is on)
+    pilot.planGap(c, pair);
+    return pilot.targetOffset;
+  }
+  assert.ok(Math.abs(target({ splitLineUp: 20 })) < 0.4, 'lined up on the gap');
+  assert.ok(target({}) < -3, 'without the wish it stays a lane off, in the open');
+});
