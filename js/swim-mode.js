@@ -568,11 +568,17 @@ class DriftScore {
 
 // What the HUD says as the AI show moves on
 const SHOW_CAPTIONS = {
-  burnout: ['BREAKING · SWIMMING IN TIMES SQUARE', 'show'],
+  roll: ['BREAKING · SWIMMING IN TIMES SQUARE', 'show'],
   escape: ['NYPD IN PURSUIT', 'lost'],
   swim: ['LOST THEM · SWIMMING', 'banked'],
-  countdown: ['YOUR CAR IN…', 'show']
+  roam: ['AI SWIMMING', 'show']
 };
+// The pilot chip while the AI drives, and for a while after the player takes the wheel
+const AI_DRIVING_HINT = 'W A S D take the wheel';
+const YOUR_CAR_HINT = 'YOUR CAR · I hands it back to the AI';
+const YOUR_CAR_HINT_TIME = 8; // s
+// The AI roams Midtown's avenues and wide cross streets (swim-roam.js): off them, it can't take the car
+const NO_WAY_ON = 'AI: DRIVE ONTO A MIDTOWN AVENUE FIRST';
 
 class SwimDirector {
   // onShowCamera(preset id): the show's camera cuts (main.js owns the cameras)
@@ -589,8 +595,7 @@ class SwimDirector {
       onPhase: (phase) => this.onShowPhase(phase),
       onCamera: onShowCamera
     });
-    this.countdown = document.getElementById('swim-countdown');
-    this.shownCount = 0;
+    this.yourCarHint = 0; // s left of the take-over hint on the pilot chip
     this.clock = 0;
     this.smoke = new TireSmoke(scene);
     this.skids = new SkidMarks(scene);
@@ -639,6 +644,12 @@ class SwimDirector {
     this.show.stop();
   }
 
+  // The I key: the AI takes the wheel from wherever the car is and roams the city, or gives it back
+  toggleAI() {
+    if (this.show.running) this.show.stop();
+    else if (!this.show.roam()) this.score.flash(NO_WAY_ON, 'lost');
+  }
+
   // An NYPD cruiser watching from across the street at a clip start
   parkCruiserNear(x, z, heading) {
     const fx = Math.sin(heading), fz = Math.cos(heading);
@@ -648,10 +659,16 @@ class SwimDirector {
   onShowPhase(phase) {
     const caption = SHOW_CAPTIONS[phase];
     if (this.pilotChip) {
-      this.pilotChip.hidden = phase === 'off';
-      // The chip carries the headline, so a banked drift's flash can't wipe it
+      // The chip carries the headline, so a banked drift's flash can't wipe it, and says how to take the wheel; once
+      // the player has it, how to give it back (for a few seconds)
       const text = this.pilotChip.querySelector('.swim-pilot-text');
-      if (text && caption) text.textContent = `${caption[0]} · any driving key takes the wheel`;
+      if (phase === 'off') {
+        this.yourCarHint = this.active ? YOUR_CAR_HINT_TIME : 0;
+        if (text) text.textContent = YOUR_CAR_HINT;
+      } else if (text && caption) {
+        text.textContent = `${caption[0]} · ${AI_DRIVING_HINT}`;
+      }
+      this.pilotChip.hidden = phase === 'off' && this.yourCarHint <= 0;
     }
     // The sax comes in as the car swings into its drift round the cop
     if (phase === 'donuts') this.radio.play();
@@ -666,18 +683,6 @@ class SwimDirector {
 
   setMuted(muted) {
     this.radio.setMuted(muted);
-  }
-
-  // The hand-over's big 3, 2, 1 in the middle of the screen
-  renderCount(count) {
-    if (count === this.shownCount || !this.countdown) return;
-    this.shownCount = count;
-    this.countdown.hidden = count === 0;
-    if (!count) return;
-    this.countdown.textContent = String(count);
-    this.countdown.classList.remove('tick');
-    void this.countdown.offsetWidth; // restart the animation
-    this.countdown.classList.add('tick');
   }
 
   rearContacts() {
@@ -753,7 +758,11 @@ class SwimDirector {
       // The cruiser's own AI weaves through the same traffic; the car's AI weaves round the cruiser too
       if (this.cruiser.state !== 'hidden') this.show.obstacles.push({ x: this.cruiser.car.position.x, z: this.cruiser.car.position.z });
     }
-    this.renderCount(this.show.count);
+    // The take-over hint goes once it has been read (or the swim mode is left)
+    if (this.yourCarHint > 0 && !this.show.running) {
+      this.yourCarHint = this.active ? this.yourCarHint - dt : 0;
+      if (this.yourCarHint <= 0 && this.pilotChip) this.pilotChip.hidden = true;
+    }
     this.cruiser.update(dt, this.clock, camera.position, this.show.obstacles, c);
     if (this.active) this.cruiser.collide(c);
   }

@@ -16,7 +16,8 @@ test.before(async () => {
       './tsl-materials.js': {},
       './drift-physics.js': { M5_DRIFT: {} },
       './drift-autopilot.js': {},
-      './vehicle-physics.js': {}
+      './vehicle-physics.js': {},
+      './swim-roam.js': {}
     }
   });
   swim = loadModule(read('js/swim-mode.js'), {
@@ -53,11 +54,17 @@ test('the Squeeze Benz route starts in Times Square and runs along streets', () 
 });
 
 test('the AI show stages in Times Square and escapes along streets', () => {
-  assert.ok(onRoadway(show.SHOW_SPOT), 'the stunt spot is on the road');
+  // The car rolls up to the cop across the bowtie between 7th Ave and Broadway: open paving all the way, no curb
   assert.match(config.getLocationLabel(show.SHOW_SPOT.x, show.SHOW_SPOT.z), /7th Ave|Broadway/);
+  const cop = show.ESCAPE_ROUTE[0];
+  const toCop = Math.hypot(cop.x - show.SHOW_SPOT.x, cop.z - show.SHOW_SPOT.z);
+  for (let d = 0; d < cop.z - show.SHOW_SPOT.z; d += 2) {
+    assert.equal(config.blockAt(show.SHOW_SPOT.x, show.SHOW_SPOT.z + d), null, `the roll is clear ${d} m in`);
+  }
   for (const point of show.ESCAPE_ROUTE) assert.ok(onRoadway(point), `${point.x}, ${point.z} is on a street`);
-  // The escape starts where the stunts happen: the cop in the middle of the crossing, the car on its drift circle
-  assert.ok(Math.hypot(show.ESCAPE_ROUTE[0].x - show.SHOW_SPOT.x, show.ESCAPE_ROUTE[0].z - show.SHOW_SPOT.z) < 12);
+  // The escape starts where the stunts happen: the cop in the middle of the crossing, the car rolling up to it
+  assert.ok(onRoadway(cop), 'the cop is parked in the crossing');
+  assert.ok(toCop < 30, `the roll starts a few seconds from the cop (${toCop.toFixed(0)} m)`);
 });
 
 test('the soundtrack is streamed by YouTube id, not stored in the repository', () => {

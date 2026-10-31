@@ -293,7 +293,7 @@ async function initApp() {
     cyclist: [[['W', 'S'], 'Pedal / Brake'], [['A', 'D'], 'Lean & Turn'], [['Drag'], 'Orbit']],
     helicopter: [[['W', 'S'], 'Pitch'], [['A', 'D'], 'Yaw'], [['Space', 'E'], 'Ascend'], [['Q', 'C'], 'Descend']],
     swim: [[['W', 'S'], 'Gas / Brake'], [['W', 'S'], 'Both: burnout'], [['Space'], 'Handbrake'], [['P'], 'AI show'],
-      [['F'], 'Flip off'], [['G'], 'George Michael'], [['K'], 'Engine sound'],
+      [['I'], 'AI drives / you drive'], [['F'], 'Flip off'], [['G'], 'George Michael'], [['K'], 'Engine sound'],
       [['T'], 'Auto / manual'], [['Z', 'X'], 'Gear down / up']]
   };
   // Top speeds in mph (controllers.js & drift-physics.js cap them at 8.2, 36, 19, 52 & 85 m/s): full scale of the
@@ -543,7 +543,7 @@ async function initApp() {
     });
   });
 
-  // The AI show: Times Square burnout & donuts, the escape, then the car is yours (P, or any driving key, ends it)
+  // The AI show: donuts round the cop in Times Square, the escape, then the AI roams on until P or a driving key
   function startSwimShow() {
     selectMode('swim');
     teleportTo(SHOW_SPOT.x, SHOW_SPOT.z, SHOW_SPOT.heading);
@@ -614,6 +614,9 @@ async function initApp() {
         if (e.repeat || mapSystem.isFullMapOpen) break;
         if (swimDirector.show.running) swimDirector.stopShow();
         else startSwimShow();
+        break;
+      case 'KeyI': // swimming: the AI drives on from where the car is (swim-show.js roam), or gives the car back
+        if (!e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey && controllerManager.activeMode === 'swim') swimDirector.toggleAI();
         break;
       case 'KeyN':
         if (!e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey) audioSystem.setEnabled(!audioSystem.enabled);
