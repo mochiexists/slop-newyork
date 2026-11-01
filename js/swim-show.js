@@ -102,12 +102,14 @@ const SIM_STEPS_PER_SECOND = 240; // the drift model's step rate (controllers.js
 // The show's swimmer is sketchier than the autopilot's defaults (drift-autopilot.js AUTOPILOT): flat out at 90 mph,
 // threading gaps with a hand's width of air and going out of its way for a close pass, but sure of its line before it
 // commits to a split (planSpread: at that speed a row comes up every second or two), and heading for the gap of the
-// next pair while it is still out of reach (splitLineUp), so it isn't a lane off when it gets there
+// next pair while it is still out of reach (splitLineUp), so it isn't a lane off when it gets there. (A third of a
+// metre of air, not the 0.2 it planned with on 60 Hz keys: on a player's taps the wheel holds a line to a few tenths;
+// on the avenue sim's rows 0.35 touched 10 cars in 12 runs to 0.2's 15, with as many splits)
 const SHOW_SWIMMING = {
   cruiseSpeed: 40,
   planSpread: 0.2,
   lateBonus: 20,
-  passMargin: 0.2,
+  passMargin: 0.35,
   closeBonus: 60,
   splitBonus: 100,
   splitLineUp: 20
@@ -756,7 +758,7 @@ class SwimShow {
         const exit = Math.atan2(COP_SPOT.x - car.position.x, aimZ - car.position.z);
         const travel = travelHeading(car);
         const ahead = Math.atan2(Math.sin(exit - travel), Math.cos(exit - travel)); // + to the left, the way it turns
-        const done = laps > DONUT_LAPS - EXIT_WINDOW / (2 * Math.PI) || this.time > DONUT_TIME_LIMIT;
+        const done = laps > DONUT_LAPS || this.time > DONUT_TIME_LIMIT;
         if (!exiting && this.donut.phase === 'drift' && done && ahead > 0 && ahead < EXIT_WINDOW) {
           this.exitAt = this.time;
           this.donut.powerOut();
