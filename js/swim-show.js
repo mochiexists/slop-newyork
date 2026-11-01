@@ -92,7 +92,11 @@ const REVERSE_TIME = 1.1; // s backing out, times the tries so far (up to MAX_RE
 const MAX_REVERSE_TRIES = 3;
 const UNSTUCK_SPEED = 8; // m/s: going again, the tries start over
 const UNSTICK_AIM = 15; // m down the route that the nose is swung toward while backing out,
+const PULL_ROUND_PAST = -2; // m past the tail of what it is stopped behind (- short of it) that the nose is swung toward,
+// on the line round: the car is on that line before its nose reaches the tail
 const UNSTICK_ALIGNED = 5 * RAD; // to within this
+const PULL_ROUND_AFTER = 0.6; // s stopped behind something with a way round it before it backs out to pull round,
+const PULL_ROUND_TIME = 1.5; // ...backing out this long at most, the wheel turned to swing the nose toward the way round
 const SIM_STEPS_PER_SECOND = 240; // the drift model's step rate (controllers.js steps the M5 the same)
 
 // The show's swimmer is sketchier than the autopilot's defaults (drift-autopilot.js AUTOPILOT): flat out at 90 mph,
@@ -654,6 +658,7 @@ class SwimShow {
     this.total = 0;
     this.clearedCorner = undefined;
     this.stuck = this.reversing = this.unstickTries = 0;
+    this.roundLine = null;
     this.exitAt = undefined;
     this.tookOver = false;
     this.inSeat = false;
@@ -835,16 +840,23 @@ class SwimShow {
     return Math.abs(turn) > this.pilot.options.sharpTurn;
   }
 
-  // Pinned against a bus or a wall, or boxed in by traffic that is waiting for it: back out for a moment, steering
-  // the other way, and try again: S held at a standstill reverses, with the wheel set to swing the nose toward the route
-  // ahead (backing up turns the car the opposite way to the wheel), longer each time it is still stuck. The show never
-  // means to stand still, but in a queue (a red light's, across every lane: the AI's planner tells) it waits its turn,
-  // unless that queue is short of the corner the show holds clear: those cars are waiting for it to go round first.
+  // Stopped behind something with a way round it (a bus at its stop: the AI's wayRound), it backs out at an angle, the
+  // wheel turned to swing the nose toward the line beside it, and pulls round at a crawl, as a driver does. Pinned
+  // against a wall, or boxed in by traffic that is waiting for it: back out for a moment, steering the other way, and
+  // try again: S held at a standstill reverses, with the wheel set to swing the nose toward the route ahead (backing up
+  // turns the car the opposite way to the wheel), longer each time it is still stuck. The show never means to stand
+  // still, but in a queue with no way round (a red light's, across every lane: the AI's planner tells) it waits its
+  // turn, unless that queue is short of the corner the show holds clear: those cars are waiting for it to go round first.
   unstick(car, dt, keys) {
     if (this.reversing > 0) {
       this.reversing -= dt;
-      const aim = this.pilot.pointAhead(car, UNSTICK_AIM);
+      // (the nose swung toward the point beside the tail of what it is stuck behind, or down the route on its own line)
+      const pulling = this.roundLine !== null;
+      const aim = pulling ? this.pullPoint : this.pilot.pointAhead(car, UNSTICK_AIM, this.pilot.offset);
       const error = wrapAngle(Math.atan2(aim.x - car.position.x, aim.z - car.position.z) - car.heading);
+      // Pulling round, it backs out only until the nose points past it: then it drives round
+      if (pulling && Math.abs(error) < UNSTICK_ALIGNED) this.reversing = 0;
+      if (pulling && this.reversing <= 0) this.pilot.pullRound(this.roundLine, this.pullPoint);
       const steer = Math.abs(error) > UNSTICK_ALIGNED ? -Math.sign(error) : 0;
       Object.assign(keys, { forward: 0, backward: 1, left: steer > 0 ? 1 : 0, right: steer < 0 ? 1 : 0, handbrake: 0 });
       return;
@@ -852,14 +864,20 @@ class SwimShow {
     if (car.speed > UNSTUCK_SPEED) this.unstickTries = 0;
     const held = this.clearedCorner !== undefined ? this.pilot.path[this.clearedCorner] : null;
     const heldQueue = held && Math.hypot(held.x - car.position.x, held.z - car.position.z) < CORNER_CLEAR_RADIUS + HELD_QUEUE_REACH;
+    // A way round what it is stopped behind (a bus at its stop): it doesn't wait for it, it pulls round
+    const stopped = Math.abs(car.speed) < 1;
+    const round = stopped ? this.pilot.wayRound(car) : null;
     // (and never longer than a red light lasts: a queue still standing after that is waiting for something else)
-    this.queuedTime = this.pilot.queued && Math.abs(car.speed) < 1 ? (this.queuedTime || 0) + dt : 0;
-    const waiting = this.pilot.queued && !heldQueue && this.queuedTime < QUEUE_PATIENCE;
-    this.stuck = Math.abs(car.speed) < 1 && !waiting ? (this.stuck || 0) + dt : 0;
-    if (this.stuck > STUCK_TIME) {
+    this.queuedTime = this.pilot.queued && stopped ? (this.queuedTime || 0) + dt : 0;
+    const waiting = this.pilot.queued && round === null && !heldQueue && this.queuedTime < QUEUE_PATIENCE;
+    this.stuck = stopped && !waiting ? (this.stuck || 0) + dt : 0;
+    if (this.stuck > (round === null ? STUCK_TIME : PULL_ROUND_AFTER)) {
       this.stuck = 0;
       this.unstickTries = (this.unstickTries || 0) + 1;
-      this.reversing = REVERSE_TIME * Math.min(MAX_REVERSE_TRIES, this.unstickTries);
+      // Backing out at an angle to pull round, or straight back for longer each try while it is still stuck
+      this.roundLine = round === null ? null : round.line;
+      this.pullPoint = round === null ? null : this.pilot.pointAhead(car, round.tail + PULL_ROUND_PAST, round.line);
+      this.reversing = round === null ? REVERSE_TIME * Math.min(MAX_REVERSE_TRIES, this.unstickTries) : PULL_ROUND_TIME;
     }
   }
 

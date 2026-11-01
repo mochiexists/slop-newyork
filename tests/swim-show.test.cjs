@@ -400,3 +400,28 @@ test('a frame with no time in it leaves the keyboard driver unharmed', () => {
   const input = driver.update(car, keys, FRAME);
   assert.ok(Number.isFinite(input.throttle) && Number.isFinite(input.steer), 'finite inputs after a zero frame');
 });
+
+test('stopped right behind a bus at its stop, the AI backs out at an angle and pulls round it: no waiting, no back and forth', () => {
+  // The browser's 8th Ave bus (2026-11-01), on 7th Ave: roaming south, nose to the tail of a stopped bus in the right
+  // lane with a car parked beside it, the lanes to the left free (south is +z: the car's right is -x)
+  const { vehicleContact } = loadModule(read('js/vehicle-physics.js'));
+  const car = makeCar({ x: config.avenueX('7') - 4, z: config.streetZ(36), heading: 0 });
+  const { swimShow, controllers, driver } = makeShow(car);
+  assert.equal(swimShow.roam(5), true);
+  const bus = { x: car.position.x, z: car.position.z + 9.2, yaw: 0, speed: 0, half: 6.1, halfWidth: 1.3, edge: true };
+  const parked = { x: car.position.x - 3.4, z: car.position.z + 9, yaw: 0, speed: 0, half: 2.3, halfWidth: 0.92, edge: true };
+  swimShow.obstacles = [bus, parked];
+  let reversing = 0, contacts = 0, passedAt = null;
+  for (let n = 0; n < 20 * 60 && passedAt === null; n++) {
+    frame(car, controllers, driver);
+    if (car.speed < -0.2) reversing += FRAME;
+    const a = { x: car.position.x, z: car.position.z, sin: Math.sin(car.heading), cos: Math.cos(car.heading), halfW: 0.97, halfL: 2.52 };
+    for (const o of swimShow.obstacles) {
+      if (vehicleContact(a, { x: o.x, z: o.z, sin: 0, cos: 1, halfW: o.halfWidth, halfL: o.half }, {})) contacts++;
+    }
+    if (car.position.z > bus.z + bus.half + 5) passedAt = n * FRAME;
+  }
+  assert.equal(contacts, 0, 'never touches the bus or the parked car');
+  assert.ok(passedAt !== null && passedAt < 8, `round the bus ${passedAt?.toFixed(1)} s after stopping behind it`);
+  assert.ok(reversing < 2.5, `backing out ${reversing.toFixed(1)} s in all`);
+});

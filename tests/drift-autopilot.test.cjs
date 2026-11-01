@@ -71,7 +71,7 @@ test('the AI drives a city block loop on the keys, drifting the corners and weav
   assert.ok(maxDeviation < 25, `stays near the route (${maxDeviation.toFixed(1)} m)`);
 });
 
-test('it drifts Manhattan\'s 90° corners at speed: a wide entry, a 35-45° slide, out on the new street\'s line', () => {
+test('it drifts Manhattan\'s 90° corners at speed: a wide entry, a 35-48° slide on the widest arc the streets allow, out flat on the new street', () => {
   // The show's run, squared up: down 7th Ave (one-way, 15 m), right into 42nd St (two-way, on the westbound half),
   // right up 8th Ave (one-way, 21 m), with the corridors swim-show.js routeCorridors gives those streets
   const route = [{ x: 0, z: 0 }, { x: 0, z: 230 }, { x: -275, z: 230 }, { x: -275, z: -300 }];
@@ -87,7 +87,7 @@ test('it drifts Manhattan\'s 90° corners at speed: a wide entry, a 35-45° slid
     const length = Math.hypot(b.x - a.x, b.z - a.z), out = Math.hypot(next.x - b.x, next.z - b.z);
     return {
       b, length, ux: (b.x - a.x) / length, uz: (b.z - a.z) / length, vx: (next.x - b.x) / out, vz: (next.z - b.z) / out,
-      start: null, slowest: Infinity, slip: 0, wide: 0, back: null
+      start: null, slowest: Infinity, slip: 0, wide: 0, back: null, at80: null, outside: corridors[k].left
     };
   });
   let t = 0;
@@ -108,14 +108,18 @@ test('it drifts Manhattan\'s 90° corners at speed: a wide entry, a 35-45° slid
         if (along > -5) k.wide = Math.max(k.wide, across);
       }
       if (k.back === null && along > 5 && ground > 30) k.back = t - k.start;
+      if (k.at80 === null && along > 80) k.at80 = ground;
     }
   }
   for (const [i, k] of corners.entries()) {
     const name = `corner ${i + 1}`;
-    assert.ok(k.slowest > 11, `${name}: never slower than 11 m/s through it (${k.slowest.toFixed(1)} m/s)`);
-    assert.ok(k.slip > 35 * RAD && k.slip < 47 * RAD, `${name}: a 35-45° slide (${(k.slip / RAD).toFixed(0)}°)`);
-    assert.ok(k.wide < 3, `${name}: no more than 3 m past the new street's line (${k.wide.toFixed(1)} m)`);
+    // (the arc from the outside of one street to the outside of the next, shapeCorner: ~40-50 m at 18-21 m/s, the slide
+    // scrubbing a few m/s off that; the old recipe's 24 m arc held 11-12 m/s)
+    assert.ok(k.slowest > 12, `${name}: never slower than 12 m/s through it (${k.slowest.toFixed(1)} m/s)`);
+    assert.ok(k.slip > 35 * RAD && k.slip < 48 * RAD, `${name}: a 35-48° slide (${(k.slip / RAD).toFixed(0)}°)`);
+    assert.ok(k.wide < k.outside, `${name}: on the new street, ${k.wide.toFixed(1)} m out of its ${k.outside} m to the outside`);
     assert.ok(k.back !== null && k.back < 7.5, `${name}: back at 30 m/s within 7.5 s of 60 m out (${k.back?.toFixed(2)} s)`);
+    assert.ok(k.at80 > 27, `${name}: flat out of it, ${k.at80?.toFixed(1)} m/s 80 m down the new street`);
   }
 });
 
@@ -367,4 +371,44 @@ test('scraping along a wall at a crawl, the slide it reads is the wall\'s push: 
     frames++;
   }
   assert.ok(gas > frames * 0.8, `W held (${gas} of ${frames} frames)`);
+});
+
+// A red light's queue ahead, the AI rolling up to it at 30 mph: it swims past through whatever is free, never stopping
+function pastQueue({ queue, corridor, oncomingTraffic = [] }) {
+  const { vehicleContact } = loadModule(readFileSync(join(__dirname, '../js/vehicle-physics.js'), 'utf8'));
+  const traffic = [...queue.map((x) => ({ x, z: 80, speed: 0, yaw: 0, half: 2.3, halfWidth: 0.92 })), ...oncomingTraffic];
+  const c = car(0);
+  c.speed = 13;
+  const pilot = new DriftAutopilot({ ...SHOW_LIKE, lanes: undefined, laneWidth: undefined });
+  const driver = new physics.KeyboardDriver();
+  pilot.setPath([{ x: 0, z: 0 }, { x: 0, z: 1000 }], { corridors: [corridor] });
+  let slowest = Infinity, contacts = 0, widest = 0;
+  for (let n = 0; n < 9 * 60; n++) {
+    frame(pilot, driver, c, traffic);
+    for (const o of oncomingTraffic) o.z -= o.speed / 60;
+    if (c.position.z < 90) slowest = Math.min(slowest, c.speed);
+    widest = Math.max(widest, c.position.x);
+    const a = { x: c.position.x, z: c.position.z, sin: Math.sin(c.heading), cos: Math.cos(c.heading), halfW: 0.97, halfL: 2.5 };
+    if (traffic.some((o) => vehicleContact(a, { x: o.x, z: o.z, sin: Math.sin(o.yaw), cos: Math.cos(o.yaw), halfW: 0.92, halfL: 2.3 }, {}))) contacts++;
+  }
+  return { slowest, contacts, widest, z: c.position.z };
+}
+
+test('a red light\'s queue across most of an avenue: it takes the free lane past it and never stops', () => {
+  const r = pastQueue({ queue: [-5.4, -1.8, 1.8], corridor: { left: 7, right: -7, centre: null } });
+  assert.equal(r.contacts, 0);
+  assert.ok(r.slowest > 5, `it never waits (${r.slowest.toFixed(1)} m/s at slowest)`);
+  assert.ok(r.z > 120, `and is past the queue (${r.z.toFixed(0)} m)`);
+});
+
+test('a queue across its half of a two-way street: it goes round through the clear oncoming half', () => {
+  // 42nd St's corridor about the westbound line (swim-show.js routeCorridors): the centre line 4.5 m to its left
+  const corridor = { left: 11.6, right: -2.6, centre: 4.5 };
+  const r = pastQueue({ queue: [-1.4, 2.6], corridor });
+  assert.equal(r.contacts, 0);
+  assert.ok(r.widest > corridor.centre, `round through the oncoming half (${r.widest.toFixed(1)} m across)`);
+  assert.ok(r.slowest > 5, `without waiting (${r.slowest.toFixed(1)} m/s at slowest)`);
+  // ...and not into a car coming the other way there
+  const busy = pastQueue({ queue: [-1.4, 2.6], corridor, oncomingTraffic: [{ x: 8, z: 150, speed: 10, yaw: Math.PI, half: 2.3, halfWidth: 0.92 }] });
+  assert.equal(busy.contacts, 0, 'no contact with the oncoming car');
 });
