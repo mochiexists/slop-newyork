@@ -125,3 +125,45 @@ test('the AI swimming through traffic at 85 mph presses its keys as a player can
   assert.ok(steering <= 8, `A and D changed ${steering.toFixed(1)} times a second (the 60 Hz pilot: ~21)`);
   assert.ok(cadence.changes.forward / cadence.t <= 4, `W changed ${(cadence.changes.forward / cadence.t).toFixed(1)} times a second (was ~8)`);
 });
+
+test('braking for a corner it holds the brake or taps it, never a 60 Hz duty', () => {
+  // Down a straight at 85 mph to a right-angle corner 200 m on
+  const car = { position: { x: 0, z: 0 }, heading: 0, speed: 38, vx: 0, vz: 0, angularVel: 0, steerAngle: 0, longAccel: 0 };
+  const pilot = new DriftAutopilot({ lanes: 2, laneWidth: 2.8 });
+  const driver = new physics.KeyboardDriver();
+  pilot.setPath([{ x: 0, z: 0 }, { x: 0, z: 200 }, { x: -300, z: 200 }]);
+  const cadence = new Cadence();
+  let braked = 0;
+  for (let n = 0; n < 8 * 60; n++) {
+    const keys = pilot.update(car, 1 / 60, [], driver);
+    cadence.add(keys, 1 / 60);
+    braked += keys.backward;
+    const input = driver.update(car, keys, 1 / 60);
+    for (let i = 0; i < 4; i++) physics.stepDriftCar(car, input, 1 / 240);
+  }
+  assert.ok(braked > 30, 'it braked');
+  cadence.assertHuman('the corner');
+  assert.ok(cadence.changes.backward <= 8, `S went down ${(cadence.changes.backward / 2).toFixed(0)} times for one corner`);
+});
+
+test('creeping up to a queue it taps W: a light pedal is taps, not nothing, and the car doesn\'t stall short of it', () => {
+  // Rolling at 3 m/s toward a car stopped 25 m ahead across a one-lane street
+  const car = { position: { x: 0, z: 0 }, heading: 0, speed: 3, vx: 0, vz: 0, angularVel: 0, steerAngle: 0, longAccel: 0 };
+  const pilot = new DriftAutopilot();
+  const driver = new physics.KeyboardDriver();
+  pilot.setPath([{ x: 0, z: 0 }, { x: 0, z: 500 }], { corridors: [{ left: 1.5, right: -1.5, centre: null }] });
+  const ahead = [{ x: 0, z: 25, speed: 0, yaw: 0, half: 2.3, halfWidth: 0.95 }];
+  const cadence = new Cadence();
+  let gas = 0;
+  for (let n = 0; n < 8 * 60; n++) {
+    const keys = pilot.update(car, 1 / 60, ahead, driver);
+    cadence.add(keys, 1 / 60);
+    gas += keys.forward;
+    const input = driver.update(car, keys, 1 / 60);
+    for (let i = 0; i < 4; i++) physics.stepDriftCar(car, input, 1 / 240);
+  }
+  cadence.assertHuman('the creep');
+  assert.ok(gas > 0, 'W tapped');
+  const gap = ahead[0].z - car.position.z - 2.3 - 2.52;
+  assert.ok(gap > 0 && gap < 8, `pulled up behind it (${gap.toFixed(1)} m of gap)`);
+});

@@ -19,6 +19,7 @@ const CRAWL_BRAKE = 0.6; // m/s below which the brake key isn't pressed (it woul
 const SAME_WAY = Math.cos(45 * RAD); // a car headed within this of the street's direction is going its way
 const CRAWL_HOLD = 0.3; // ...holding it on the handbrake below this (drift-physics.js holds a braked car still there)
 const BRAKE_TAP = 0.05; // s of full brake: the least a tap of the brake key is worth (taps and holds, not a 60 Hz duty)
+const GAS_TAP = 0.02; // s × pedal: the pedal a tap of W is worth before it is let go
 
 const AUTOPILOT = {
   cruiseSpeed: 38, // m/s on the straights (85 mph)
@@ -318,6 +319,8 @@ class DriftAutopilot {
     this.holdLockUntil = -Infinity; // no new late flick before this (a flick has just gone)
   }
 
+    this.gasDebt = 0; // s × pedal it wanted beyond the pedal its W has given (press, below)
+    this.gassing = 0; // W it wants down
   // corridors: optional per-leg street bounds, see corridor()
   setPath(points, { loop = false, corridors = null } = {}) {
     this.path = loop ? [...points, points[0]] : points.slice();
@@ -812,10 +815,19 @@ class DriftAutopilot {
     // it wants after that, reading last frame's share as a driver feels the car hold back
     const passed = driver.throttle > MIN_PEDAL ? clamp(driver.input.throttle / driver.throttle, MIN_PASSED, 1) : 1;
     const pedal = Math.min(1, want.throttle / passed);
-    const hold = dt * Math.max(1, Math.ceil(hands.o.minHold / dt - TIME_EPSILON));
-    const up = approachValue(driver.throttle, 1, hold / p.throttleTime);
-    const down = approachValue(driver.throttle, 0, hold / p.liftTime);
-    keys.forward = pedal > 0 && Math.abs(up - pedal) <= Math.abs(down - pedal) ? 1 : 0;
+    // W the same way as the brake: held while the pedal it has pressed lags the pedal it wants by gasTap's worth, let go
+    // once it leads by as much. A light pedal is taps of W (a tap winds the pedal to a third in 80 ms), a full one W
+    // held. (Pressing W only when a tap lands the pedal nearer, a light pedal never got a tap, and a car meant to creep
+    // up to a queue coasted to a stop and backed out.)
+    if (pedal > 0) {
+      this.gasDebt = clamp(this.gasDebt + (pedal - driver.throttle) * dt, -2 * GAS_TAP, 2 * GAS_TAP);
+      if (this.gasDebt > GAS_TAP || pedal >= 1) this.gassing = 1;
+      else if (this.gasDebt < -GAS_TAP) this.gassing = 0;
+    } else {
+      this.gasDebt = 0;
+      this.gassing = 0;
+    }
+    keys.forward = this.gassing;
 
     // The brake key is all or nothing: held for its share of the time, as taps and holds of at least brakeTap's worth
     // of braking (the debt between the brake it wanted and the brake it pressed swings past ±brakeTap before the key
