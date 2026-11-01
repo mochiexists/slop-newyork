@@ -97,6 +97,8 @@ const PULL_ROUND_PAST = -2; // m past the tail of what it is stopped behind (- s
 const UNSTICK_ALIGNED = 5 * RAD; // to within this
 const PULL_ROUND_AFTER = 0.6; // s stopped behind something with a way round it before it backs out to pull round,
 const PULL_ROUND_TIME = 1.5; // ...backing out this long at most, the wheel turned to swing the nose toward the way round
+const MAX_PULL_ROUND_TRIES = 2; // tries at pulling round before it backs straight out instead (the way round may be a
+// gap it can't actually fit through, and it would swing at it forever)
 const SIM_STEPS_PER_SECOND = 240; // the drift model's step rate (controllers.js steps the M5 the same)
 
 // The show's swimmer is sketchier than the autopilot's defaults (drift-autopilot.js AUTOPILOT): flat out at 90 mph,
@@ -868,7 +870,7 @@ class SwimShow {
     const heldQueue = held && Math.hypot(held.x - car.position.x, held.z - car.position.z) < CORNER_CLEAR_RADIUS + HELD_QUEUE_REACH;
     // A way round what it is stopped behind (a bus at its stop): it doesn't wait for it, it pulls round
     const stopped = Math.abs(car.speed) < 1;
-    const round = stopped ? this.pilot.wayRound(car) : null;
+    const round = stopped && (this.unstickTries || 0) < MAX_PULL_ROUND_TRIES ? this.pilot.wayRound(car) : null;
     // (and never longer than a red light lasts: a queue still standing after that is waiting for something else)
     this.queuedTime = this.pilot.queued && stopped ? (this.queuedTime || 0) + dt : 0;
     const waiting = this.pilot.queued && round === null && !heldQueue && this.queuedTime < QUEUE_PATIENCE;
