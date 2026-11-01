@@ -375,7 +375,8 @@ class DriftAutopilot {
       const offThis = Math.abs((car.position.x - s.a.x) * s.uz - (car.position.z - s.a.z) * s.ux);
       const offNext = Math.abs((car.position.x - next.a.x) * next.uz - (car.position.z - next.a.z) * next.ux);
       const rounded = alongNext > 0 && offNext < offThis && !this.turningIn && this.kick === 0;
-      if (along < s.length - 2 && !rounded) break;
+      // (never mid-flick: on a short leg the next corner would take over the one it is turning into)
+      if ((along < s.length - 2 && !rounded) || this.turningIn || this.kick > 0) break;
       this.segment++;
     }
     const last = this.seg(this.path.length - 2);
