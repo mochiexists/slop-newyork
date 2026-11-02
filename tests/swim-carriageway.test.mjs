@@ -24,6 +24,12 @@ test('the car\'s whole body: in its lane it is on the road, nosed over the curb 
   assert.ok(footprintOff(SEVENTH - 4.6, streetZ(42) - 22, -Math.PI / 2, 4) > 0, 'grown 4 m all round, across the avenue');
 });
 
+test('a curb corner poking into the car\'s side between two corners is seen (Codex 2026-11-03)', () => {
+  // (the north-west curb corner of 7th Ave / 42nd St lies inside this pose's box, 1.3 m from its nearest corner)
+  assert.ok(!onCarriageway(-594.204787, -8.036912), 'the curb island');
+  assert.ok(footprintOff(-592.713824, -5.951647, 25 * Math.PI / 180, 0.25) > 0, 'the pose over it');
+});
+
 test('a donut of 9 m round the show\'s cop at 7th Ave / 42nd St keeps the body on the road, sideways all the way round', () => {
   const cop = { x: SEVENTH - 0.7, z: streetZ(42) + 0.7 };
   let off = 0;
