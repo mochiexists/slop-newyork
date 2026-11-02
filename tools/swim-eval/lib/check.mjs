@@ -4,9 +4,10 @@
 //   NOT VERIFIED   a criterion measured and missed (the numbers say which);
 //   INCONCLUSIVE   the beat was reached but could not be measured (too short, no data for it); not a pass;
 //   N/A            the beat is not part of this scenario (an injected mid-donut start has no roll).
-// Where the car is comes from the game's own map (lib/map.mjs): road, pavement, plaza, building.
-import { COP, DRIFT_RADIUS, MPH, boxClearance, groundSpeed, kasaFit, travelHeading, wrapAngle } from './geometry.mjs';
-import { avenueX, streetZ } from '../../../js/city-config.js';
+// Where the car is comes from the game's own map (lib/map.mjs): road, pavement, plaza, building. Where the show puts
+// its cop and its run comes from the trace (the page's own COP_SPOT and ESCAPE_ROUTE), else from geometry.mjs.
+import { COP, DRIFT_RADIUS, ESCAPE_ROUTE, MPH, boxClearance, groundSpeed, kasaFit, travelHeading, wrapAngle } from './geometry.mjs';
+import { CARRIAGEWAY_SLACK } from './map.mjs';
 
 const RAD = Math.PI / 180;
 const VERIFIED = 'VERIFIED';
@@ -44,9 +45,11 @@ const T = {
   exitMph: 50, // 5: mph reached...
   exitTime: 3.5, // 5: ...within this many s of powering out ("~3 s")
   exitOnAvenueHeading: 30 * RAD, // 5: at that moment travelling down 7th Ave (south) to within this
-  swimMph: 70, // 6: mph reached on 7th Ave
-  swimSplits: 1, // 6: splits scored over the run at least
-  swimCloseCalls: 1, // 6: close calls scored over the run at least
+  swimMph: 70, // 6: mph on 7th Ave...
+  swimHold: 1, // 6: ...held unbroken this many s at least (2026-11-03, Codex #8: one frame over 70 passed; at 70 mph
+  // that is 31 m of the 7th Ave stretch, which runs 240 m from 45th to 42nd St and ~650 m from 42nd to 34th)
+  swimSplits: 1, // 6: splits scored on the 7th Ave stretch at least (2026-11-03: the stretch's, not the run's)
+  swimCloseCalls: 1, // 6: close calls scored on the 7th Ave stretch at least
   cornerTurn: 45 * RAD, // 7: a route corner this sharp is a drift corner
   cornerReach: 25, // m: the car passing within this of a corner has driven it
   cornerWindow: 30, // m round the corner whose frames are the corner's
@@ -60,9 +63,22 @@ const T = {
   sessionLapSlack: 0.2 // laps a session's read-back way out may over-count (measured on a run's own recording: 0.18)
 };
 
-const ESCAPE_END = { x: avenueX('9'), z: streetZ(57) - 3.5 }; // swim-show.js ESCAPE_ROUTE's last corner
-const CORNER_42ND = { x: avenueX('7'), z: streetZ(42) - 5.5 }; // ...and its first (into 42nd St)
 const SEVENTH_AVE = '7th Ave';
+
+// The show's run (swim-show.js ESCAPE_ROUTE, as the trace carries it): its last point, where the roam takes over, and
+// its first corner, where the 7th Ave stretch ends (the first point it turns at: 42nd St up to e7f9c83)
+function routeOf(trace) {
+  const route = trace.route ?? ESCAPE_ROUTE;
+  let first = route.length - 1;
+  for (let i = 1; i < route.length - 1; i++) {
+    const a = route[i - 1], b = route[i], c = route[i + 1];
+    if (Math.abs(wrapAngle(Math.atan2(c.x - b.x, c.z - b.z) - Math.atan2(b.x - a.x, b.z - a.z))) >= T.cornerTurn) {
+      first = i;
+      break;
+    }
+  }
+  return { route, end: route[route.length - 1], firstCorner: route[first] };
+}
 
 // What the car must never be over: the kerb and everything past it. Street furniture on the road (a steam stack, the
 // subway stairs: road-network.js keeps traffic off it) is counted on its own, as musa's list doesn't name it.
@@ -137,6 +153,11 @@ function trafficContacts(trace, t0, t1) {
   return contacts;
 }
 
+function streetLabel(street) {
+  if (!street) return 'none';
+  return `${street.name} (${fmt(street.dist)} m off its centreline)`;
+}
+
 function offRoadSummary(frames) {
   const counts = {};
   // (frames per thing under the car: a frame over plaza and pavement both counts once for each)
@@ -151,7 +172,9 @@ function beatStart(ctx) {
   if (ctx.injected) return beatResult(1, 'Start on the road', NA, [], 'the scenario starts mid-donut (injected state)');
   const f = trace.frames[0];
   const cop = trace.cop ?? COP;
+  // (7th Ave among the roads there, not just the nearest: a start at a crossing has the cross street as near)
   const street = map.street(f.x, f.z);
+  const seventh = map.onStreet(f.x, f.z, SEVENTH_AVE);
   const lane = map.lane(f.x, f.z);
   const toCop = Math.atan2(cop.x - f.x, cop.z - f.z);
   const offCop = Math.abs(wrapAngle(f.h - toCop));
@@ -160,7 +183,7 @@ function beatStart(ctx) {
   const criteria = [
     criterion('centre on', f.where, f.where === 'road', 'road'),
     criterion('footprint on', [...new Set(f.foot)].join('+'), !f.off, 'road only'),
-    criterion('street', street ? `${street.name} (${fmt(street.dist)} m off its centreline)` : 'none', !!street && street.name === SEVENTH_AVE && street.dist <= street.width / 2, `${SEVENTH_AVE}, inside its carriageway`),
+    criterion('street', streetLabel(seventh ? { name: SEVENTH_AVE, ...seventh } : street), !!seventh, `${SEVENTH_AVE}, inside its carriageway`),
     criterion('in a lane of the road graph', lane ? `edge ${lane.edge}, ${fmt(lane.offLane)} m off lane ${fmt(lane.lane)}` : 'no', !!lane, 'yes'),
     criterion('heading off the line to the cop', fmt(deg(offCop), 0), offCop <= T.startHeadingToCop, `≤ ${Math.round(deg(T.startHeadingToCop))}`, '°'),
     criterion('heading off 7th Ave southbound', fmt(deg(offAvenue), 0), offAvenue <= T.startAlongAvenue, `≤ ${Math.round(deg(T.startAlongAvenue))}`, '°'),
@@ -324,15 +347,19 @@ function beatExit(ctx) {
   }
   const time = reached ? reached.t - e.t : null;
   const at = reached ?? frames.find((f) => f.t - e.t >= T.exitTime) ?? frames[frames.length - 1];
-  const street = map.street(at.x, at.z);
+  const seventh = map.onStreet(at.x, at.z, SEVENTH_AVE, CARRIAGEWAY_SLACK);
+  const street = seventh ? { name: SEVENTH_AVE } : map.street(at.x, at.z);
   const offSouth = Math.abs(wrapAngle(at.travel - 0));
+  // (where the way out ends, beat 6's 7th Ave stretch starts: every frame from the powering out to the first corner is
+  // judged once)
+  ctx.wayEnd = at.t;
   const startSlip = Math.max(...frames.slice(exitIndex).filter((f) => f.t - e.t < 0.5).map((f) => Math.abs(f.slip)));
   const criteria = [
     // (a session's way out is read back late, ~1.5 s after the powering out begins: timed from it, the beat would pass
     // too easily, so a session only shows the number)
     criterion('time to 50 mph', `${reached ? fmt(time, 2) : `not within 10 s (top ${fmt(Math.max(...frames.slice(exitIndex).filter((f) => f.t - e.t <= 10).map((f) => mph(f.g))), 0)} mph)`}${trace.source === 'session' ? ' from where it left the circle (a session doesn\'t log the powering out)' : ''}`,
       trace.source === 'session' ? null : reached ? time <= T.exitTime : false, `≤ ${T.exitTime}`, reached ? ' s' : ''),
-    criterion('street then', street ? street.name : 'none', !!street && street.name === SEVENTH_AVE && at.where === 'road', `${SEVENTH_AVE}, on the road`),
+    criterion('street then', street ? street.name : 'none', !!seventh && at.where === 'road', `${SEVENTH_AVE}, on the road`),
     criterion('travel off southbound', fmt(deg(offSouth), 0), offSouth <= T.exitOnAvenueHeading, `≤ ${Math.round(deg(T.exitOnAvenueHeading))}`, '°'),
     // (a number shown, not a gate: the car powers out of a slide by construction)
     criterion('drift angle powering out', fmt(deg(startSlip), 0), true, 'measured', '°')
@@ -355,26 +382,44 @@ function beatExit(ctx) {
   return beatResult(5, 'Drift out onto 7th Ave', verdictOf(criteria), criteria, summaryOf(criteria), { failures, at: { x: e.x, z: e.z, t: e.t } });
 }
 
-// 6. Swim on 7th Ave above 70 mph with splits and close calls, no contacts
+// The run's 7th Ave stretch: from where the way out ends (beat 5) to the route's first corner (the frames before the
+// car comes within cornerReach of it). Fixed by the route, not by where the car is, so a detour off 7th Ave is in it
+// and counts against it (Codex #8: a window of "frames on 7th Ave" let a detour over the plaza drop out of the beat).
+function seventhAveStretch(ctx) {
+  const { run, firstCorner } = ctx;
+  const reach = run.findIndex((f) => Math.hypot(f.x - firstCorner.x, f.z - firstCorner.z) < T.cornerReach);
+  const upToCorner = reach >= 0 ? run.slice(0, reach) : run;
+  const from = ctx.wayEnd ?? -Infinity;
+  return { frames: upToCorner.filter((f) => f.t > from), reachedCorner: reach >= 0 };
+}
+
+// The longest unbroken spell of frames meeting `test`: its s and its first frame
+function longestSpell(frames, test) {
+  let best = { time: 0, from: null }, time = 0, from = null;
+  for (const f of frames) {
+    if (!test(f)) {
+      time = 0;
+      from = null;
+      continue;
+    }
+    from ??= f;
+    time += f.dt;
+    if (time > best.time) best = { time, from };
+  }
+  return best;
+}
+
+// 6. Swim on 7th Ave above 70 mph with splits and close calls, no contacts. Speed, passes and the kerb are all judged
+//    on one window, the 7th Ave stretch (Codex #8: splits scored on 8th Ave and a run detouring over the plaza passed)
 function beatSwim(ctx) {
   const { trace, run, map } = ctx;
   if (!run.length) return beatResult(6, 'Swim 7th Ave > 70 mph', INCONCLUSIVE, [criterion('run frames', '0', null, '> 0')], 'not reached');
-  const corner = run.findIndex((f) => Math.hypot(f.x - CORNER_42ND.x, f.z - CORNER_42ND.z) < T.cornerReach);
-  const seventh = (corner >= 0 ? run.slice(0, corner) : run).filter((f) => map.street(f.x, f.z)?.name === SEVENTH_AVE);
-  const top7 = seventh.length ? Math.max(...seventh.map((f) => mph(f.g))) : null;
+  const session = trace.source === 'session';
   const t0 = run[0].t, t1 = run[run.length - 1].t;
-  const inRun = (e) => e.t >= t0 && e.t <= t1;
-  const splits = trace.events.filter((e) => e.kind === 'split' && inRun(e));
-  const closes = trace.events.filter((e) => e.kind === 'close' && inRun(e));
   const traffic = trafficContacts(trace, t0, t1);
   const buildings = run.filter((f) => (f.bHit ?? 0) > 0);
   const cop = run.filter((f) => (f.copHit ?? 0) > 0);
-  const session = trace.source === 'session';
-  const top = Math.max(...run.map((f) => mph(f.g)));
-  const criteria = [
-    criterion('top speed on 7th Ave', `${fmt(top7, 0)} (whole run ${fmt(top, 0)})`, top7 === null ? null : top7 >= T.swimMph, `≥ ${T.swimMph}`, ' mph'),
-    criterion('splits', session ? 'not logged' : String(splits.length), session ? null : splits.length >= T.swimSplits, `≥ ${T.swimSplits}`),
-    criterion('close calls', session ? 'not logged' : String(closes.length), session ? null : closes.length >= T.swimCloseCalls, `≥ ${T.swimCloseCalls}`),
+  const contactCriteria = [
     criterion('traffic contacts', session ? 'not logged' : String(traffic.length), session ? null : traffic.length === 0, '0'),
     criterion('building pushes (frames)', session ? 'not logged' : String(buildings.length), session ? null : buildings.length === 0, '0'),
     criterion('cop contacts (frames)', session ? 'not logged' : String(cop.length), session ? null : cop.length === 0, '0')
@@ -382,8 +427,42 @@ function beatSwim(ctx) {
   const failures = [];
   for (const e of traffic.slice(0, 6)) failures.push({ t: e.t, label: `hits traffic at ${e.mph} mph`, beat: 6 });
   if (buildings.length) failures.push({ t: buildings[0].t, label: 'hits a building', beat: 6 });
+  const { frames: stretch, reachedCorner } = seventhAveStretch(ctx);
+  if (!stretch.length) {
+    // (the corner came before the way out had ended: no 7th Ave left to swim; or the trace ended first)
+    const criteria = [criterion('the 7th Ave stretch', reachedCorner ? 'none: the first corner came before the way out ended' : 'not reached', reachedCorner ? false : null, 'the way out to the first corner'), ...contactCriteria];
+    return beatResult(6, 'Swim 7th Ave > 70 mph', verdictOf(criteria), criteria, summaryOf(criteria), { failures, run: [t0, t1] });
+  }
+  const s0 = stretch[0].t - stretch[0].dt, s1 = stretch[stretch.length - 1].t;
+  const on7th = (x, z) => !!map.onStreet(x, z, SEVENTH_AVE, CARRIAGEWAY_SLACK);
+  const astray = stretch.filter((f) => f.off || !on7th(f.x, f.z));
+  const offAve = astray.filter((f) => !on7th(f.x, f.z)).length;
+  const length = stretch.reduce((s, f, i) => (i ? s + Math.hypot(f.x - stretch[i - 1].x, f.z - stretch[i - 1].z) : s), 0);
+  const held = longestSpell(stretch, (f) => mph(f.g) >= T.swimMph);
+  const top7 = Math.max(...stretch.map((f) => mph(f.g)));
+  const top = Math.max(...run.map((f) => mph(f.g)));
+  // Passes on the stretch: in its time and on 7th Ave where they were scored
+  const passes = (kind) => trace.events.filter((e) => e.kind === kind && e.t >= t0 && e.t <= t1);
+  const onStretch = (e) => e.t >= s0 && e.t <= s1 && on7th(e.x, e.z);
+  const splitsAll = passes('split'), closesAll = passes('close');
+  const splits = splitsAll.filter(onStretch), closes = closesAll.filter(onStretch);
+  const elsewhere = (all, here) => (all.length > here.length ? ` (${all.length - here.length} more elsewhere in the run)` : '');
+  const criteria = [
+    criterion('the 7th Ave stretch (way out to the first corner)', `${fmt(s1 - s0)} s, ${fmt(length, 0)} m`, true, 'measured'),
+    criterion('frames off 7th Ave or over the kerb on it', `${astray.length}/${stretch.length}${astray.length ? ` (${[offAve ? `off 7th Ave ${offAve}` : '', offRoadSummary(astray)].filter(Boolean).join(', ')})` : ''}`, astray.length === 0, '0'),
+    criterion(`held ≥ ${T.swimMph} mph unbroken on 7th Ave`, fmt(held.time, 2), held.time >= T.swimHold, `≥ ${T.swimHold}`, ' s'),
+    criterion('top speed on 7th Ave', `${fmt(top7, 0)} (whole run ${fmt(top, 0)})`, true, 'measured', ' mph'),
+    criterion('splits on 7th Ave', session ? 'not logged' : `${splits.length}${elsewhere(splitsAll, splits)}`, session ? null : splits.length >= T.swimSplits, `≥ ${T.swimSplits}`),
+    criterion('close calls on 7th Ave', session ? 'not logged' : `${closes.length}${elsewhere(closesAll, closes)}`, session ? null : closes.length >= T.swimCloseCalls, `≥ ${T.swimCloseCalls}`),
+    ...contactCriteria
+  ];
+  if (astray.length) failures.push({ t: astray[0].t, label: `7th Ave stretch ${on7th(astray[0].x, astray[0].z) ? `over the ${astray[0].foot.find((c) => KERB.has(c))}` : 'off 7th Ave'}`, beat: 6 });
+  if (held.time < T.swimHold) {
+    const fastest = stretch.reduce((m, f) => (f.g > m.g ? f : m), stretch[0]);
+    failures.push({ t: fastest.t, label: `7th Ave top ${fmt(mph(fastest.g), 0)} mph, held ${fmt(held.time, 2)} s`, beat: 6 });
+  }
   return beatResult(6, 'Swim 7th Ave > 70 mph', verdictOf(criteria), criteria, summaryOf(criteria), {
-    failures, counts: { splits: splits.length, closes: closes.length, traffic: traffic.length }, run: [t0, t1]
+    failures, counts: { splits: splits.length, closes: closes.length, traffic: traffic.length }, run: [t0, t1], stretch: [s0, s1], held: held.time
   });
 }
 
@@ -511,12 +590,14 @@ function windows(trace) {
   if (exitIndex < 0) exitIndex = frames.findIndex((f) => f.phase === 'escape');
   const escapeIndex = frames.findIndex((f) => f.phase === 'escape' || f.phase === 'swim' || f.phase === 'roam');
   const after = escapeIndex >= 0 ? frames.slice(escapeIndex) : [];
-  // The scripted run ends at its last corner (57th St & 9th Ave); a session's run is all of what follows the donuts
-  let end = after.findIndex((f) => Math.hypot(f.x - ESCAPE_END.x, f.z - ESCAPE_END.z) < T.cornerReach);
+  // The scripted run ends at its route's last point (57th St & 9th Ave up to e7f9c83); a session's run is all of what
+  // follows the donuts
+  const { end: routeEnd, firstCorner } = routeOf(trace);
+  let end = after.findIndex((f) => Math.hypot(f.x - routeEnd.x, f.z - routeEnd.z) < T.cornerReach);
   if (after[0]?.phase === 'roam') end = 0;
   const run = end >= 0 ? after.slice(0, end) : after;
   const roam = end >= 0 ? after.slice(end) : [];
-  return { injected, roll, launchIndex, donut, exitIndex, run, roam, after: escapeIndex >= 0 ? frames[escapeIndex].t : Infinity };
+  return { injected, roll, launchIndex, donut, exitIndex, run, roam, firstCorner, after: escapeIndex >= 0 ? frames[escapeIndex].t : Infinity };
 }
 
 function checkTrace(trace, map) {
@@ -531,7 +612,7 @@ function checkTrace(trace, map) {
   };
   const duration = span(trace.frames);
   return {
-    label: trace.label, source: trace.source, meta: trace.meta, cop: trace.cop ?? COP, duration, frames: trace.frames.length,
+    label: trace.label, source: trace.source, meta: trace.meta, cop: trace.cop ?? COP, route: routeOf(trace).route, duration, frames: trace.frames.length,
     beats, failures, contacts,
     windows: {
       roll: ctx.roll.length ? [ctx.roll[0].t, ctx.roll[ctx.roll.length - 1].t] : null,

@@ -15,6 +15,8 @@ const IDEAL_CENTRE = { x: COP.x + 1, z: COP.z }; // (where a 40° circle clears 
 const IDEAL_SLIP = 40 * RAD;
 const CORNER_SLIP = 25 * RAD;
 const CORNER_SLIDE = 18; // m either side of a corner that the car is sideways
+// z (m) of 7th Ave's stretch with Times Square's plaza east of it (45th-43rd St, 10-16 m off the avenue's line)
+const PLAZA_EAST_OF_7TH = [-205, -125];
 
 function frameAt(state, t) {
   // The car body turned `slip` off the direction of travel; its velocity over the ground along that direction
@@ -135,6 +137,11 @@ const BREAKS = [
   { beat: 6, name: 'a traffic impact only the game reported', apply: (tr) => { const f = tr.frames.find((q) => q.phase === 'escape' && q.v > 25); tr.events.push({ kind: 'impact-traffic', t: f.t, x: f.x, z: f.z, speed: 3, phase: 'escape' }); } },
   { beat: 6, name: '7th Ave at 60 mph', apply: (tr) => { for (const f of tr.frames.filter((q) => q.phase === 'escape' && q.z < streetZ(42) - 20 && q.z > COP.z)) { const k = Math.min(1, 26.8 / Math.max(1, Math.hypot(f.v, f.vx, f.vz))); f.v *= k; f.vx *= k; f.vz *= k; } } },
   { beat: 6, name: 'no splits', apply: (tr) => { tr.events = tr.events.filter((e) => e.kind !== 'split'); } },
+  // (Codex 2026-11-03 #8's false passes, kept as breaks: passes scored off the 7th Ave stretch, a detour off its
+  // carriageway at speed, and 70 mph reached for one frame only)
+  { beat: 6, name: 'splits and close calls only on Eighth', criterion: 'splits on 7th Ave', apply: (tr) => movePassesTo(tr, (f) => Math.abs(f.x - avenueX('8')) < 1 && f.z < streetZ(42) - 30 && f.z > streetZ(57) + 30) },
+  { beat: 6, name: 'fast straight detours over plaza', criterion: 'frames off 7th Ave or over the kerb on it', apply: (tr) => shiftWhere(tr, (f) => f.phase === 'escape' && Math.abs(f.x - avenueX('7')) < 0.5 && f.z > PLAZA_EAST_OF_7TH[0] && f.z < PLAZA_EAST_OF_7TH[1], 13, 0) },
+  { beat: 6, name: '70 mph touched for one frame on 7th Ave', criterion: 'held ≥ 70 mph unbroken on 7th Ave', apply: (tr) => oneFastFrame(tr, 29, 32.2) },
   { beat: 7, name: 'a corner gripped', apply: (tr) => { for (const f of tr.frames) if (Math.hypot(f.x - avenueX('8'), f.z - (streetZ(42) - 3.5)) < 40) f.slip = 0; } },
   { beat: 7, name: 'a corner cut over the pavement', apply: (tr) => shiftWhere(tr, (f) => Math.hypot(f.x - avenueX('8'), f.z - (streetZ(57) - 3.5)) < 25, 11, 11) },
   { beat: 8, name: 'roam stuck 15 s', apply: (tr) => stall(tr, 15) }
@@ -142,6 +149,27 @@ const BREAKS = [
 
 function shiftWhere(tr, test, dx, dz) {
   for (const f of tr.frames) if (test(f)) { f.x += dx; f.z += dz; }
+}
+
+// Every split and close call moved onto frames that pass `test` (a third of the way along them, a second apart)
+function movePassesTo(tr, test) {
+  const frames = tr.frames.filter(test);
+  let i = 0;
+  for (const e of tr.events.filter((q) => q.kind === 'split' || q.kind === 'close')) {
+    const f = frames[Math.min(frames.length - 1, Math.floor(frames.length / 3) + 60 * i++)];
+    Object.assign(e, { t: f.t, x: f.x, z: f.z });
+  }
+}
+
+// The 7th Ave stretch held under `cap` m/s but for one frame at `peak` m/s
+function oneFastFrame(tr, cap, peak) {
+  const stretch = tr.frames.filter((f) => f.phase === 'escape' && Math.abs(f.x - avenueX('7')) < 0.5 && f.z < streetZ(42) - 25);
+  const scaleTo = (f, mps) => {
+    const k = mps / Math.max(1e-6, Math.hypot(Math.sin(f.h) * f.v + f.vx, Math.cos(f.h) * f.v + f.vz));
+    f.v *= k; f.vx *= k; f.vz *= k;
+  };
+  for (const f of stretch) if (Math.hypot(Math.sin(f.h) * f.v + f.vx, Math.cos(f.h) * f.v + f.vz) > cap) scaleTo(f, cap);
+  scaleTo(stretch[Math.floor(stretch.length * 0.8)], peak);
 }
 
 function scaleSpeedWhere(tr, test, k) {

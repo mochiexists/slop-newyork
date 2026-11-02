@@ -1,11 +1,18 @@
-// The show's fixed points (as swim-show.js places them, from the same city data) and the small geometry the checker
-// shares: ground speed, angle wrapping, the Kasa circle fit, box clearance.
+// The show's fixed points as swim-show.js placed them up to e7f9c83 (from the same city data), and the small geometry
+// the checker shares: ground speed, angle wrapping, the Kasa circle fit, box clearance. A run's trace carries the
+// page's own COP_SPOT, SHOW_SPOT and ESCAPE_ROUTE (lib/page.mjs installProbe), which the checker uses: these are for
+// traces written before that, musa's sessions (recorded on those builds) and the synthetic show.
 import { avenueX, streetZ } from '../../../js/city-config.js';
 
 const DRIFT_RADIUS = 11; // swim-show.js
 const ROLL_DISTANCE = 22; // swim-show.js
 const COP = { x: avenueX('7') - 2, z: streetZ(45) }; // swim-show.js COP_SPOT
 const SHOW_SPOT = { x: COP.x - DRIFT_RADIUS, z: COP.z - ROLL_DISTANCE, heading: 0 };
+// swim-show.js ESCAPE_ROUTE: from the cop down 7th Ave, into 42nd St, up 8th Ave, along 57th St to 9th Ave
+const ESCAPE_ROUTE = [
+  { x: COP.x, z: COP.z }, { x: avenueX('7'), z: streetZ(42) - 5.5 }, { x: avenueX('8'), z: streetZ(42) - 3.5 },
+  { x: avenueX('8'), z: streetZ(57) - 3.5 }, { x: avenueX('9'), z: streetZ(57) - 3.5 }
+];
 const MPH = 2.23694; // mph per m/s
 
 function wrapAngle(a) {
@@ -57,4 +64,4 @@ function boxClearance(a, b) {
   return gap;
 }
 
-export { COP, DRIFT_RADIUS, MPH, SHOW_SPOT, boxClearance, groundSpeed, kasaFit, travelHeading, wrapAngle };
+export { COP, DRIFT_RADIUS, ESCAPE_ROUTE, MPH, SHOW_SPOT, boxClearance, groundSpeed, kasaFit, travelHeading, wrapAngle };

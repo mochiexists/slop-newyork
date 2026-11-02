@@ -6,8 +6,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { checkTrace } from '../tools/swim-eval/lib/check.mjs';
+import { avenueX, streetZ } from '../js/city-config.js';
 import { COP, SHOW_SPOT, kasaFit } from '../tools/swim-eval/lib/geometry.mjs';
-import { SwimMap } from '../tools/swim-eval/lib/map.mjs';
+import { CARRIAGEWAY_SLACK, SwimMap } from '../tools/swim-eval/lib/map.mjs';
+import { idealTrace } from '../tools/swim-eval/lib/synthetic.mjs';
 import { MAIN_HOOKS, rewriteMain } from '../tools/swim-eval/lib/runner.mjs';
 import { launchFamily, turned } from '../tools/swim-eval/lib/scenarios.mjs';
 import { toTrace } from '../tools/swim-eval/lib/session.mjs';
@@ -37,6 +39,33 @@ test('the footprint sees a kerb corner inside the car\'s box (Codex round 1\'s p
   // (round 2's: the kerb corner pokes in between the outline's points, caught by the corner-in-box test)
   assert.ok(map.footprint(-869.45432, 9.234603, 0.95144).includes('pavement'));
   assert.deepEqual([...new Set(map.footprint(-584.8, -200, 0))], ['road']);
+});
+
+test('7th Ave is told from its cross streets wherever the run can go down it, 47th to 33rd St', () => {
+  const map = new SwimMap(fixture);
+  const x7 = avenueX('7');
+  let missed = 0, nearestOther = 0;
+  for (let z = streetZ(47); z <= streetZ(33); z += 1) {
+    for (const dx of [-7, -3.5, 0, 3.5, 7]) {
+      if (!map.onStreet(x7 + dx, z, '7th Ave', CARRIAGEWAY_SLACK)) missed++;
+      if (map.street(x7 + dx, z).name !== '7th Ave') nearestOther++;
+    }
+  }
+  assert.equal(missed, 0);
+  // (the nearest road alone, as beat 6 had it, is a cross street or Broadway at every crossing)
+  assert.ok(nearestOther > 100);
+  assert.equal(map.onStreet(avenueX('8'), streetZ(50), '7th Ave', CARRIAGEWAY_SLACK), null);
+});
+
+test('the checker judges the run by the route the trace carries (the show\'s own ESCAPE_ROUTE)', () => {
+  const map = new SwimMap(fixture);
+  const ideal = checkTrace(idealTrace(), map);
+  // (a route whose first corner is at 34th St: the ideal's turn into 42nd St is then on the 7th Ave stretch)
+  const later = idealTrace();
+  later.route = [{ x: COP.x, z: COP.z }, { x: avenueX('7'), z: streetZ(34) }, { x: avenueX('8'), z: streetZ(34) }];
+  const moved = checkTrace(later, map);
+  assert.ok(ideal.beats[5].stretch[1] < moved.beats[5].stretch[1]);
+  assert.equal(moved.beats[5].criteria.find((c) => c.name === 'frames off 7th Ave or over the kerb on it').pass, false);
 });
 
 test('the Kasa fit finds a circle', () => {

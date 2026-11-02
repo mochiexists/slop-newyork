@@ -20,11 +20,21 @@ function selftest(dump) {
   for (const brk of BREAKS) {
     const result = checkTrace(brokenTrace(brk), map);
     const beat = result.beats[brk.beat - 1];
-    const others = result.beats.filter((b) => b.id !== brk.beat && b.verdict !== 'VERIFIED').map((b) => b.id);
+    const others = result.beats.filter((b) => b.id !== brk.beat && b.verdict !== 'VERIFIED' && b.verdict !== 'N/A').map((b) => b.id);
     const why = beat.criteria.filter((c) => c.pass === false).map((c) => `${c.name} ${c.value}${c.unit}`).join('; ');
     // (a break that takes the beat's evidence away, rather than breaking it, must leave it INCONCLUSIVE: never VERIFIED)
     const expected = brk.expect ?? 'NOT VERIFIED';
-    rows.push({ name: brk.name, beat: brk.beat, expected, got: beat.verdict, ok: beat.verdict === expected, why, others });
+    let ok = beat.verdict === expected;
+    // (a break aimed at one criterion must fail that one, not the beat by some other: or, `criterionPasses`, leave it
+    // passing where the break is a case the check must not count against the show)
+    let target = '';
+    if (brk.criterion) {
+      const c = beat.criteria.find((q) => q.name === brk.criterion);
+      const want = brk.criterionPasses ? true : false;
+      ok &&= !!c && c.pass === want;
+      target = ` [${brk.criterion}: ${c ? `${c.value}${c.unit} ${c.pass ? 'passes' : 'fails'}` : 'missing'}, want ${want ? 'pass' : 'fail'}]`;
+    }
+    rows.push({ name: brk.name, beat: brk.beat, expected: `${expected}${brk.criterion ? ` on "${brk.criterion}"` : ''}`, got: `${beat.verdict}${target}`, ok, why, others });
   }
   return { rows, ok: rows.every((r) => r.ok) };
 }
