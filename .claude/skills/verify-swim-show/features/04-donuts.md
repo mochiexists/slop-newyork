@@ -5,7 +5,9 @@ the car's own physics, to hold a sideways circle of `DRIFT_RADIUS` (11 m on 8941
 laps, then powers out. The first lap is seen from the chase camera, the second from the seat with the bird out.
 
 **How to reach it.** Fresh scenarios (from the launch), or straight in: `launch-musa` injects musa's over-rotated
-launch (session 2026-11-01T15-34-47-424, frame 10800) at P, with fresh hands and a donut driver in `drift` that has
+launch (session 2026-11-01T15-34-47-424, frame 10800) at P, moved with the build's cop if it has moved
+(`placeLaunch`: launch-close / -far at their share of the build's radius, brought in off the kerb; run.json
+`injectPlaced`), with fresh hands and a donut driver in `drift` that has
 already swept 0.25 laps; the `launch-*` family varies it (over-rotated, slow, spun past 90°, 5.5 m and 19 m from the
 cop). Each must recover.
 
@@ -13,8 +15,11 @@ cop). Each must recover.
 
 **The end state that proves it** (`beatDonuts`, window: launch → powerOut): laps round the cop ≥ 2 (bearing swept
 round the cop, plus what the injection had swept); the Kasa circle fit (donut-score.py's, on frames ≥ 10° sideways)
-centred ≤ 2 m from the cop, radius 8-12 m; median drift angle 30-50°; no cop contact (the cruiser's own `collide`
-moving the car); no frame with the footprint on pavement, plaza, median, park or a building; no building push.
+centred ≤ 2 m from the cop, radius 8-12 m; median drift angle 30-50°; no cop contact (every contact the cruiser's own
+`collide` accepts, hooked before it pushes the car out); no frame with the footprint on pavement, plaza, median, park
+or a building; no building push; the bird shown: the driver's hand up (m5-cockpit.js `birdAmount` ≥ 0.9) with the
+arms drawn for ≥ 1 s of the donuts (the show holds it 1.15-1.85 laps; a `bird-up` screenshot the first time). The
+cop and the radius are the build's own (`COP_SPOT`, `DRIFT_RADIUS`, read from the page into the trace).
 Shown too: the closest box clearance to the cop, frames over street furniture (the steam stack). On the report: the
 opening map's green circle against the cop, the drift-angle chart between its 30° and 50° rules.
 
@@ -25,4 +30,7 @@ opening map's green circle against the cop, the drift-angle chart between its 30
   footprint, not a collider: the car drives through it). The selftest's ideal show uses that circle.
 - A run that ends mid-donut leaves beat 5 INCONCLUSIVE, not failed; the show gives up on its own at 30 s
   (`DONUT_TIME_LIMIT`), so beat 5 calls 35 s of donuts with no way out NOT VERIFIED.
+- The bird is checked as drawn, not as framed: whether the camera actually shows the hand is for the `bird-up`
+  screenshot (look at it). `broken-bird` (the show never raising it) fails here live.
+- A session has no cockpit log: its bird criterion is dropped, not failed.
 - musa's session scores NOT VERIFIED here (0.34 laps, centre 7.4 m off, radius 3.8 m): the first sanity check.

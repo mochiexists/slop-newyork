@@ -5,7 +5,8 @@ description: Verify the AI show (press P in swim mode) against musa's 8-beat che
 
 # Verify the swim show
 
-The show is judged by **musa's checklist** (8 beats, `features/`), measured on the game's own map, over many scenarios,
+The show is judged by **musa's checklist** (8 beats, and a 9th for "any driving key takes over; I hands back",
+`features/`), measured on the game's own map, over many scenarios,
 **by the worst run**. Verdicts are VERIFIED / NOT VERIFIED / INCONCLUSIVE (not a pass) / N/A (not in that scenario).
 A claim about the show reads "old value vs new value" from two summaries: capture the baseline before you change
 anything.
@@ -47,21 +48,24 @@ node tools/swim-eval/suite.mjs --out <dir> --port <port> --jobs 2
 node tools/swim-eval/check.mjs <session.jsonl> --map <dir>/maps/map-<sha>.json --out <dir>
 # re-check a run folder without re-running (after a checker change)
 node tools/swim-eval/check.mjs <dir>/<scenario>
-# every check seen failing (the synthetic ideal show and its 23 breaks)
+# every check seen failing: the synthetic ideal show and a handoff show, each at both layouts, and 60 break cases
 node tools/swim-eval/selftest.mjs --map tools/swim-eval/test/map-fixture.json
 ```
 
 Scenarios (`lib/scenarios.mjs`): `fresh-s<traffic seed>-<clock>` (clock `120`, `60`, `30`, `mix` = each frame 1/120 or
 1/60 at random, `musa` = the dt column of musa's 2026-11-01 session, cycled), `warm-s1-mix` / `warm-s2-musa` (60 s of
 driving before P), `launch-musa` (musa's over-rotated launch injected at P) and its family `launch-overrotated`,
-`launch-slow`, `launch-spun`, `launch-close`, `launch-far`, `launch-musa-120`, `launch-musa-mix`. Any
+`launch-slow`, `launch-spun`, `launch-close`, `launch-far`, `launch-musa-120`, `launch-musa-mix`; `takeover-donuts-30`
+and `takeover-run-30` (a driving key mid-show, then I: beat 9); broken builds `broken-roll-and-radius`, `broken-bird`,
+`broken-takeover`, `broken-handback` (each must fail its beat live; not in a suite). Any
 `fresh-s<n>-<clock>[-w<warm-up s>]` is made up on the spot. `--duration <s>` shortens a run while you iterate.
 
 Which suite: `--set baseline` (the default) runs every clock on three seeds, for a build where the frame rate changes
 the run (89419cc and before). From 2771a69 the game steps on a fixed 1/120 s clock (`js/swim-clock.js`) and a seed's
 run is the same tick for tick at any frame rate (checked through this harness: 120 Hz and 30 Hz, 3001 ticks, every
 field equal), so use `--set deterministic`: one run per seed on the 30 Hz clock (a quarter of the frames to render),
-eight traffic seeds, each scenario kind once more on a second clock. Spend runs on seeds and scenarios, not repeats.
+eight traffic seeds, each scenario kind once more on a second clock, and the two takeovers (22 runs, ~25 min at
+`--jobs 2`). Spend runs on seeds and scenarios, not repeats.
 On a fixed-clock build the trace has one row per tick (after the whole `SwimClock.step`: car, director, traffic; the
 car's sim state), not per frame (the frame's car is the drawn pose between two ticks). Math.random doesn't reach the
 sim there (seed 1 vs 11: 40 s identical). A warm-up does: P starts the show's run on the city's signal clock as it
@@ -75,8 +79,13 @@ The same scenario replays bit for bit (checked: two parallel runs, 2403 frames, 
 its keys itself; the harness only presses P (and, for a warm-up, W/A/D as a player). An injected start state is
 written once at the P frame, before the beat, never during it.
 
-main.js is rewritten as the page fetches it (four one-line hooks: `globalThis.__swim`, `__evalWorld`,
-`__evalControllers`, `__clock.loopStarting()`); no game file changes. To see a check fail live, patch the build the
+main.js, traffic.js and swim-show.js are rewritten as the page fetches them (`GAME_HOOKS` in lib/runner.mjs: main.js
+exposes `__swim`, `__evalWorld`, `__evalControllers`, `__evalCockpit` and calls `__clock.loopStarting()`; traffic.js's
+`collideWithPlayer` and the cruiser's `collide` call the probe with every contact they accept, before pushing the cars
+apart, at any speed); no game file changes. The doctor and `tests/swim-eval.test.mjs` fail when a hooked line moves.
+The checker judges by the build's own spots: the probe reads `COP_SPOT`, `SHOW_SPOT`, `DRIFT_RADIUS` and
+`ESCAPE_ROUTE` from the page into the trace (geometry.mjs keeps the 45th St layout only for older traces and
+sessions); an injected launch is placed round the build's cop (`placeLaunch`). To see a check fail live, patch the build the
 same way in the page (a `page.route` text replacement), never in the repo.
 
 ## 4. Evidence
@@ -129,6 +138,8 @@ car is pushed out of, lanes = the road graph's edges, street furniture (the stea
 | 6. Swim 7th Ave above 70 mph, splits and close calls, no contacts | `features/06-swim.md` |
 | 7. Corners drifted, on the road | `features/07-corners.md` |
 | 8. Endless roam: stopped < 10 %, never stuck | `features/08-roam.md` |
+| 9. Any driving key takes over; I hands back | `features/09-takeover.md` |
 
-Not covered by the harness: "any driving key takes over; I hands back" (no scenario presses a key mid-show), sound,
-camera framing (the screenshots show it, nothing scores it), pedestrians.
+Not covered by the harness: sound, camera framing (the screenshots show it, nothing scores it: the bird is checked
+as drawn, look at the `bird-up` shot for whether it is in frame), pedestrians. A session (`check.mjs <session.jsonl>`)
+is read with the 45th St layout it was recorded on; a session from a build that moved the cop needs its spots.
