@@ -508,8 +508,10 @@ function beatSwim(ctx) {
   if (astray.length) failures.push({ t: astray[0].t, label: `7th Ave stretch ${on7th(astray[0].x, astray[0].z) ? `over the ${astray[0].foot.find((c) => KERB.has(c))}` : 'off 7th Ave'}`, beat: 6 });
   if (held.time < T.swimHold) {
     const fastest = stretch.reduce((m, f) => (f.g > m.g ? f : m), stretch[0]);
-    // (a shortfall over the whole stretch, not a moment's event: a takeover that cuts the stretch short doesn't keep it)
-    failures.push({ t: fastest.t, label: `7th Ave top ${fmt(mph(fastest.g), 0)} mph, held ${fmt(held.time, 2)} s`, beat: 6, overall: true });
+    // (a shortfall over the whole stretch, not a moment's event: a takeover that cuts the stretch short doesn't keep it,
+    // one after the stretch reached its corner does, at the corner, Codex round 3)
+    const t = reachedCorner ? stretch[stretch.length - 1].t : fastest.t;
+    failures.push({ t, label: `7th Ave top ${fmt(mph(fastest.g), 0)} mph, held ${fmt(held.time, 2)} s`, beat: 6, overall: !reachedCorner });
   }
   return beatResult(6, 'Swim 7th Ave > 70 mph', verdictOf(criteria), criteria, summaryOf(criteria), {
     failures, counts: { splits: splits.length, closes: closes.length, traffic: traffic.length }, run: [t0, t1], stretch: [s0, s1], held: held.time
