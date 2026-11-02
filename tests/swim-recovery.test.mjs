@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { Recovery, boxesOverlap, chooseReverse, reverseClear } from '../js/swim-recovery.js';
+import { Recovery, backingToAim, boxesOverlap, chooseReverse, reverseClear } from '../js/swim-recovery.js';
 
 // The show's AI getting going again (swim-recovery.js): a way back checked clear before it backs out, and a reroute
 // once backing out gets it nowhere
@@ -39,7 +39,7 @@ test('it backs out the way it wants if that is clear, another way if not, and no
   const free = chooseReverse(car(), 1, [], road);
   assert.deepEqual([free.steer, free.distance], [1, 4.5]);
   // (a car behind its tail on the +x side: swinging the tail that way, A held backing up, is blocked)
-  const sideBehind = chooseReverse(car(), 1, [parked(2.6, -5.5, 0.3)], road);
+  const sideBehind = chooseReverse(car(), 1, [parked(2.5, -5.5, 0.3)], road);
   assert.ok(sideBehind && sideBehind.steer !== 1 && sideBehind.distance >= 1.2, `another way back (${sideBehind?.steer})`);
   assert.equal(chooseReverse(car(), 0, [parked(0, -6), parked(-2.4, -5.5), parked(2.4, -5.5)], road), null, 'boxed in');
 });
@@ -54,6 +54,24 @@ test('stopped closer than its clearance to a car beside it, it still backs out s
   assert.ok(reverseClear(car(), -1, 4.5, [beside], road) < 1, 'swinging the tail into it is refused');
   // (a car behind, clear by more than the clearance, still gets all of it)
   assert.ok(reverseClear(car(), 0, 4.5, [beside, parked(0, -7.5)], road) < 2.5, 'the car behind still counts in full');
+});
+
+test('close to a car, the way back is checked finely enough that its body can\'t pass through that car\'s corner', () => {
+  // (Codex 2026-11-03 round 2: a car at a slant 0.05 m off; 0.4 m between checks approved 4.5 m through it)
+  const slanted = parked(-3.33, 3.225, -1.5);
+  const way = reverseClear(car(), 1, 4.5, [slanted], road);
+  // (the same way back checked every 5 mm, no clearance: where the body first meets the car)
+  const meets = reverseClear(car(), 1, 4.5, [slanted], road, { sampleStep: 0.005, clearance: 0 });
+  assert.ok(way <= meets, `${way.toFixed(2)} m approved, the body meets it at ${meets.toFixed(2)} m`);
+});
+
+test('backing out with the wheel over swings the nose round to a point beside it, given room enough', () => {
+  // (a point 3 m to the car's left (+x) and 2 m ahead: backing with D, the nose swings left)
+  const aim = { x: 3, z: 2 };
+  const needs = backingToAim(car(), -1, 4.5, aim, 5 * Math.PI / 180);
+  assert.ok(needs > 1 && needs < 4.5, `aimed after ${needs.toFixed(1)} m`);
+  assert.equal(backingToAim(car(), -1, needs - 0.5, aim, 5 * Math.PI / 180), Infinity, 'not with less room than that');
+  assert.equal(backingToAim(car(), 1, 4.5, aim, 5 * Math.PI / 180), Infinity, 'nor with the wheel the other way');
 });
 
 test('backing out that gets it nowhere: a reroute after two tries or 4 s stopped, never while it waits at a light', () => {

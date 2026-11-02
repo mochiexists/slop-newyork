@@ -21,6 +21,8 @@ const RECOVERY = {
   halfLength: 2.52
 };
 const CLEARANCES = [0.3, 0.2, 0.1, 0.05, 0.02, 0]; // m it keeps, most first, round something it already stands close to
+const MIN_SAMPLE_STEP = 0.05; // m between the poses it checks, at the closest
+const AIM_STEP = 0.1; // m between the poses backingToAim looks from
 
 // Whether two boxes (centre, heading, half extents across and along) overlap: the separating axes of both
 function boxesOverlap(ax, az, ah, aw, al, bx, bz, bh, bw, bl) {
@@ -57,20 +59,44 @@ function reverseClear(car, steer, distance, obstacles, road, options = {}) {
   }
   const roadMargin = road ? CLEARANCES.find((c) => c <= o.clearance && road.footprintOff(x, z, h, c) === 0) : undefined;
   const offAtStart = road && roadMargin === undefined ? road.footprintOff(x, z, h, 0) : 0;
-  for (let d = o.sampleStep; d <= distance + 1e-9; d += o.sampleStep) {
-    x -= Math.sin(h) * o.sampleStep;
-    z -= Math.cos(h) * o.sampleStep;
-    h -= steer * o.sampleStep / o.turnRadius;
-    if (road && (roadMargin === undefined ? road.footprintOff(x, z, h, 0) > offAtStart : road.footprintOff(x, z, h, roadMargin) > 0)) return d - o.sampleStep;
+  // (the poses no further apart than the least clearance it keeps: 0.4 m apart round a car 0.05 m off, the body
+  // passed through its corner between two of them, Codex 2026-11-03 round 2)
+  let least = road ? Math.min(o.clearance, roadMargin ?? 0) : o.clearance;
+  for (const { clear } of near) least = Math.min(least, clear);
+  const sample = Math.min(o.sampleStep, Math.max(MIN_SAMPLE_STEP, least));
+  for (let d = sample; d <= distance + 1e-9; d += sample) {
+    x -= Math.sin(h) * sample;
+    z -= Math.cos(h) * sample;
+    h -= steer * sample / o.turnRadius;
+    if (road && (roadMargin === undefined ? road.footprintOff(x, z, h, 0) > offAtStart : road.footprintOff(x, z, h, roadMargin) > 0)) return d - sample;
     const t = d / o.reverseSpeed;
     for (const { ob, clear } of near) {
       const yaw = ob.yaw ?? 0;
       const ox = ob.x + Math.sin(yaw) * (ob.speed || 0) * t, oz = ob.z + Math.cos(yaw) * (ob.speed || 0) * t;
       if (Math.abs(ox - x) > 12 || Math.abs(oz - z) > 12) continue;
-      if (boxesOverlap(x, z, h, o.halfWidth + clear, o.halfLength + clear, ox, oz, yaw, ob.halfWidth ?? 0.95, ob.half ?? 2.3)) return d - o.sampleStep;
+      if (boxesOverlap(x, z, h, o.halfWidth + clear, o.halfLength + clear, ox, oz, yaw, ob.halfWidth ?? 0.95, ob.half ?? 2.3)) return d - sample;
     }
   }
   return distance;
+}
+
+/**
+ * m of backing out with the wheel at `steer` after which the nose points at `aim` ({ x, z }) to within `within` rad;
+ * Infinity if it doesn't by `distance`. (The same arc reverseClear checks.)
+ */
+function backingToAim(car, steer, distance, aim, within, options = {}) {
+  const o = { ...RECOVERY, ...options };
+  let x = car.position.x, z = car.position.z, h = car.heading;
+  for (let d = 0; d <= distance + 1e-9; d += AIM_STEP) {
+    if (d > 0) {
+      x -= Math.sin(h) * AIM_STEP;
+      z -= Math.cos(h) * AIM_STEP;
+      h -= steer * AIM_STEP / o.turnRadius;
+    }
+    const off = Math.atan2(aim.x - x, aim.z - z) - h;
+    if (Math.abs(Math.atan2(Math.sin(off), Math.cos(off))) < within) return d;
+  }
+  return Infinity;
 }
 
 /**
@@ -126,4 +152,4 @@ class Recovery {
   }
 }
 
-export { RECOVERY, Recovery, boxesOverlap, chooseReverse, reverseClear };
+export { RECOVERY, Recovery, backingToAim, boxesOverlap, chooseReverse, reverseClear };

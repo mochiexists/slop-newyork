@@ -17,7 +17,7 @@ import { resolveVehicleContact, vehicleContact } from './vehicle-physics.js';
 import { RoamRoute } from './swim-roam.js';
 import { footprintOff } from './swim-carriageway.js';
 import * as CARRIAGEWAY from './swim-carriageway.js';
-import { RECOVERY, Recovery, chooseReverse } from './swim-recovery.js';
+import { RECOVERY, Recovery, backingToAim, chooseReverse } from './swim-recovery.js';
 
 // The swimming show: the AI takes the car through the reference clips' greatest hits, and keeps driving for as long as
 // the player lets it. Times Square is cleared of traffic, an NYPD cruiser watches with its lights on, the car rolls up
@@ -1219,8 +1219,10 @@ class SwimShow {
       const wanted = Math.abs(error) > UNSTICK_ALIGNED ? -Math.sign(error) : 0;
       const way = chooseReverse(car, wanted, this.obstacles, CARRIAGEWAY);
       if (!way) return;
-      // (pulling round only if the way back that swings the nose toward it is the clear one: else straight back out)
-      const pull = round !== null && way.steer === wanted;
+      // (pulling round only if the way back that swings the nose toward it is the clear one, and clear for long enough
+      // to swing it there: else it backs out and its planner finds the way on. The crawl round goes whatever the
+      // plans, and from a swing cut short at 1.5 m it crawled into the bus's tail)
+      const pull = round !== null && way.steer === wanted && backingToAim(car, way.steer, way.distance, aim, UNSTICK_ALIGNED) < Infinity;
       this.roundLine = pull ? round.line : null;
       this.pullPoint = pull ? aim : null;
       this.reverseSteer = way.steer;
