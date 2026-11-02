@@ -520,49 +520,81 @@ function beatSwim(ctx) {
   });
 }
 
-// The route's corners (from the path the AI drives, as the trace logs it), or turns read off the car's heading
-function cornersOf(ctx) {
-  const { trace, after } = ctx;
-  const seen = new Map();
-  const paths = trace.events.filter((e) => e.kind === 'path').sort((a, b) => a.t - b.t);
-  paths.forEach((e, n) => {
-    if (e.t < after - 0.5) return;
-    const pts = e.points;
-    // (while this path was the AI's: until the next one replaced it)
-    const until = n + 1 < paths.length ? paths[n + 1].t : Infinity;
-    for (let i = 1; i < pts.length - 1; i++) {
-      const [ax, az] = pts[i - 1], [bx, bz] = pts[i], [cx, cz] = pts[i + 1];
-      const turn = wrapAngle(Math.atan2(cx - bx, cz - bz) - Math.atan2(bx - ax, bz - az));
-      const key = `${Math.round(bx)},${Math.round(bz)}`;
-      const inH = Math.atan2(bx - ax, bz - az), outH = Math.atan2(cx - bx, cz - bz);
-      if (Math.abs(turn) < T.cornerTurn) continue;
-      if (!seen.has(key)) seen.set(key, { x: bx, z: bz, turn, inH, outH, beyond: [] });
-      // (the route past it, as each path had it from when it was set, sampled along its legs from cornerWindow past
-      // the corner: driving any of that without the corner is driving past the corner, Codex rounds 1 and 2)
-      seen.get(key).beyond.push({ t: e.t, until, points: routeBeyond([bx, bz], pts.slice(i + 1, i + 2)) });
+// The AI's routes, from the paths the trace logs: a path that extends the last (swim-show.js extendRoute adds a leg
+// ahead) is the same route; one that doesn't (a new run, a roam started over, I) starts another. Each with the time
+// it was the AI's and its points (the last extension's).
+function routesOf(trace, after) {
+  const routes = [];
+  const paths = trace.events.filter((e) => e.kind === 'path' && e.t >= after - 0.5).sort((a, b) => a.t - b.t);
+  const extendsRoute = (route, pts) => pts.length >= route.points.length
+    && route.points.every(([x, z], i) => Math.hypot(pts[i][0] - x, pts[i][1] - z) < 0.2);
+  for (const e of paths) {
+    const last = routes[routes.length - 1];
+    if (last && extendsRoute(last, e.points)) {
+      last.points = e.points;
+      continue;
     }
-  });
-  if (seen.size || trace.source !== 'session') return [...seen.values()];
-  return turnsOf(ctx.run.concat(ctx.roam));
+    if (last) last.until = e.t;
+    routes.push({ t: e.t, until: Infinity, points: e.points });
+  }
+  return routes;
 }
 
-// Points every BEYOND_STEP m along the legs from `corner` through `rest` (the next leg: beatCorners), from
-// cornerWindow m past the corner on
-const BEYOND_STEP = 5; // m
-function routeBeyond(corner, rest) {
-  const out = [];
-  let along = 0;
-  let from = corner;
-  for (const to of rest) {
-    const length = Math.hypot(to[0] - from[0], to[1] - from[1]);
-    for (let d = 0; d < length; d += BEYOND_STEP) {
-      if (along + d >= T.cornerWindow) out.push([from[0] + ((to[0] - from[0]) * d) / length, from[1] + ((to[1] - from[1]) * d) / length]);
+// A route's corners, in leg order, each with the frames that are its own: from the car getting onto the leg into it
+// (its approach) to the car getting past the corner after it. The car is walked along the legs as the AI's planner
+// walks its own (drift-autopilot.js advance: on to the next leg once past this one's end, or round onto the next
+// one), so a corner is judged on its own approach, never on an earlier pass of the same spot (Codex/worker E
+// 2026-11-03: a roam corner at 7th & 42nd judged on the escape's pass, turning the other way), and never before the
+// car is on its way to it (a corner four legs ahead "missed" because the car had driven the street past it earlier).
+//   approach   frame index where the car got onto the leg into it (undefined: never: ahead when the route ended)
+//   passed     frame index where the car got onto the leg out of it (undefined: not past it when the route ended)
+//   to         frame index where its frames end (the car onto the leg after next, or the route's end)
+function routeCorners(route, frames) {
+  const pts = route.points.map(([x, z]) => ({ x, z }));
+  const legs = pts.slice(0, -1).map((a, i) => {
+    const b = pts[i + 1];
+    const length = Math.hypot(b.x - a.x, b.z - a.z) || 1;
+    return { a, ux: (b.x - a.x) / length, uz: (b.z - a.z) / length, length };
+  });
+  const i0 = frames.findIndex((f) => f.t >= route.t);
+  if (i0 < 0 || !legs.length) return [];
+  let i1 = frames.findIndex((f) => f.t >= route.until);
+  if (i1 < 0) i1 = frames.length;
+  const enter = new Map([[0, i0]]);
+  let leg = 0;
+  for (let k = i0; k < i1; k++) {
+    const f = frames[k];
+    while (leg < legs.length - 1) {
+      const s = legs[leg], n = legs[leg + 1];
+      const along = (f.x - s.a.x) * s.ux + (f.z - s.a.z) * s.uz;
+      const alongNext = (f.x - n.a.x) * n.ux + (f.z - n.a.z) * n.uz;
+      const offThis = Math.abs((f.x - s.a.x) * s.uz - (f.z - s.a.z) * s.ux);
+      const offNext = Math.abs((f.x - n.a.x) * n.uz - (f.z - n.a.z) * n.ux);
+      // (and, as the planner, never mid-flick: held while it turns in or kicks, where the trace logs it)
+      if ((along < s.length - LEG_END && !(alongNext > 0 && offNext < offThis)) || f.ti || f.kick) break;
+      leg++;
+      enter.set(leg, k);
     }
-    along += length;
-    from = to;
   }
-  if (along >= T.cornerWindow) out.push(from);
-  return out;
+  const corners = [];
+  for (let j = 1; j < pts.length - 1; j++) {
+    const a = pts[j - 1], b = pts[j], c = pts[j + 1];
+    const inH = Math.atan2(b.x - a.x, b.z - a.z), outH = Math.atan2(c.x - b.x, c.z - b.z);
+    const turn = wrapAngle(outH - inH);
+    if (Math.abs(turn) < T.cornerTurn) continue;
+    corners.push({ x: b.x, z: b.z, turn, inH, outH, approach: enter.get(j - 1), passed: enter.get(j), to: enter.get(j + 1) ?? i1, routeEnd: i1 });
+  }
+  return corners;
+}
+const LEG_END = 2; // m short of a leg's end that the car is on to the next (drift-autopilot.js advance)
+
+// The route's corners (routeCorners, over every route the AI drove after the donuts), or a session's turns read off
+// the car's heading (no route: each judged on its first pass)
+function cornersOf(ctx, frames) {
+  const { trace, after } = ctx;
+  const corners = routesOf(trace, after).flatMap((route) => routeCorners(route, frames));
+  if (corners.length || trace.source !== 'session') return corners;
+  return turnsOf(frames).map((c) => ({ ...c, approach: 0, passed: undefined, to: frames.length, routeEnd: frames.length }));
 }
 
 // Turns read off the car's direction of travel over 60 m of road (a session, which has no route): where each is, and
@@ -588,22 +620,26 @@ function turnsOf(frames) {
   return corners;
 }
 
-// The car's first pass through corner c, if it got within cornerReach: the frames within cornerWindow of it (its kerb
-// and contacts), and those within cornerTurnReach (its turn and slide); `leftWindow` / `left` false when the frames end
-// inside the window / the turn's reach (the trace ended mid-corner)
-function cornerPass(frames, c) {
+// The car's pass through corner c, if it got within cornerReach between frames `from` and `to` (the corner's own:
+// routeCorners): the frames within cornerWindow of it (its kerb and contacts), and those within cornerTurnReach (its
+// turn and slide); `leftWindow` / `left` false when the frames end inside the window / the turn's reach (the trace
+// ended mid-corner)
+function cornerPass(frames, c, from = 0, to = frames.length) {
   const d = (f) => Math.hypot(f.x - c.x, f.z - c.z);
-  const closest = frames.findIndex((f) => d(f) < T.cornerReach);
+  let closest = -1;
+  for (let k = from; k < to && closest < 0; k++) if (d(frames[k]) < T.cornerReach) closest = k;
   if (closest < 0) return null;
+  // (grown no further than the corner's own frames either way: another route's pass of the same spot lends it nothing,
+  // Codex 2026-11-03; ended by the bound, the pass hasn't left: not judged yet)
   const around = (reach) => {
     let a = closest, b = closest;
-    while (a > 0 && d(frames[a - 1]) < reach) a--;
-    while (b < frames.length - 1 && d(frames[b + 1]) < reach) b++;
+    while (a > from && d(frames[a - 1]) < reach) a--;
+    while (b < to - 1 && d(frames[b + 1]) < reach) b++;
     return [a, b];
   };
   const [a, b] = around(T.cornerWindow);
   const [ta, tb] = around(T.cornerTurnReach);
-  return { frames: frames.slice(a, b + 1), turn: frames.slice(ta, tb + 1), leftWindow: b < frames.length - 1, left: tb < frames.length - 1 };
+  return { frames: frames.slice(a, b + 1), turn: frames.slice(ta, tb + 1), leftWindow: b < to - 1, left: tb < to - 1 };
 }
 
 // How a pass drives corner c (headings inH → outH): whether the turn completed, the distance the car's travel turned
@@ -652,22 +688,26 @@ function cornerDrift(pass, c) {
 // 7. Corners drifted, on the road
 function beatCorners(ctx) {
   const { trace } = ctx;
-  const frames = ctx.run.concat(ctx.roam);
+  // (the AI's driving: a player's, after a takeover, drives no route of the AI's)
+  const frames = ctx.run.concat(ctx.roam).filter((f) => f.phase !== 'off');
   if (!frames.length) return beatResult(7, 'Corners drifted, on the road', INCONCLUSIVE, [criterion('run frames', '0', null, '> 0')], 'not reached');
-  const corners = cornersOf(ctx);
+  const corners = cornersOf(ctx, frames);
   const driven = [];
   const missed = [];
+  const ahead = [];
   let unfinished = 0;
   for (const c of corners) {
-    const pass = cornerPass(frames, c);
+    // (a corner the car never got onto the approach of before the route or the trace ended: not judged, listed)
+    if (c.approach === undefined) {
+      ahead.push(c);
+      continue;
+    }
+    const pass = cornerPass(frames, c, c.approach, c.to);
     if (!pass) {
-      // A corner never come within cornerReach of, though the car went on to the route beyond it: missed (cut wide
-      // or skipped), not "not reached"
-      // (on the leg after it, and after the car's closest approach to it: not a stretch of that street driven earlier,
-      // nor one the car reaches on its way to the corner from the other side)
-      const closest = frames.reduce((m, f) => (Math.hypot(f.x - c.x, f.z - c.z) < Math.hypot(m.x - c.x, m.z - c.z) ? f : m), frames[0]);
-      const past = (c.beyond ?? []).some((b) => frames.some((f) => f.t >= b.t && f.t < b.until && f.t > closest.t && b.points.some(([x, z]) => Math.hypot(f.x - x, f.z - z) < T.cornerReach)));
-      if (past) missed.push(c);
+      // Never within cornerReach of it on its own approach, yet past it onto the leg out of it: missed (cut wide or
+      // skipped). Still approaching when the route or the trace ended: not judged.
+      if (c.passed !== undefined) missed.push(c);
+      else ahead.push(c);
       continue;
     }
     // (the trace ending inside the corner's window: not driven yet, so not judged; past the window but inside the
@@ -684,7 +724,7 @@ function beatCorners(ctx) {
     const touches = trafficContacts(trace, near[0].t, near[near.length - 1].t).filter((e) => Math.hypot(e.x - c.x, e.z - c.z) < T.cornerWindow);
     driven.push({ ...c, ...drift, slip: drift.peak, off: off.length, frames: near.length, hits: hits.length + touches.length, t: near[0].t, offWhat: offRoadSummary(off), firstOff: off[0]?.t });
   }
-  const missedCriterion = criterion(`corners missed (never within ${T.cornerReach} m, the route beyond them driven)`, missed.length ? `${missed.length}: ${missed.map((c) => `(${fmt(c.x, 0)}, ${fmt(c.z, 0)})`).join(', ')}` : '0', missed.length === 0, '0');
+  const missedCriterion = criterion(`corners missed (never within ${T.cornerReach} m on their approach, then past them)`, missed.length ? `${missed.length}: ${missed.map((c) => `(${fmt(c.x, 0)}, ${fmt(c.z, 0)})`).join(', ')}` : '0', missed.length === 0, '0');
   if (!driven.length) {
     const criteria = [criterion('corners driven', unfinished ? `0 (${unfinished} the trace ends in)` : '0', null, '≥ 1'), missedCriterion];
     return beatResult(7, 'Corners drifted, on the road', verdictOf(criteria), criteria, 'no corner driven');
@@ -699,6 +739,7 @@ function beatCorners(ctx) {
   const thinnest = judged.reduce((m, c) => (c.share < m.share ? c : m), judged[0] ?? { share: null });
   const criteria = [
     criterion('corners driven', `${driven.length}${driven.length > judged.length ? ` (${driven.length - judged.length} with the trace ending in its turn: its turn and slide not judged)` : ''}${unfinished ? `; ${unfinished} more the trace ends in` : ''}`, true, '≥ 1'),
+    criterion('corners not reached (the route or the trace ends first: not judged)', ahead.length ? `${ahead.length}: ${ahead.slice(0, 6).map((c) => `(${fmt(c.x, 0)}, ${fmt(c.z, 0)})`).join(', ')}${ahead.length > 6 ? ', …' : ''}` : '0', true, 'listed'),
     missedCriterion,
     criterion('turns completed', `${judged.length - incomplete.length}/${judged.length}`, judged.length ? incomplete.length === 0 : null, 'all'),
     criterion(`drifted (one unbroken spell ≥ ${Math.round(deg(T.cornerSlip))}°, ≥ ${T.cornerDriftTime} s, ≥ ${T.cornerDriftShare * 100}% of the turn)`,

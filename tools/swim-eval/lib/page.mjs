@@ -377,7 +377,7 @@ async function installProbe(cfg) {
       tGap: Number.isFinite(trafficGap) ? +trafficGap.toFixed(3) : null, tHit: overlapping,
       bHit: acc.building, copHit: acc.cop,
       seg: p.segment, rev: show.reversing > 0 ? 1 : 0, queued: p.queued ? 1 : 0, cam: c.cameraYawOverride === null || c.cameraYawOverride === undefined ? 0 : 1,
-      pk, pilot: cm.swimPilot ? 1 : 0, touch: acc.touch, bird, birdSeen, showBird: c.showBird ? 1 : 0,
+      pk, pilot: cm.swimPilot ? 1 : 0, ti: p.turningIn ? 1 : 0, kick: p.kick > 0 ? 1 : 0, touch: acc.touch, bird, birdSeen, showBird: c.showBird ? 1 : 0,
       pov: cockpit ? (cockpit.interior?.visible ? 1 : 0) : null,
       // (the city's clock, which runs the signals: city-config.js signalPhase)
       sig: fixedClock ? +swimClock.elapsed.toFixed(3) : null

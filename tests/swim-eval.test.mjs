@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { checkTrace } from '../tools/swim-eval/lib/check.mjs';
+import { checkTrace, cornerDrift, cornerPass } from '../tools/swim-eval/lib/check.mjs';
 import { avenueX, streetZ } from '../js/city-config.js';
 import { COP, SHOW_SPOT, kasaFit } from '../tools/swim-eval/lib/geometry.mjs';
 import { CARRIAGEWAY_SLACK, SwimMap } from '../tools/swim-eval/lib/map.mjs';
@@ -66,6 +66,27 @@ test('the checker judges the run by the route the trace carries (the show\'s own
   const moved = checkTrace(later, map);
   assert.ok(ideal.beats[5].stretch[1] < moved.beats[5].stretch[1]);
   assert.equal(moved.beats[5].criteria.find((c) => c.name === 'frames off 7th Ave or over the kerb on it').pass, false);
+});
+
+test('a corner is judged on its own frames only: a slide or a turn from before them lends it nothing', () => {
+  // (a car down a street at 15 m/s to a corner at z 0 and right round it, sideways only before frame 100: a route that
+  // starts at frame 100 owns the corner from there)
+  const frames = [];
+  for (let i = 0; i < 400; i++) {
+    const t = i / 60;
+    const s = -60 + t * 15;
+    const x = s < 0 ? 0 : s, z = s < 0 ? s : 0;
+    const travel = s < 0 ? 0 : Math.PI / 2;
+    frames.push({ t, dt: 1 / 60, x, z, h: travel, g: 15, travel, slip: i < 100 ? 0.5 : 0, off: false, bHit: 0 });
+  }
+  const c = { x: 0, z: 0, inH: 0, outH: Math.PI / 2, turn: Math.PI / 2 };
+  const whole = cornerPass(frames, c);
+  const own = cornerPass(frames, c, 100, frames.length);
+  assert.ok(whole.turn[0].t < frames[100].t, 'unbounded, the pass reaches back before frame 100');
+  assert.ok(own.frames.every((f) => f.t >= frames[100].t) && own.turn.every((f) => f.t >= frames[100].t));
+  assert.equal(cornerDrift(own, c).spell, 0);
+  // (and a pass whose own frames end inside the turn's reach hasn't left it: its turn isn't judged yet)
+  assert.equal(cornerPass(frames, c, 100, 260).left, false);
 });
 
 test('the Kasa fit finds a circle', () => {

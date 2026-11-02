@@ -18,9 +18,14 @@ corner's turn); no footprint point on pavement/plaza/median/park/building, no bu
 Dashed rings on the report's whole-run map. (Before 2026-11-03 one frame at 15° made a corner drifted: Codex #9.)
 
 **Gotchas.**
-- A route corner never come within 25 m of, with the car on the leg after it later, is missed and fails. A corner
-  the trace ends inside isn't counted (inside 60 m: kerb and contacts counted, turn and slide not); none at all is
-  INCONCLUSIVE.
+- Corners are taken in leg order along each of the AI's routes (its path events, chained while each extends the
+  last), the car walked along the legs by the planner's own rule (on to the next leg past this one's end, or round
+  onto the next): each corner is judged on its own frames, from the car getting onto the leg into it to its getting
+  past the corner after. Never within 25 m of it there, yet on to the leg out of it: missed, a failure. Never got onto
+  its approach, or still on it when the route or the trace ended: listed as not reached, not judged. A corner the
+  trace ends inside: inside 30 m not counted, inside 60 m kerb and contacts counted, turn and slide not. None at all:
+  INCONCLUSIVE. (Worker E, 2026-11-03: a corner four legs ahead read "missed" from a street driven earlier, and a
+  roam corner at the escape's 7th & 42nd spot was judged on the escape's pass.)
 - The threshold against musa's own driving (2026-11-01 sessions, 9 completed corners): unbroken spells 0.9-4.0 s,
   49-100 % of the turn (median 76 %); 8 of 9 pass. `eval-loop/fixes/harness/drift-calibration.json`.
 - A drifted corner swings the tail wide: the footprint check is of the whole box at its heading, so a tail over the
