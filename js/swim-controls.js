@@ -5,6 +5,7 @@ import { bindSwimEngineToggle } from './swim-engine-toggle.js';
 import { M5Cockpit } from './m5-cockpit.js';
 import { loadSwimCarModel } from './m3-model.js';
 import { installSessionRecorder } from './session-recorder.js';
+import { SwimClock } from './swim-clock.js';
 
 // The swimming mode's wiring into the page: the car's cockpit, recorder, model and engine button (setUpSwimCar), and
 // its keys, the teleport menu's swim buttons and the map's Squeeze route (bindSwimControls). main.js creates the
@@ -15,8 +16,12 @@ import { installSessionRecorder } from './session-recorder.js';
 // updates it each frame).
 function setUpSwimCar({ controllerManager, cameraSystem, audioSystem, swimDirector, isTypingInField }) {
   const m5Cockpit = new M5Cockpit(controllerManager.entities.swim, swimDirector.radio);
-  // The swimming car's flight recorder: to the dev server's /session-log, and a file on L (session-recorder.js)
-  installSessionRecorder({ controllerManager, cameraSystem, isTypingInField, onSaved: () => swimDirector.score.flash('SESSION SAVED', 'banked') });
+  // The swimming car's fixed clock (swim-clock.js): main.js advances it each frame
+  const clock = controllerManager.swimClock = new SwimClock({ controllers: controllerManager, director: swimDirector });
+  // The swimming car's flight recorder: to the dev server's /session-log, and a file on L (session-recorder.js); it
+  // notes where each of the clock's runs starts
+  const recorder = installSessionRecorder({ controllerManager, cameraSystem, isTypingInField, onSaved: () => swimDirector.score.flash('SESSION SAVED', 'banked') });
+  clock.onRun = (run, car) => recorder.run(run, car, controllerManager.swimDriver, swimDirector.cruiser);
   // Full build: the real M3 Competition model replaces the procedural car when assets/models/m3.glb is there
   loadSwimCarModel(controllerManager.entities.swim, m5Cockpit).catch((error) => console.warn('M3 model not loaded:', error));
   // The swimming car's engine sound, M3 or the GTA mod's M5: the button on the Careless Whisper card and K
@@ -68,7 +73,9 @@ function bindSwimControls(app) {
   });
   mapSystem.overlayRoutes.push({ points: SQUEEZE_ROUTE, color: '#ff4fa3' });
 
-  // The mode's keys (main.js's own shortcuts have the mode on 5 and the follow cameras on 6-8)
+  // The mode's keys (main.js's own shortcuts have the mode on 5 and the follow cameras on 6-8). Those that change the
+  // car outside the physics are noted for a replay, with the tick they come before (session-recorder.js)
+  const noteEvent = (name) => controllerManager.swimRecorder?.event(name, controllerManager.swimClock?.ticks);
   window.addEventListener('keydown', (e) => {
     if (app.isTypingInField(e)) return;
     const swimming = controllerManager.activeMode === 'swim';
@@ -77,11 +84,18 @@ function bindSwimControls(app) {
     switch (e.code) {
       case 'KeyP':
         if (e.repeat || mapSystem.isFullMapOpen) break;
-        if (swimDirector.show.running) swimDirector.stopShow();
-        else startSwimShow();
+        if (swimDirector.show.running) {
+          swimDirector.stopShow();
+          noteEvent(SWIM_EVENTS.stopShow);
+        } else {
+          startSwimShow();
+        }
         break;
       case 'KeyI': // the AI drives on from where the car is (swim-show.js roam), or gives the car back
-        if (plain && swimming) swimDirector.toggleAI();
+        if (plain && swimming) {
+          swimDirector.toggleAI();
+          noteEvent(SWIM_EVENTS.toggleAI);
+        }
         break;
       case 'KeyG': // George Michael on / off
         if (plain && swimming) {
@@ -98,17 +112,34 @@ function bindSwimControls(app) {
       case 'KeyT': // automatic or manual gearbox
         if (plain && swimming) {
           const manual = toggleManual(car);
+          noteEvent(SWIM_EVENTS.manual);
           swimDirector.score.flash(manual ? 'MANUAL · X UP · Z DOWN' : 'AUTOMATIC', 'banked');
         }
         break;
       case 'KeyX': // manual: shift up
-        if (!e.repeat && swimming && car.manual) shiftUp(car);
+        if (!e.repeat && swimming && car.manual) {
+          shiftUp(car);
+          noteEvent(SWIM_EVENTS.shiftUp);
+        }
         break;
       case 'KeyZ': // manual: shift down (refused if it would over-rev)
-        if (!e.repeat && swimming && car.manual) shiftDown(car);
+        if (!e.repeat && swimming && car.manual) {
+          shiftDown(car);
+          noteEvent(SWIM_EVENTS.shiftDown);
+        }
         break;
     }
   });
 }
 
-export { SWIM_CONTROL_HINTS, SWIM_TOP_SPEED_MPH, bindSwimControls, setUpSwimCar };
+// The recorded events (session-recorder.js) and what a replay does for each, with the car and the director
+const SWIM_EVENTS = { stopShow: 'stopShow', toggleAI: 'toggleAI', manual: 'manual', shiftUp: 'shiftUp', shiftDown: 'shiftDown' };
+function replayEvent(name, car, swimDirector) {
+  if (name === SWIM_EVENTS.stopShow) swimDirector.stopShow();
+  else if (name === SWIM_EVENTS.toggleAI) swimDirector.toggleAI();
+  else if (name === SWIM_EVENTS.manual) toggleManual(car);
+  else if (name === SWIM_EVENTS.shiftUp) shiftUp(car);
+  else if (name === SWIM_EVENTS.shiftDown) shiftDown(car);
+}
+
+export { SWIM_CONTROL_HINTS, SWIM_EVENTS, SWIM_TOP_SPEED_MPH, bindSwimControls, replayEvent, setUpSwimCar };

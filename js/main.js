@@ -699,16 +699,20 @@ async function initApp() {
     const rawDt = (now - lastTime) * 0.001;
     lastTime = now;
     const dt = Math.min(Math.max(rawDt, 0.001), 0.05);
-    elapsed += dt;
 
     // Update 3rd-person controllers, camera, signals, traffic & vehicle collisions, building LODs, and dynamic shadow focus
     gamepadControls.update(dt);
+    // Swimming in Slop: in swim mode the car, its AI, the cop and the traffic step on a fixed clock, elapsed with them,
+    // and the rest of the frame draws them between their last two steps (swim-clock.js); elsewhere elapsed += dt
+    const swimClock = controllerManager.swimClock;
+    elapsed = swimClock.advance(dt, elapsed, controllerManager.activeMode);
     controllerManager.update(dt, elapsed, cameraSystem.initialized ? cameraSystem.currentPos : null);
     cameraSystem.update(dt, elapsed);
     swimDirector.update(dt, cameraSystem.camera);
     m5Cockpit.update(dt, controllerManager.activeMode === 'swim', cameraSystem.activePresetId === 'pov');
     streetDetails.signalClock.value = elapsed;
-    trafficSystem.update(
+    if (swimClock.active) trafficSystem.draw(dt, cameraSystem.camera); // (Swimming in Slop: stepped on the swim clock)
+    else trafficSystem.update(
       dt,
       elapsed,
       cameraSystem.currentPos,
@@ -753,6 +757,7 @@ async function initApp() {
       markInit('warmup');
     }
     renderPipeline.render();
+    swimClock.endFrame(); // (Swimming in Slop: the swimming car's sim state back from its drawn pose)
     if (!warmedUp) {
       warmedUp = true;
       markInit('firstFrame');

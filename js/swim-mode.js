@@ -769,10 +769,11 @@ class SwimDirector {
     });
   }
 
-  update(dt, camera) {
+  // The run's side of the director, a tick of the swim clock (swim-clock.js) at a time: the score, close calls, the
+  // traffic the AI weaves through and the cop, everything the car's run depends on or is scored on
+  step(dt) {
     const c = this.car;
     const drift = c.drift;
-    const slide = this.active ? drift.rearSlide : 0;
 
     const worldVX = Math.sin(c.heading) * c.speed + c.vx;
     const worldVZ = Math.cos(c.heading) * c.speed + c.vz;
@@ -794,6 +795,29 @@ class SwimDirector {
         this.onCloseCall?.(this.closeCalls.split);
         this.screech.whoosh(Math.min(1, Math.abs(c.speed) / 35));
       }
+    }
+
+    this.clock += dt;
+    if (this.show.running) {
+      this.show.gatherObstacles(c, this.traffic.cars, this.traffic.buses);
+      // The cruiser's own AI weaves through the same traffic; the car's AI weaves round the cruiser too
+      if (this.cruiser.state !== 'hidden') this.show.obstacles.push({ x: this.cruiser.car.position.x, z: this.cruiser.car.position.z });
+    }
+    this.cruiser.step(dt, this.show.obstacles, c);
+    if (this.active) this.cruiser.collide(c);
+  }
+
+  // A frame: the director's run steps here too unless the swim clock stepped it (swim mode), then what is drawn and
+  // heard of it
+  update(dt, camera) {
+    if (!this.controllers.swimClock?.active) this.step(dt);
+    const c = this.car;
+    const drift = c.drift;
+    const slide = this.active ? drift.rearSlide : 0;
+    const worldVX = Math.sin(c.heading) * c.speed + c.vx;
+    const worldVZ = Math.cos(c.heading) * c.speed + c.vz;
+
+    if (this.active) {
       const contacts = this.rearContacts();
       const laying = slide > SKID_SLIDE && c.position.y < 0.5;
       for (let i = 0; i < 2; i++) {
@@ -829,19 +853,13 @@ class SwimDirector {
     this.smoke.update(dt, camera);
     this.skids.update();
 
-    this.clock += dt;
-    if (this.show.running) {
-      this.show.gatherObstacles(c, this.traffic.cars, this.traffic.buses);
-      // The cruiser's own AI weaves through the same traffic; the car's AI weaves round the cruiser too
-      if (this.cruiser.state !== 'hidden') this.show.obstacles.push({ x: this.cruiser.car.position.x, z: this.cruiser.car.position.z });
-    }
     // The take-over hint goes once it has been read (or the swim mode is left)
     if (this.yourCarHint > 0 && !this.show.running) {
       this.yourCarHint = this.active ? this.yourCarHint - dt : 0;
       if (this.yourCarHint <= 0 && this.pilotChip) this.pilotChip.hidden = true;
     }
-    this.cruiser.update(dt, this.clock, camera.position, this.show.obstacles, c);
-    if (this.active) this.cruiser.collide(c);
+    // (drawn between its last two ticks, as the car is)
+    this.cruiser.update(dt, this.clock, camera.position, this.controllers.swimClock?.active ? this.controllers.swimClock.alpha : 1);
   }
 }
 

@@ -80,6 +80,7 @@ const ROUTE_AHEAD = 3; // corners the route is kept ahead of the car, so the pla
 const ROAM_SEED = 7; // the roam's choices, the same every show (a hand-back roams differently each time)
 const STUCK_TIME = 2; // s standing still before the AI backs out
 const HOLD_BACK = 15; // m the cop keeps behind the car it chases
+const LEAVE_DISTANCE = 60; // m the car is away before a cop that gave up leaves
 const CORNER_CLEAR_DISTANCE = 110; // m out from a drift corner that the show starts holding its traffic
 const CORNER_CLEAR_RADIUS = 26;
 const HELD_QUEUE_REACH = 40; // m short of that zone that a queue may be cars held for it (not a red light's: see unstick)
@@ -474,6 +475,8 @@ class PoliceCruiser {
     this.state = 'hidden'; // 'hidden' | 'parked' | 'chasing' | 'stopping'
     this.siren = new Siren(audioSystem);
     this.wheelSpin = 0;
+    this.drawnFrom = { x: 0, z: 0, heading: 0 }; // its pose before the last tick (update draws it on from there)
+    this.rolledX = this.rolledZ = 0; // where its wheels were last turned for
     this._contact = {};
     this._a = {};
     this._b = {};
@@ -484,6 +487,9 @@ class PoliceCruiser {
     c.position.set(x, 0, z);
     c.heading = heading;
     c.speed = c.vx = c.vz = c.angularVel = c.steerAngle = c.longAccel = 0;
+    Object.assign(this.drawnFrom, { x, z, heading });
+    this.rolledX = x;
+    this.rolledZ = z;
     this.driver.reset();
     this.state = 'parked';
     this.retired = false;
@@ -537,15 +543,16 @@ class PoliceCruiser {
     }
   }
 
-  update(dt, elapsed, cameraPosition, obstacles, quarry) {
-    if (this.state === 'hidden') {
-      this.siren.update(false, 0, elapsed);
-      return;
-    }
+  // The cop's driving, a tick of the swim clock at a time (swim-clock.js): it chases the car it is after (`quarry`)
+  // through the traffic in `obstacles`, and once it has given up and stopped, leaves when the car is well away
+  step(dt, obstacles, quarry) {
     const c = this.car;
+    this.drawnFrom.x = c.position.x;
+    this.drawnFrom.z = c.position.z;
+    this.drawnFrom.heading = c.heading;
+    if (this.state === 'hidden') return;
     c.prevX = c.position.x;
     c.prevZ = c.position.z;
-    const distance = cameraPosition ? cameraPosition.distanceTo(c.position) : 0;
     if (this.state === 'chasing' || this.state === 'stopping') {
       // Chase, but never catch: hold back behind the car it chases, and give up if it ever gets past it
       let gap = Infinity;
@@ -570,14 +577,28 @@ class PoliceCruiser {
       const steps = Math.ceil(dt * SIM_STEPS_PER_SECOND);
       for (let i = 0; i < steps; i++) stepDriftCar(c, input, dt / steps, COP_DRIFT, c.drift);
       if (this.state === 'stopping' && Math.abs(c.speed) < 0.2) this.state = 'parked';
-    } else if (this.state === 'parked' && this.retired && distance > 60) {
-      // A cop that gave up leaves once nobody is looking
+    } else if (this.state === 'parked' && this.retired && quarry
+      && Math.hypot(quarry.position.x - c.position.x, quarry.position.z - c.position.z) > LEAVE_DISTANCE) {
+      // A cop that gave up leaves once nobody is looking (the car well away: the camera follows it, and the run can't
+      // hang on where the camera is)
       this.hide();
+    }
+  }
+
+  // A frame: drawn `alpha` of the way from its pose before the last tick to its pose now, lights and siren
+  update(dt, elapsed, cameraPosition, alpha = 1) {
+    if (this.state === 'hidden') {
+      this.siren.update(false, 0, elapsed);
       return;
     }
-    this.root.position.copy(c.position);
-    this.root.rotation.y = c.heading;
-    const roll = (c.position.x - c.prevX) * Math.sin(c.heading) + (c.position.z - c.prevZ) * Math.cos(c.heading);
+    const c = this.car;
+    const distance = cameraPosition ? cameraPosition.distanceTo(c.position) : 0;
+    const from = this.drawnFrom;
+    this.root.position.set(from.x + (c.position.x - from.x) * alpha, c.position.y, from.z + (c.position.z - from.z) * alpha);
+    this.root.rotation.y = from.heading + Math.atan2(Math.sin(c.heading - from.heading), Math.cos(c.heading - from.heading)) * alpha;
+    const roll = (c.position.x - this.rolledX) * Math.sin(c.heading) + (c.position.z - this.rolledZ) * Math.cos(c.heading);
+    this.rolledX = c.position.x;
+    this.rolledZ = c.position.z;
     this.wheelSpin = (this.wheelSpin + roll / this.spec.wheelRadius) % (Math.PI * 2);
     for (const w of this.wheels) {
       w.tire.rotation.x = this.wheelSpin;
@@ -618,8 +639,10 @@ class SwimShow {
   // Called with the car already in Times Square (main.js teleports it to SHOW_SPOT first)
   start() {
     this.traffic.setClearZone({ x: COP_SPOT.x, z: COP_SPOT.z, r: SHOW_CLEAR_RADIUS });
-    // The same traffic every time, so the escape threads the same cars
-    this.traffic.reseed?.(SHOW_TRAFFIC_SEED, SHOW_SPOT.x, SHOW_SPOT.z);
+    // The same traffic every time, so the escape threads the same cars: the run the swim clock starts (swim-clock.js)
+    const clock = this.controllers.swimClock;
+    if (clock) clock.startRun({ seed: SHOW_TRAFFIC_SEED, x: SHOW_SPOT.x, z: SHOW_SPOT.z, reason: 'show' });
+    else this.traffic.reseed?.(SHOW_TRAFFIC_SEED, SHOW_SPOT.x, SHOW_SPOT.z);
     // The cruiser parks at the centre of the circle the car will drift round, side-on to the car coming down 7th Ave
     this.cruiser.park(COP_SPOT.x, COP_SPOT.z, COP_HEADING);
     this.takeWheel();
@@ -630,8 +653,9 @@ class SwimShow {
   }
 
   // The AI takes the wheel from wherever the car is and roams Midtown from there (the hand-back key, main.js): no
-  // cop, no stunts, the next corner it comes to and on through the city. Returns whether it found a way on.
-  roam(seed = Math.floor(Math.random() * 2 ** 31)) {
+  // cop, no stunts, the next corner it comes to and on through the city. Returns whether it found a way on. (Its
+  // choices come from the run's seeded random, so a recorded run replays them.)
+  roam(seed = Math.floor((this.controllers.swimClock?.random() ?? Math.random()) * 2 ** 31)) {
     const car = this.controllers.entities.swim;
     const roamer = new RoamRoute(seed).startFrom(car.position.x, car.position.z, car.heading);
     const route = [{ x: car.position.x, z: car.position.z }];

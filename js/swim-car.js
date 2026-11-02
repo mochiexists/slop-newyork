@@ -184,12 +184,24 @@ function resetSwimCar(controllers, ent) {
   controllers.swimDriver?.reset();
 }
 
+// controllers.js's per-frame call for the 'swim' mode. With the swim clock (swim-clock.js) the car steps in its ticks
+// and the frame only draws it; without one (a harness), the frame is the step.
+function updateSwim(controllers, dt) {
+  if (controllers.swimClock) return;
+  stepSwim(controllers, dt);
+}
+
+// The player's keys as bits (W 1, S 2, A 4, D 8, Space 16), as the recorder keeps them
+function keyBits(keys) {
+  return (keys.forward ? 1 : 0) | (keys.backward ? 2 : 0) | (keys.left ? 4 : 0) | (keys.right ? 8 : 0) | (keys.handbrake ? 16 : 0);
+}
+
 // Swimming: the M5 on the drift model. W throttle, S brakes then reverses, A/D steer, Space/E handbrake; W and S
 // together at a stop is a burnout. The keyboard driver turns the on/off keys into a driver's hands and feet (see
 // the keyboard driver in drift-physics.js), so a tap of A is a grip turn and a slide takes a deliberate input.
 // `controllers` is the ThirdPersonControllerManager: its keys, collisions and ground, and the hooks other modules set
-// on it (swimPilot, swimRecorder; swimDriver is made here).
-function updateSwim(controllers, dt) {
+// on it (swimPilot, swimRecorder, swimClock; swimDriver is made here). One step of dt: a tick of the swim clock.
+function stepSwim(controllers, dt) {
   if (dt <= 0) return;
   const c = controllers.entities.swim;
   const driver = controllers.swimDriver ??= new KeyboardDriver();
@@ -199,10 +211,12 @@ function updateSwim(controllers, dt) {
   keys.left = controllers.keys.left;
   keys.right = controllers.keys.right;
   keys.handbrake = controllers.keys.up;
+  const player = keyBits(keys);
   // The AI driver (the swim show) drives through the same keys: it sees the player's and presses its own in their place
   controllers.swimPilot?.(c, dt, keys, driver);
-  // The flight recorder (session-recorder.js, set by main.js) notes the frame's keys and the state they act on
-  controllers.swimRecorder?.frame(c, keys, dt, driver, Boolean(controllers.swimPilot));
+  // The flight recorder (session-recorder.js, set by main.js) notes the step's keys, the player's own and the state
+  // they act on
+  controllers.swimRecorder?.frame(c, keys, dt, driver, Boolean(controllers.swimPilot), player, controllers.swimClock?.ticks);
   const input = driver.update(c, keys, dt);
 
   const prevX = c.position.x;
@@ -252,4 +266,4 @@ function updateSwim(controllers, dt) {
   }
 }
 
-export { M5_PAINT, SWIM_BOX, createSwimEntity, resetSwimCar, updateSwim };
+export { M5_PAINT, SWIM_BOX, createSwimEntity, keyBits, resetSwimCar, stepSwim, updateSwim };
