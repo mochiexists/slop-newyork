@@ -272,6 +272,13 @@ const BREAKS = [
     const end = tr.frames.findIndex((f) => (f.x - c[0]) * Math.sin(out) + (f.z - c[1]) * Math.cos(out) > 100 && Math.hypot(f.x - c[0], f.z - c[1]) < 110);
     tr.frames = tr.frames.slice(0, end);
   } },
+  // (a corner over the kerb with the trace ending 40 m on, inside its turn's 60 m: its kerb still counts)
+  { beat: 7, name: 'a corner cut over the pavement, the trace ending 40 m past it', criterion: 'on the road throughout', apply: (tr) => {
+    const c = [avenueX('8'), streetZ(57) - 3.5];
+    shiftWhere(tr, (f) => Math.hypot(f.x - c[0], f.z - c[1]) < 25, 11, 11);
+    const end = tr.frames.findIndex((f) => f.t > 60 && Math.hypot(f.x - c[0], f.z - c[1]) > 40 && Math.hypot(f.x - c[0], f.z - c[1]) < 45 && f.x < c[0]);
+    tr.frames = tr.frames.slice(0, end);
+  } },
   { beat: 7, name: 'a corner cut over the pavement', apply: (tr) => shiftWhere(tr, (f) => Math.hypot(f.x - avenueX('8'), f.z - (streetZ(57) - 3.5)) < 25, 11, 11) },
   // (2026-11-03: a wait at a red light is not stuck, standing on a green is; both still count as stopped)
   { beat: 8, name: 'stuck 15 s on a green light', criterion: STUCK, apply: (tr) => stall(tr, 15, 'green') },
