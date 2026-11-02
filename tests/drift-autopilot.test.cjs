@@ -414,3 +414,47 @@ test('a queue across its half of a two-way street: it goes round through the cle
   const busy = pastQueue({ queue: [-1.4, 2.6], corridor, oncomingTraffic: [{ x: 8, z: 150, speed: 10, yaw: Math.PI, half: 2.3, halfWidth: 0.92 }] });
   assert.equal(busy.contacts, 0, 'no contact with the oncoming car');
 });
+
+// An avenue of the show's staged rows (swim-traffic.js: pairs side by side at the lanes' outer edges, 35-65 m apart,
+// at 6 m/s), the swimmer at 80 mph on the show's settings, 120 Hz ticks: the ticks its body overlaps a car's
+function swimRows(seed, verifyPlans, seconds) {
+  const { vehicleContact } = loadModule(readFileSync(join(__dirname, '../js/vehicle-physics.js'), 'utf8'));
+  const pilot = new DriftAutopilot({
+    cruiseSpeed: 40, lanes: 2, laneWidth: 2.8, passMargin: 0.35, planSpread: 0.2, closeBonus: 60, splitBonus: 100, lateBonus: 20,
+    splitLineUp: 20, verifyPlans
+  });
+  const driver = new physics.KeyboardDriver();
+  pilot.setPath([{ x: 0, z: 0 }, { x: 0, z: 3000 }], { corridors: [{ left: 7, right: -7, centre: null }] });
+  const c = { position: { x: 0, z: 0 }, heading: 0, speed: 36, vx: 0, vz: 0, angularVel: 0, steerAngle: 0 };
+  let s = seed >>> 0;
+  const random = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
+  const traffic = [];
+  for (let k = 0, z = 10; k < 40; k++) {
+    z += 50 * (0.7 + random() * 0.6);
+    const lane = [-5.4, -1.8, 1.8][Math.floor(random() * 3)];
+    traffic.push({ x: lane - 0.8, z, yaw: 0, speed: 6, half: 2.3, halfWidth: 0.95 }, { x: lane + 4.4, z, yaw: 0, speed: 6, half: 2.3, halfWidth: 0.95 });
+  }
+  let contacts = 0;
+  for (let n = 0; n < seconds * 120; n++) {
+    const keys = pilot.update(c, 1 / 120, traffic, driver);
+    const input = driver.update(c, keys, 1 / 120);
+    for (let i = 0; i < 2; i++) physics.stepDriftCar(c, input, 1 / 240);
+    for (const o of traffic) o.z += o.speed / 120;
+    const a = { x: c.position.x, z: c.position.z, sin: Math.sin(c.heading), cos: Math.cos(c.heading), halfW: 0.97, halfL: 2.52 };
+    for (const o of traffic) {
+      if (Math.abs(o.z - c.position.z) < 6 && vehicleContact(a, { x: o.x, z: o.z, sin: 0, cos: 1, halfW: 0.95, halfL: 2.3 }, {})) contacts++;
+    }
+  }
+  return { contacts, z: c.position.z };
+}
+
+test('through staged rows at 80 mph the swimmer flies its plans on its own keys first, and the one it takes clears the cars the sketch alone ran into', () => {
+  // (seeds 16 and 17 of eval-loop/fixes/driving/tools/rows-probe.mjs: the sketch's plans touched there, 69 and 91 ticks)
+  for (const seed of [16, 17]) {
+    const sketched = swimRows(seed, 0, 12);
+    const flown = swimRows(seed, 3, 12);
+    assert.ok(sketched.contacts > 0, `seed ${seed}: the sketch alone touches (${sketched.contacts} ticks)`);
+    assert.equal(flown.contacts, 0, `seed ${seed}: flown first, no contact`);
+    assert.ok(flown.z > 300, `seed ${seed}: and still flying (${flown.z.toFixed(0)} m in 12 s)`);
+  }
+});
