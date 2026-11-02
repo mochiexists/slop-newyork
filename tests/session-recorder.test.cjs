@@ -98,3 +98,76 @@ test('replaying the recorded keys from a keyframe through the same physics repro
   assert.ok(Math.hypot(car.position.x - last.x, car.position.z - last.z) < 0.5, `apart ${Math.hypot(car.position.x - last.x, car.position.z - last.z)}`);
   assert.ok(Math.abs(car.heading - last.heading) < 0.02, `heading off by ${Math.abs(car.heading - last.heading).toFixed(4)} rad`);
 });
+
+test('on the swim clock each row carries its tick and the player\'s own keys, and a run\'s start is noted whole', () => {
+  let clock = 0;
+  const posts = [];
+  const recorder = new SessionRecorder({ now: () => clock, post: (body) => posts.push(JSON.parse(body)) });
+  const car = { ...newCar(10), position: { x: 3, y: 0, z: 4 }, gear: 3, manual: true,
+    chassisPivot: { rotation: { x: 0.01, z: -0.02 }, position: { y: 0.03 } } };
+  car.drift = { slipAngle: 0.2, rearSlide: 5 };
+  const driver = new physics.KeyboardDriver();
+  const cruiser = { state: 'parked', retired: false, car: { position: { x: 9, z: 8 }, heading: 1 } };
+  recorder.run({ tick: 40, seed: 7, x: 3, z: 4, reason: 'show', elapsed: 40 }, car, driver, cruiser);
+  recorder.frame(car, { forward: 1, left: 1 }, 1 / 120, driver, true, 0, 40);
+  recorder.event('manual', 41);
+  recorder.frame(car, { forward: 1 }, 1 / 120, driver, false, 1 | 4, 41);
+  clock += 1;
+  recorder.flush();
+  const [chunk] = posts;
+  const row = (i) => Object.fromEntries(FIELDS.map((f, k) => [f, chunk.frames[i][k]]));
+  assert.equal(row(0).tick, 40);
+  assert.equal(row(0).player, 0, 'the AI drove: the player held nothing');
+  assert.equal(row(1).player, 5, 'W and A');
+  assert.equal(row(1).dt, 0.0083);
+  assert.deepEqual(chunk.runs.map(([i]) => i), [0]);
+  const start = chunk.runs[0][1];
+  assert.deepEqual([start.tick, start.seed, start.reason, start.elapsed], [40, 7, 'show', 40]);
+  assert.equal(start.car.position.x, 3);
+  assert.equal(start.car.gear, 3);
+  assert.equal(start.car.manual, true);
+  assert.equal(start.car.drift.slipAngle, 0.2, 'unrounded');
+  assert.deepEqual(start.car.chassis, { pitch: 0.01, roll: -0.02, heave: 0.03 });
+  assert.ok('steer' in start.driver);
+  assert.deepEqual(start.cruiser, { state: 'parked', retired: false, x: 9, z: 8, heading: 1 });
+  assert.deepEqual(chunk.events, [[1, { name: 'manual', tick: 41 }]], 'the event comes before the frame after it');
+  // the download has them too, indexed in the whole session
+  const all = JSON.parse(recorder.snapshot());
+  assert.deepEqual(all.runs.map(([i]) => i), [0]);
+  assert.deepEqual(all.events.map(([i]) => i), [1]);
+});
+
+test('a run noted after the last frame of a flush goes with that flush, before the next frame', () => {
+  const posts = [];
+  const recorder = new SessionRecorder({ now: () => 0, post: (body) => posts.push(JSON.parse(body)) });
+  const car = newCar();
+  const driver = new physics.KeyboardDriver();
+  recorder.frame(car, { forward: 1 }, 1 / 120, driver, false, 1, 0);
+  recorder.run({ tick: 1, seed: 3, x: 0, z: 0, reason: 'teleport', elapsed: 0 }, car, driver);
+  recorder.flush();
+  assert.deepEqual(posts[0].runs.map(([i]) => i), [1], 'index 1: before the first frame of the next chunk');
+  // with nothing recorded yet, a note waits for the next flush
+  const early = new SessionRecorder({ now: () => 0, post: (body) => posts.push(JSON.parse(body)) });
+  early.run({ tick: 0, seed: 3, x: 0, z: 0, reason: 'start', elapsed: 0 }, car, driver);
+  early.flush();
+  early.frame(car, { forward: 1 }, 1 / 120, driver, false, 1, 0);
+  early.flush();
+  assert.deepEqual(posts.at(-1).runs.map(([i]) => i), [0]);
+});
+
+test('the build is the git commit when the server shows .git, and always a hash of the modules\' text', async () => {
+  const files = {
+    '.git/HEAD': 'ref: refs/heads/main\n', '.git/refs/heads/main': `${'a'.repeat(40)}\n`,
+    '/js/a.js': 'export const a = 1;', '/js/b.js': 'export const b = 2;'
+  };
+  const fetchText = async (url) => files[url] ?? null;
+  const build = await recorderModule.buildId(['/js/b.js', '/js/a.js'], fetchText);
+  assert.equal(build.commit, 'a'.repeat(40));
+  assert.equal(build.modules, 2);
+  assert.match(build.hash, /^[0-9a-f]{8}$/);
+  files['/js/b.js'] = 'export const b = 3;';
+  const changed = await recorderModule.buildId(['/js/a.js', '/js/b.js'], fetchText);
+  assert.notEqual(changed.hash, build.hash, 'a change to a module changes the hash');
+  const noGit = await recorderModule.buildId(['/js/a.js'], async (url) => (url.startsWith('.git') ? null : files[url]));
+  assert.equal(noGit.commit, null);
+});
