@@ -280,7 +280,11 @@ async function installProbe(cfg) {
     };
   }
   function record(dt) {
-    if (!trace.recording) return;
+    // (before P, a warm-up's pushes and impacts are dropped tick by tick: they'd land on the first frame of the show)
+    if (!trace.recording) {
+      acc.building = acc.buildingDepth = acc.cop = acc.copDepth = acc.traffic = acc.trafficSpeed = 0;
+      return;
+    }
     const c = car;
     const p = show.pilot;
     const keys = cm._swimKeys ?? {};
