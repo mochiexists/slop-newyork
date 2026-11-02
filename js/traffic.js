@@ -519,7 +519,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
   // Half way through a lane change a vehicle still occupies the lane it is leaving (-1 left, 1 right)
   function straddle(v) {
     if (v.conn) return 0;
-    const off = v.dl - (v.bias || 0); // (a show row's lane edge is still its lane)
+    const off = v.dl - (v.bias || 0); // (Swimming in Slop: a show row's lane edge is still its lane)
     if (off > 0.5 && v.lane + 1 < v.edge.lanes.length) return 1;
     if (off < -0.5 && v.lane > 0) return -1;
     return 0;
@@ -1002,7 +1002,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
   // pulling out of an intersection or dodging the player, nor in the last 12 m before the next.
   function changeLanes(v) {
     const e = v.edge;
-    if (v.conn || v.commit || clock < v.panicUntil || v.bias) return;
+    if (v.conn || v.commit || clock < v.panicUntil || v.bias) return; // (Swimming in Slop: a show row keeps its lane)
     if (Math.abs(v.dl) > 0.5 || v.s < v.half || e.len - v.s - v.half < 12) return;
     let target = -1;
     if (v.move.out[v.lane] < 0) {
@@ -1112,7 +1112,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
       }
       cap = bendSpeed(v, v.conn);
     }
-    const zg = show.zoneGap(v);
+    const zg = show.zoneGap(v); // (Swimming in Slop: held short of the show's clear zone)
     if (zg < LOOKAHEAD) worst = Math.min(worst, stopAt(v, Math.max(0, zg), 0.5));
     const pg = playerGap(v, 0);
     if (pg > 0 && pg < LOOKAHEAD) { // (a player alongside, not yet clear ahead, isn't one to follow)
@@ -1163,7 +1163,8 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     const later = threat.aside + threat.across * 0.5;
     const side = Math.abs(later) < 0.3 ? 1 : -Math.sign(later);
     const room = swerveRoom(v, side);
-    // Coming from behind, a car passing close by is using the gap on its side: only ever swerve away from it
+    // Swimming in Slop: coming from behind, a car passing close by is using the gap on its side: only ever swerve away
+    // from it
     const other = threat.ahead < 0 ? 0 : swerveRoom(v, -side);
     v.evade = other > room ? -side * other : side * room;
   }
@@ -1239,7 +1240,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
       v.yielding = false;
     }
     v.cs = v.s - e.len;
-    if (v.move.turn !== 'S') v.bias = 0; // a show row's car keeps to its lane edge straight on, not round a turn
+    if (v.move.turn !== 'S') v.bias = 0; // (Swimming in Slop: a show row's car keeps to its lane edge straight on only)
     v.conn = connector(e, v.lane, v.move.to, v.out);
     claim(v); // at once, so vehicles deciding later this frame know
   }
@@ -1303,7 +1304,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     let bend = Math.atan2(bendB.dx, bendB.dz) - Math.atan2(bendA.dx, bendA.dz);
     bend -= Math.round(bend / (Math.PI * 2)) * Math.PI * 2;
     // ...plus how far right of its path it heads, and how far right of where it should be it is (nose and dl - evade)
-    const off = v.dl - (v.evade || 0) - (v.bias || 0); // (less the lane edge a show row's car keeps to: swim-traffic.js)
+    const off = v.dl - (v.evade || 0) - (v.bias || 0); // (Swimming in Slop: less a show row's lane edge, swim-traffic.js)
     const want = Math.atan((wheelbase * bend) / 2) + v.nose + Math.atan(((panic ? 3 : 1.2) * off) / (1 + v.speed));
     const lateral = panic ? v.driver.grip : 1.3 * v.driver.aLat; // the sideways acceleration it steers up to
     const most = Math.min(v.driver.lock, Math.atan((lateral * wheelbase) / Math.max(v.speed * v.speed, 1e-3)));
@@ -1382,6 +1383,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
 
     const turn = v.move.turn;
     if (v.evade) v.blink = 0; // no time to signal a swerve
+    // (Swimming in Slop: a show row's lane edge is no lane change to signal)
     else if (Math.abs(v.dl - (v.bias || 0)) > 0.3 && Math.abs(v.dlv) > 0.05) v.blink = v.dl > (v.bias || 0) ? -1 : 1;
     else if (turn !== 'S' && (v.conn || v.edge.len - v.s < 35)) v.blink = turn === 'R' ? 1 : -1;
     else v.blink = 0;
@@ -1550,7 +1552,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     v.commit = null;
     v.yielding = false;
     v.wait = 0;
-    show.unstage(v);
+    show.unstage(v); // (Swimming in Slop)
     v.speed = v.v0 * 0.5;
     v.acc = 0;
     v.impactTime = 0;
@@ -1582,7 +1584,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
       const d = Math.hypot(x - focusX, z - focusZ);
       if (d < rMin || d > rMax || (protectView && nearView(x, z, v.half + 4, VEHICLE_SPAWN_DISTANCE))) continue;
       if (player.active && Math.hypot(x - player.x, z - player.z) < 25) continue;
-      if (show.keepsClear(x, z)) continue;
+      if (show.keepsClear(x, z)) continue; // (Swimming in Slop: nothing spawns in the show's clear zone)
       if (!laneClear(e.occ[lane], s, v.half + 8)) continue;
       place(v, e, lane, s);
       return true;
@@ -1930,7 +1932,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     }
     player.halfW = activeMode === 'cyclist' ? 0.35 : activeMode === 'person' ? 0.32 : 0.86;
     player.halfL = activeMode === 'cyclist' ? 0.85 : activeMode === 'person' ? 0.32 : 2.18;
-    if (activeMode === 'swim') [player.halfW, player.halfL] = SWIM_BOX; // (the swimming M5 is bigger than the taxi)
+    if (activeMode === 'swim') [player.halfW, player.halfL] = SWIM_BOX; // (Swimming in Slop: the M5 is bigger than the taxi)
 
     // 1. Cars & buses
     // Limit attempted placements, not just successes, and rotate through the pool so an awkward location
@@ -1974,6 +1976,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     }
   }
 
+  // (Swimming in Slop: update()'s drawing half, see step())
   function draw(dt, camera = null) {
     updateView(camera);
     for (const m of bodyMeshes) m.count = 0;
@@ -2035,7 +2038,7 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     syncInst(busShadowInst, visibleBuses);
     if (visibleBuses > 0) flagRange(busStates, visibleBuses);
     updateTrafficLights();
-    pedestrianSystem.draw(dt);
+    pedestrianSystem.draw(dt); // (Swimming in Slop: stepped in step())
     updateSparks(dt);
   }
 

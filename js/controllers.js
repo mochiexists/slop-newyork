@@ -68,7 +68,7 @@ function driveSpeed(speed, throttle, dt, drive) {
 // Walking surface for the player's pedestrian (its rig samples it around its feet)
 const personGround = (controllers, x, z) => controllers.getGroundHeight(x, z, 'person');
 
-// Half-width & half-length of the drivable cars' collision boxes, by mode
+// Half-width & half-length of the drivable cars' collision boxes, by mode (Swimming in Slop: the swim M5's box)
 const CAR_BOXES = { car: [0.86, 2.18], swim: SWIM_BOX };
 
 function collisionBody(mode, radius, heading, margin = 0) {
@@ -339,7 +339,7 @@ class ThirdPersonControllerManager {
       active._riderHidden = false;
       active._posedX = NaN;
     }
-    // Parked cars show no brake or reverse lights
+    // Parked cars show no brake or reverse lights (Swimming in Slop: the swim M5 too)
     for (const car of [this.entities.car, this.entities.swim]) {
       if (car !== active && car?.carState) car.carState.value.x = car.carState.value.w = 0;
     }
@@ -371,11 +371,11 @@ class ThirdPersonControllerManager {
       ent.crowd.begin();
       ent.crowd.add(ent.rig, 0);
       ent.crowd.end();
-    } else if (ent.type === 'car') {
+    } else if (ent.type === 'car') { // (Swimming in Slop: the taxi or the swim M5)
       ent.prevX = ent.position.x;
       ent.prevZ = ent.position.z;
       ent.vx = ent.vz = ent.angularVel = ent.steerAngle = 0;
-      if (ent.drift) resetSwimCar(this, ent);
+      if (ent.drift) resetSwimCar(this, ent); // (Swimming in Slop)
       ent.pitchVel = ent.rollVel = ent.heaveY = ent.heaveVel = 0;
       ent.chassisPivot.rotation.x = ent.chassisPivot.rotation.z = 0;
       ent.chassisPivot.position.y = 0;
@@ -409,6 +409,7 @@ class ThirdPersonControllerManager {
     const margin = heli ? 6000 : 0;
     const entity = this.getActiveEntity();
     // Conservative body cylinders, including the taxi's corners, bicycle wheels and helicopter tail/rotor.
+    // (Swimming in Slop: the swim M5's, looked up by its mode, as it is a 'car' entity)
     const body = { person: [0.48, 1.9], car: [2.4, 1.9], swim: [2.75, 1.9], cyclist: [1.0, 1.9], helicopter: [6.2, 3.2] };
     const footprint = (e) => body[e.mode ?? e.type];
     const others = Object.values(this.entities).filter(e => e !== entity).map(e => ({
@@ -961,6 +962,7 @@ class ThirdPersonControllerManager {
           const sin = carEntity ? sinH : Math.sin(entity.heading);
           const cos = carEntity ? cosH : Math.cos(entity.heading);
           const approachSpeed = -((sin * entity.speed + (entity.vx || 0)) * nx + (cos * entity.speed + (entity.vz || 0)) * nz);
+          // (Swimming in Slop: the box of the car being driven, CAR_BOXES)
           const support = carEntity ? Math.abs(nx * cos - nz * sin) * body.hx + Math.abs(nx * sin + nz * cos) * body.hz : radius;
           this.reportCollision(entity, c, 'building', pos.x - nx * support, pos.y + (heli ? 1.1 : 0.56), pos.z - nz * support,
             nx, 0, nz, approachSpeed);
@@ -1104,7 +1106,7 @@ class ThirdPersonControllerManager {
     if (this.activeMode === 'car') {
       this.updateCar(dt, elapsed);
     } else if (this.activeMode === 'swim') {
-      updateSwim(this, dt);
+      updateSwim(this, dt); // (Swimming in Slop: swim-car.js)
     } else if (this.activeMode === 'cyclist') {
       this.updateCyclist(dt, elapsed);
     } else if (this.activeMode === 'helicopter') {
@@ -1120,7 +1122,7 @@ class ThirdPersonControllerManager {
     // Modulate clustered vehicle & bike lights by time of day (off during Midday & Golden Hour; fade in at Dusk & Night)
     const glow = cityUniforms && cityUniforms.uInteriorGlow ? cityUniforms.uInteriorGlow.value : 0.48;
     const beamScale = Math.min(1.28, Math.max(0.0, (glow - 0.60) * 1.45));
-    for (const car of [this.entities.car, this.entities.swim]) {
+    for (const car of [this.entities.car, this.entities.swim]) { // (Swimming in Slop: the swim M5's headlights too)
       if (!car.headLights) continue;
       for (const spot of car.headLights) {
         // Accelerating does not change the headlamp output or range.

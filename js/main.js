@@ -19,6 +19,7 @@ import { LightingSystem } from './lighting.js';
 import { NYCMapSystem } from './nyc-map.js';
 import { setupSceneCulling, updateSceneCulling } from './scene-culling.js';
 import { CityAudioSystem } from './audio-system.js';
+// Swimming in Slop: the swim mode, its AI show and its keys
 import { SwimDirector } from './swim-mode.js';
 import { SWIM_CONTROL_HINTS, SWIM_TOP_SPEED_MPH, bindSwimControls, setUpSwimCar } from './swim-controls.js';
 
@@ -145,12 +146,13 @@ async function initApp() {
   const cameraSystem = new CameraSystem(renderer.domElement, controllerManager);
   const touchControls = new TouchControls(controllerManager);
   const soundButton = document.getElementById('btn-sound');
-  let swimDirector = null; // created once the audio system exists; the sound button mutes its music too
+  // Swimming in Slop: the swim director, created once the audio system exists; the sound button mutes its music too
+  let swimDirector = null;
   const audioSystem = new CityAudioSystem({ controllerManager, trafficSystem, highwayTraffic, streetDetails }, {
     onStateChange: updateSoundButton
   });
   function updateSoundButton() {
-    swimDirector?.setMuted(!audioSystem.enabled);
+    swimDirector?.setMuted(!audioSystem.enabled); // (Swimming in Slop)
     if (!soundButton) return;
     soundButton.disabled = !audioSystem.supported;
     soundButton.setAttribute('aria-pressed', String(audioSystem.enabled));
@@ -159,7 +161,8 @@ async function initApp() {
     soundButton.querySelector('use').setAttribute('href', audioSystem.enabled ? '#i-sound' : '#i-sound-off');
   }
   soundButton?.addEventListener('click', () => audioSystem.setEnabled(!audioSystem.enabled));
-  // The AI show cuts between the chase camera and the driver's seat
+  // Swimming in Slop: the swim mode's director (its AI show cuts between the chase camera and the driver's seat) and
+  // the swimming car's cockpit, clock and recorder (swim-controls.js)
   swimDirector = new SwimDirector({
     scene, controllerManager, audioSystem, trafficSystem, onShowCamera: (id) => selectCamera(id, true),
     onCloseCall: (split) => cameraSystem.swim.scoreKick.trigger(split)
@@ -271,7 +274,7 @@ async function initApp() {
   const elControlsHint = document.getElementById('hud-controls-hint');
   const gamepadControls = new GamepadControls(controllerManager, cameraSystem, {
     onCycleMode: (step) => {
-      const modes = ['person', 'car', 'cyclist', 'helicopter', 'swim'];
+      const modes = ['person', 'car', 'cyclist', 'helicopter', 'swim']; // (Swimming in Slop: + swim)
       selectMode(modes[(modes.indexOf(controllerManager.activeMode) + step + modes.length) % modes.length]);
     },
     onCycleCamera: cycleCamera,
@@ -326,7 +329,7 @@ async function initApp() {
       btn.classList.toggle('active', btn.getAttribute('data-mode') === mode);
     });
     document.body.dataset.mode = mode;
-    swimDirector.setActive(mode === 'swim');
+    swimDirector.setActive(mode === 'swim'); // (Swimming in Slop)
     placeModeIndicator();
     const ent = controllerManager.getActiveEntity();
     if (elMode) elMode.textContent = ent.label;
@@ -536,7 +539,8 @@ async function initApp() {
     });
   }
 
-  // Global keyboard shortcuts for modes (1-5), cameras (V / 6-0), and HUD (H)
+  // Global keyboard shortcuts for modes (1-5), cameras (V / 6-0), and HUD (H) (Swimming in Slop: 5 is the swim mode,
+  // the cameras moved up one)
   window.addEventListener('keydown', (e) => {
     if (isTypingInField(e)) return;
     switch (e.code) {
@@ -708,7 +712,7 @@ async function initApp() {
     elapsed = swimClock.advance(dt, elapsed, controllerManager.activeMode);
     controllerManager.update(dt, elapsed, cameraSystem.initialized ? cameraSystem.currentPos : null);
     cameraSystem.update(dt, elapsed);
-    swimDirector.update(dt, cameraSystem.camera);
+    swimDirector.update(dt, cameraSystem.camera); // (Swimming in Slop: what is drawn and heard of the swim mode)
     m5Cockpit.update(dt, controllerManager.activeMode === 'swim', cameraSystem.activePresetId === 'pov');
     streetDetails.signalClock.value = elapsed;
     if (swimClock.active) trafficSystem.draw(dt, cameraSystem.camera); // (Swimming in Slop: stepped on the swim clock)
