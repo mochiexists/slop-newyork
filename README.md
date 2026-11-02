@@ -55,7 +55,16 @@ cleanly. Ours: `js/swim-*.js`, `js/drift-*.js`, `js/m5-*.js`, `js/m3-model.js`, 
 Upstream files carry only hooks: an import, a registration line, a one-line dispatch, the fifth mode in a list. Most
 are marked `Swimming in Slop` (`grep -n "Swimming in Slop" js/*.js` lists them); the rest name the `'swim'` mode.
 `traffic.js` imports its `Math` from `swim-traffic.js` (the real one, with a `random()` the show can seed), so its
-`Math.random()` lines stay upstream's. `index.html` has the mode's markup and the fork's module preloads in one block.
+`Math.random()` lines stay upstream's (`pedestrian-system.js` does the same). `index.html` has the mode's markup and
+the fork's module preloads in one block.
+
+Swim mode runs on a fixed clock (`swim-clock.js`): the car, its AI, the cop, the traffic and the pedestrians step in
+ticks of 1/120 s, so the same seed and keys give the same run at any frame rate, and the frame draws the car between
+its last two ticks. For that `traffic.js` and `pedestrian-system.js` split `update()` into `step()` and `draw()`, and
+`main.js` has three hooks (advance the clock, draw-only traffic, end the frame). The flight recorder
+(`session-recorder.js`) keeps each run's start and the player's keys tick by tick; `tools/swim-replay` plays a
+recorded run again headless at another frame rate (or the AI show, or a scripted key list) and says whether the car
+drove the same path.
 
 To merge: `git fetch upstream && git merge upstream/main`, resolve any conflict at a hook by keeping upstream's line
 and re-adding the hook, then `node --test tests/*.test.cjs tests/*.test.mjs` (boot.test.cjs checks that every module

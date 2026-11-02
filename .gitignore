@@ -6,3 +6,6 @@ assets/models/
 
 # The two built versions (tools/build-variants.sh)
 dist/
+
+# tools/swim-replay's default output (traces, recorded sessions, comparisons)
+tools/swim-replay/runs/

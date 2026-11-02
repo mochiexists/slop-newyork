@@ -1,0 +1,11 @@
+{
+  "about": "Down 7th Ave from 52nd St: floored, a flick left and right, a handbrake flick into a slide, a lift, the brake, floored again",
+  "seed": 5,
+  "start": { "x": -584.8, "z": -700, "heading": 0 },
+  "elapsed": 40,
+  "seconds": 12,
+  "keys": [
+    [0, "W"], [300, "WA"], [348, "W"], [420, "WD"], [470, "W"], [600, "WDH"], [630, "WD"], [700, "W"],
+    [900, ""], [960, "S"], [1100, "W"]
+  ]
+}
