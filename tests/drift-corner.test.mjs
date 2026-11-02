@@ -71,6 +71,14 @@ test('the fitted corner keeps the sideways body on the road; an arc touching the
   assert.equal(sizeCorner(fitted, 200, road), fitted, 'never wider than the fit');
 });
 
+test('two streets with room for less than the tightest arc still get a corner path', () => {
+  // (lines 2 m off an inside edge 1 m in: a + b + √(2ab) under minRadius for every line, Codex 2026-11-03 round 1's
+  // 5th Ave into 23rd St, where fitCorner gave nothing and the autopilot read its radius off null)
+  const fitted = fitCorner(RIGHT_TURN, { entry: 1, exit: 1, entryInside: -1, exitInside: -1 }, road);
+  assert.ok(fitted, 'a path');
+  assert.ok(fitted.radius >= 12, `on the tightest arc or wider (${fitted?.radius})`);
+});
+
 test('Manhattan\'s corners of the show\'s run fit on the carriageway', () => {
   const carriageway = { footprintOff };
   // 8th Ave north into 57th St west (left), on the corridors swim-show.js gives those streets

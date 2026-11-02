@@ -132,7 +132,9 @@ function fitCorner(corner, lines, road, options = {}) {
       // The widest arc clear of the inside corner by insideClearance: a and b the room from each line to there
       const a = Math.max(1, into * (lines.entryInside - entryLine) - o.insideClearance);
       const b = Math.max(1, into * (lines.exitInside - exitLine) - o.insideClearance);
-      const widest = Math.min(o.maxRadius, a + b + Math.sqrt(2 * a * b));
+      // (never under minRadius: two narrow streets, 5th Ave into 23rd St narrowed to the carriageway, have room for
+      // less, and with no radius tried there was no path at all and the show stopped on it: Codex 2026-11-03 round 1)
+      const widest = Math.min(o.maxRadius, Math.max(o.minRadius, a + b + Math.sqrt(2 * a * b)));
       for (let radius = widest; radius >= o.minRadius - 1e-6; radius -= o.radiusStep) {
         const path = new CornerPath({ ...corner, entryLine, exitLine, radius });
         // (no wider than one already found: the outer lines go first, so a tie keeps them)
