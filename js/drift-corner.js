@@ -5,6 +5,8 @@
 // grown by a reserve for how far the keys hold it off its line, has to stay on the road. The widest such arc wins (the
 // fastest slide). Pure and DOM-free: the road is handed in, so tests can lay out their own.
 
+import { boxesOverlap } from './swim-recovery.js';
+
 const RAD = Math.PI / 180;
 
 const CORNER_FIT = {
@@ -202,7 +204,13 @@ const CORNER_DRIVE = {
   exitAngle: 12 * RAD, // past slideUntil, the slide's angle beyond which it costs (unwinding onto the new street)
   exitCost: 3, // per (10°)² past it
   crawlShort: 4, // m/s under the corner's speed below which the slide is a crawl
-  crawlCost: 3 // per (m/s)² under it
+  crawlCost: 3, // per (m/s)² under it
+  // The traffic round the corner, flown on at its own speed: the turn-in starts ~50 m out, beyond the 26 m the show
+  // holds clear, where the held cars stand (fresh-s1 touched one 32 m short of 57th St)
+  trafficReach: 70, // m round the car it looks at traffic within
+  trafficClearance: 0.3, // m round its body that counts as touching a car
+  trafficCost: 600 // per check its body meets a car
+
 };
 
 const PEDALS = ['W', '-']; // W down, or off both pedals
@@ -250,8 +258,9 @@ class CornerDriver {
 
   // The choice for this moment (re-weighed every decideEvery): { wheel (share of lock, + left as the driver's steer),
   // forward (W), handbrake }
-  update(car, dt, driver, hands, path, speed) {
+  update(car, dt, driver, hands, path, speed, obstacles = []) {
     this.speed = speed; // m/s the corner is planned at
+    this.obstacles = obstacles;
     this.sinceChoice += dt;
     if (!this.choice || this.sinceChoice >= this.o.decideEvery - 1e-9) {
       this.choice = this.choose(car, driver, hands, path, dt);
@@ -274,6 +283,15 @@ class CornerDriver {
     const substeps = Math.max(1, Math.round(frame / o.physicsStep));
     const step = frame / substeps;
     const into = path.into;
+    // (the cars near enough to matter, with their velocities)
+    const near = this._near ??= [];
+    near.length = 0;
+    for (const ob of this.obstacles ?? []) {
+      const dx = ob.x - car.position.x, dz = ob.z - car.position.z;
+      if (dx * dx + dz * dz > o.trafficReach * o.trafficReach || dx * dx + dz * dz < 2.25) continue;
+      const yaw = ob.yaw ?? 0;
+      near.push({ x: ob.x, z: ob.z, yaw, vx: Math.sin(yaw) * (ob.speed || 0) + (ob.vx || 0), vz: Math.cos(yaw) * (ob.speed || 0) + (ob.vz || 0), half: ob.half ?? 2.3, halfWidth: ob.halfWidth ?? 0.95 });
+    }
     // (on the way in: the handbrake to flick it, and the brake)
     const now = path.locate(car.position.x, car.position.z);
     const entering = now.phase === 'entry' || (now.phase === 'arc' && now.progress < o.kickShare);
@@ -298,7 +316,7 @@ class CornerDriver {
         keys.handbrake = t < o.decideEvery ? handbrake : 0;
         const input = simDriver.update(sim, simHands.press(keys, frame), frame);
         for (let i = 0; i < substeps; i++) stepDriftCar(sim, input, step, model, telemetry);
-        cost += this.cost(sim, path, f);
+        cost += this.cost(sim, path, f, (f + 1) * frame);
       }
       if (!best || cost < best.cost) best = { cost, wheel: wheel * into, forward, brake, handbrake };
     }
@@ -306,11 +324,17 @@ class CornerDriver {
   }
 
   // The cost of one look-ahead frame's pose
-  cost(sim, path, frame) {
+  cost(sim, path, frame, t) {
     const o = this.o;
     const at = path.locate(sim.position.x, sim.position.z);
     let cost = o.pathCost * at.out * at.out;
-    if (frame % o.roadEvery === 0) cost += o.roadCost * this.road.footprintOff(sim.position.x, sim.position.z, sim.heading, o.reserve);
+    if (frame % o.roadEvery === 0) {
+      cost += o.roadCost * this.road.footprintOff(sim.position.x, sim.position.z, sim.heading, o.reserve);
+      for (const ob of this._near ?? []) {
+        const w = 0.97 + o.trafficClearance, l = 2.52 + o.trafficClearance;
+        if (boxesOverlap(sim.position.x, sim.position.z, sim.heading, w, l, ob.x + ob.vx * t, ob.z + ob.vz * t, ob.yaw, ob.halfWidth, ob.half)) cost += o.trafficCost;
+      }
+    }
     const sin = Math.sin(sim.heading), cos = Math.cos(sim.heading);
     const vx = sin * sim.speed + sim.vx, vz = cos * sim.speed + sim.vz;
     const ground = Math.hypot(vx, vz);

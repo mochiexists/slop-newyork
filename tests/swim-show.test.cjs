@@ -17,7 +17,7 @@ test.before(async () => {
   carriageway = await import('../js/swim-carriageway.js');
   physics = loadModule(read('js/drift-physics.js'));
   const autopilot = loadModule(read('js/drift-autopilot.js'), {
-    imports: { './drift-physics.js': physics, './drift-corner.js': loadModule(read('js/drift-corner.js')) }
+    imports: { './drift-physics.js': physics, './drift-corner.js': loadModule(read('js/drift-corner.js'), { imports: { './swim-recovery.js': loadModule(read('js/swim-recovery.js')) } }) }
   });
   show = loadModule(read('js/swim-show.js'), {
     imports: {

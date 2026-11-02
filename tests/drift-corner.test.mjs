@@ -82,7 +82,7 @@ test('Manhattan\'s corners of the show\'s run fit on the carriageway', () => {
 
 test('with a road, the autopilot drifts a corner round its fitted path on the keys: sideways over most of the turn, its body never off the road', () => {
   const physics = loadModule(read('js/drift-physics.js'));
-  const corner = loadModule(read('js/drift-corner.js'));
+  const corner = loadModule(read('js/drift-corner.js'), { imports: { './swim-recovery.js': loadModule(read('js/swim-recovery.js')) } });
   const { DriftAutopilot } = loadModule(read('js/drift-autopilot.js'), { imports: { './drift-physics.js': physics, './drift-corner.js': corner } });
   // (the corridors 1.4 m off the curb either side, as swim-show.js routeCorridors makes them)
   const band = { left: HALF - 1.4, right: -(HALF - 1.4), centre: null };

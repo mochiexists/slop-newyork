@@ -1235,7 +1235,7 @@ class DriftAutopilot {
       // wheel, W and the handbrake that keep the car on it, its body on the road and the slide alive
       if (this.cornerPath && o.road && driver) {
         this.cornerDriver ??= new CornerDriver({ stepDriftCar, steeringKey, Hands }, o.road, o.cornerDrive);
-        this.cornerChoice = this.cornerDriver.update(car, dt, driver, this.hands, this.cornerPath, cornerSpeed);
+        this.cornerChoice = this.cornerDriver.update(car, dt, driver, this.hands, this.cornerPath, cornerSpeed, obstacles);
         input.steer = this.cornerChoice.wheel;
         input.handbrake = this.cornerChoice.handbrake;
         input.brake = this.cornerChoice.brake;
