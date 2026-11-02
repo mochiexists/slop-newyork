@@ -18,6 +18,7 @@ const IDEAL_SLIP = 40 * RAD;
 const CORNER_SLIP = 25 * RAD;
 const CORNER_SLIDE = 18; // m either side of a corner that the car is sideways
 const CORNER_RADIUS = 10; // m, the arc each corner of the run is driven on
+const MID_BLOCK = 0.47; // the share of the roam where the car is mid-block on 9th Ave (50th-49th St)
 const STUCK = 'stuck, not at a red light (10 s inside 5 m)'; // beat 8's criterion
 const DRIFTED = 'drifted (one unbroken spell ≥ 15°, ≥ 0.5 s, ≥ 50% of the turn)'; // beat 7's criterion
 const PATH_STEP = 0.25; // m between the points of the run's path
@@ -234,6 +235,18 @@ const BREAKS = [
   // (Codex 2026-11-03 #10: a grazing sideswipe, under the impact report's 0.5 m/s and gone before the record, that only
   // the contact hook sees)
   { beat: 6, name: 'a grazing sideswipe only the contact hook saw', layouts: BOTH, criterion: 'traffic contacts', apply: (tr) => { const f = tr.frames.find((q) => q.phase === 'escape' && q.v > 25); tr.events.push({ kind: 'touch-traffic', t: f.t, x: f.x, z: f.z, depth: 0.004, closing: 0.2, mph: 60, phase: 'escape' }); } },
+  // (Codex round 1: the way out reaching 50 mph well before the show's escape phase, a contact and a kerb in between)
+  { beat: 6, name: 'a contact and a kerb between 50 mph and the escape phase', layouts: BOTH, criterion: 'traffic contacts', apply: (tr) => {
+    const escape = tr.frames.filter((f) => f.phase === 'escape');
+    // (the powering out held on 3 s into the run; 50 mph comes ~1.2 s into it)
+    const late = escape.filter((f) => f.t < escape[0].t + 3);
+    for (const f of late) Object.assign(f, { phase: 'donuts', dp: 'powerOut' });
+    const start = tr.frames.find((f) => f.phase === 'escape').t;
+    for (const e of tr.events) if (e.kind === 'path' || (e.kind === 'phase' && e.to === 'escape')) e.t = start;
+    const gap = late[Math.floor(late.length * 0.85)];
+    gap.x += 13;
+    tr.events.push({ kind: 'touch-traffic', t: gap.t, x: gap.x, z: gap.z, depth: 0.01, closing: 0.3, mph: 60, phase: 'donuts' });
+  } },
   { beat: 6, name: '7th Ave at 60 mph', apply: (tr) => { for (const f of tr.frames.filter((q) => q.phase === 'escape' && q.z < streetZ(42) - 20 && q.z > COP.z)) { const k = Math.min(1, 26.8 / Math.max(1, Math.hypot(f.v, f.vx, f.vz))); f.v *= k; f.vx *= k; f.vz *= k; } } },
   { beat: 6, name: 'no splits', layouts: BOTH, apply: (tr) => { tr.events = tr.events.filter((e) => e.kind !== 'split'); } },
   // (Codex 2026-11-03 #8's false passes, kept as breaks: passes scored off the 7th Ave stretch, a detour off its
@@ -248,12 +261,18 @@ const BREAKS = [
   { beat: 7, name: 'every corner\'s slide broken every 0.2 s', criterion: DRIFTED, apply: (tr) => slipNearCorners(tr, (near) => { near.forEach((f, i) => { if (Math.floor((i * DT) / 0.2) % 2) f.slip = 0; }); }) },
   { beat: 7, name: 'every corner gripped round, sideways only once out of it', criterion: DRIFTED, apply: (tr) => slipNearCorners(tr, (near, c) => { near.forEach((f) => { const past = (f.x - c[0]) * Math.sin(f.h) + (f.z - c[1]) * Math.cos(f.h); f.slip = past > 12 ? -CORNER_SLIP : 0; }); }) },
   { beat: 7, name: 'the route turns where the car drives straight on', criterion: 'turns completed', apply: (tr) => { const p = tr.events.find((e) => e.kind === 'path'); p.points.splice(2, 0, [avenueX('7'), streetZ(44)], [avenueX('7') + 60, streetZ(44)], [avenueX('7'), streetZ(44) + 1]); } },
+  // (Codex round 1: a corner never come within 25 m of was left out of the beat, not failed)
+  { beat: 7, name: 'a corner never come within 25 m of', layouts: BOTH, criterion: 'corners missed (never within 25 m, the route beyond them driven)', apply: (tr) => { const c = tr.events.find((e) => e.kind === 'path').points[3]; tr.frames = tr.frames.filter((f) => Math.hypot(f.x - c[0], f.z - c[1]) >= 26); } },
   { beat: 7, name: 'a corner cut over the pavement', apply: (tr) => shiftWhere(tr, (f) => Math.hypot(f.x - avenueX('8'), f.z - (streetZ(57) - 3.5)) < 25, 11, 11) },
   // (2026-11-03: a wait at a red light is not stuck, standing on a green is; both still count as stopped)
   { beat: 8, name: 'stuck 15 s on a green light', criterion: STUCK, apply: (tr) => stall(tr, 15, 'green') },
-  { beat: 8, name: 'a 25 s wait at a red light (not stuck; stopped too long)', criterion: STUCK, criterionPasses: true, apply: (tr) => stall(tr, 25, 'red') },
+  { beat: 8, name: 'a 25 s wait in a red light\'s queue (not stuck; stopped too long)', criterion: STUCK, criterionPasses: true, apply: (tr) => stall(tr, 25, 'red', true) },
+  // (Codex round 1: standing mid-block, in no queue, while the light happens to be red, is stuck)
+  { beat: 8, name: 'an 11 s stall mid-block during a red, in no queue', criterion: STUCK, apply: (tr) => stall(tr, 11, 'red', false, MID_BLOCK) },
   // (Codex 2026-11-03 #11: any driving key takes over, I hands back; on the handoff show)
   { beat: 9, base: 'handoff', layouts: BOTH, name: 'the AI keeps driving through the player\'s key', criterion: 'the player\'s key (KeyD) wins at once', apply: (tr) => takeoverFrames(tr, (f) => Object.assign(f, { phase: 'escape', pilot: 1, k: 'W' })) },
+  // (Codex round 1: a takeover wiped a contact from before it)
+  { beat: 6, base: 'handoff', name: 'a traffic contact before the takeover', criterion: 'traffic contacts', apply: (tr) => { const take = tr.events.find((e) => e.kind === 'input').t; const f = tr.frames.filter((q) => q.t < take - 1).pop(); tr.events.push({ kind: 'touch-traffic', t: f.t, x: f.x, z: f.z, depth: 0.05, closing: 2, mph: 60, phase: 'escape' }); } },
   { beat: 9, base: 'handoff', name: 'the player\'s key lost for one tick', criterion: 'the player\'s key (KeyD) wins at once', apply: (tr) => takeoverFrames(tr, (f, i) => { if (i === 0) Object.assign(f, { phase: 'escape', pilot: 1, k: 'W' }); }) },
   { beat: 9, base: 'handoff', name: 'the AI grabs the wheel back before I', criterion: 'the AI lets go (ticks it still drove, to I)', apply: (tr) => takeoverFrames(tr, (f, i, all) => { if (i === Math.floor(all.length * 0.8)) Object.assign(f, { pilot: 1, k: 'W' }); }) },
   { beat: 9, base: 'handoff', name: 'I does nothing', criterion: 'I: the AI takes the wheel at once', apply: (tr) => { for (const f of handbackFrames(tr)) Object.assign(f, { phase: 'off', pilot: 0, k: '' }); tr.events = tr.events.filter((e) => !(e.kind === 'path' && e.t > handbackAt(tr))); } },
@@ -334,12 +353,14 @@ function retime(tr) {
 
 // The car standing still for `seconds` in the middle of its roam (frames inserted, the rest of the run later). With
 // `light` ('red' | 'green'), the city's signal clock is logged too, set so the car's own light (an avenue's or a
-// street's, by its heading) turns green 2 s before it goes again ('red'), or is green the whole stop ('green').
-function stall(tr, seconds, light = null) {
+// street's, by its heading) turns green 2 s before it goes again ('red'), or is green the whole stop ('green'); with
+// `queued`, the AI's planner sees a queue ahead the whole stop. `share`: how far down the roam (the middle: 9th Ave, 21 m
+// short of 49th St; 0.47: mid-block, ~60 m short of it).
+function stall(tr, seconds, light = null, queued = false, share = 0.5) {
   const roamStart = tr.frames.findIndex((f) => f.phase === 'swim');
-  const at = roamStart + Math.floor((tr.frames.length - roamStart) / 2);
+  const at = roamStart + Math.floor((tr.frames.length - roamStart) * share);
   const still = tr.frames[at];
-  const inserted = Array.from({ length: Math.round(seconds / DT) }, () => ({ ...still, v: 0, vx: 0, vz: 0, slip: 0, k: '' }));
+  const inserted = Array.from({ length: Math.round(seconds / DT) }, () => ({ ...still, v: 0, vx: 0, vz: 0, slip: 0, k: '', queued: queued ? 1 : 0 }));
   tr.frames.splice(at, 0, ...inserted);
   retime(tr);
   if (!light) return;
