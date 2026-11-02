@@ -389,6 +389,9 @@ function wrapAngle(angle) {
 
 // A police SUV: drift physics with less power than the M5, so it can chase but not catch
 const COP_DRIFT = { ...M5_DRIFT, mass: 2250, yawInertia: 4300, power: 420000, peakTorque: 650, launchGrip: 1.6, topSpeed: 46 };
+const COP_PILOT = { cruiseSpeed: 34, cornerSpeed: 12, lanes: 1, model: COP_DRIFT };
+// The cruiser's own state, as made (park() drops whatever its physics added since)
+const COP_STATE = ['position', 'heading', 'speed', 'vx', 'vz', 'angularVel', 'steerAngle', 'longAccel', 'drift'];
 const COP_PAINT = new THREE.Color(0xf6f9fc);
 
 // Two-tone wail: a square wave sweeping up and down through a low-pass, in the city's audio mix
@@ -469,7 +472,7 @@ class PoliceCruiser {
       position: new THREE.Vector3(), heading: 0, speed: 0, vx: 0, vz: 0, angularVel: 0, steerAngle: 0, longAccel: 0,
       drift: { slipAngle: 0, rearSlide: 0, wheelspin: 0, steer: 0, loadFront: 0, loadRear: 0, lateralAccel: 0 }
     };
-    this.pilot = new DriftAutopilot({ cruiseSpeed: 34, cornerSpeed: 12, lanes: 1, model: COP_DRIFT });
+    this.pilot = new DriftAutopilot(COP_PILOT);
     this.driver = new KeyboardDriver(KEYBOARD_DRIVER, COP_DRIFT);
     this.holdBrake = 0;
     this.state = 'hidden'; // 'hidden' | 'parked' | 'chasing' | 'stopping'
@@ -482,11 +485,17 @@ class PoliceCruiser {
     this._b = {};
   }
 
+  // Parked at (x, z) as a cop fresh from the station: nothing of an earlier chase carries over (its driving, its
+  // gearbox, its route), so a run the cop is in plays the same whatever it did before (swim-clock.js)
   park(x, z, heading) {
     const c = this.car;
+    for (const key of Object.keys(c)) if (!COP_STATE.includes(key)) delete c[key];
     c.position.set(x, 0, z);
     c.heading = heading;
     c.speed = c.vx = c.vz = c.angularVel = c.steerAngle = c.longAccel = 0;
+    for (const key of Object.keys(c.drift)) c.drift[key] = 0;
+    this.pilot = new DriftAutopilot(COP_PILOT);
+    this.holdBrake = 0;
     Object.assign(this.drawnFrom, { x, z, heading });
     this.rolledX = x;
     this.rolledZ = z;
@@ -621,10 +630,7 @@ class SwimShow {
     this.cruiser = cruiser;
     this.onPhase = onPhase;
     this.onCamera = onCamera; // (preset id) the show cuts between the chase camera and the driver's seat
-    // The avenues are four or five lanes wide: weave across all of them, faster and closer than a driver would
-    this.pilot = new DriftAutopilot({ ...SHOW_SWIMMING, lanes: 2, laneWidth: 2.8 });
-    // One pair of hands for everything the show presses: the swimming, the donuts, backing out (fly)
-    this.hands = this.pilot.hands;
+    this.freshPilot();
     this.phase = 'off';
     this.time = 0;
     this.total = 0;
@@ -634,6 +640,15 @@ class SwimShow {
 
   get running() {
     return this.phase !== 'off';
+  }
+
+  // The swimming AI with nothing on its mind: each time it takes the wheel it starts afresh, so what it does from there
+  // hangs on the run alone (a replay from the run's start does the same, swim-clock.js)
+  freshPilot() {
+    // The avenues are four or five lanes wide: weave across all of them, faster and closer than a driver would
+    this.pilot = new DriftAutopilot({ ...SHOW_SWIMMING, lanes: 2, laneWidth: 2.8 });
+    // One pair of hands for everything the show presses: the swimming, the donuts, backing out (fly)
+    this.hands = this.pilot.hands;
   }
 
   // Called with the car already in Times Square (main.js teleports it to SHOW_SPOT first)
@@ -679,7 +694,9 @@ class SwimShow {
     const c = this.controllers.entities.swim;
     this.controllers.swimPilot = (car, dt, keys, driver) => this.fly(car, dt, keys, driver);
     this.controllers.swimDriver?.reset();
-    this.hands.reset();
+    // (taken from the player, the AI starts afresh; a roam it starts over on its own keeps its mind, as it always did)
+    if (this.phase === 'off') this.freshPilot();
+    else this.hands.reset();
     if (this.phase === 'off') this.playerManual = Boolean(c.manual);
     c.manual = false;
     this.traffic.releaseStaged?.();

@@ -168,10 +168,11 @@ class SwimClock {
   /**
    * Starts a run at the next frame: the traffic and pedestrians laid out again round (x, z), by default where the car
    * is, from `seed` (by default a fresh one). The last call before the frame wins: entering swim mode and then the
-   * show in one key press is the show's run.
+   * show in one key press is the show's run. `elapsed`: the city's clock to start it on (a replay's, as recorded),
+   * by default the clock as it is.
    */
-  startRun({ seed = Math.floor(Math.random() * 2 ** 31), x = null, z = null, reason = 'start' } = {}) {
-    this.pendingRun = { seed, x, z, reason };
+  startRun({ seed = Math.floor(Math.random() * 2 ** 31), x = null, z = null, reason = 'start', elapsed = null } = {}) {
+    this.pendingRun = { seed, x, z, reason, elapsed };
   }
 
   /**
@@ -188,8 +189,7 @@ class SwimClock {
     const car = this.controllers.entities.swim;
     // A run starts on entering the mode, and anew where a teleport put the car
     if (!this.pendingRun && (!this.run || moved(car, this.curr))) this.startRun({ reason: this.run ? 'teleport' : 'start' });
-    if (this.pendingRun) this.beginRun(car, elapsed);
-    this.elapsed = elapsed;
+    this.elapsed = this.pendingRun ? this.beginRun(car, elapsed) : elapsed;
     this.clock.advance(dt, (tick) => {
       capturePose(car, this.prev);
       this.elapsed += tick;
@@ -201,19 +201,20 @@ class SwimClock {
     return this.elapsed;
   }
 
-  // The run starts: the city laid out from its seed, the car drawn where it is
+  // The run starts: the city laid out from its seed, the car drawn where it is. Returns the city's clock it starts on.
   beginRun(car, elapsed) {
     const run = this.pendingRun;
     this.pendingRun = null;
     run.x ??= car.position.x;
     run.z ??= car.position.z;
     run.tick = this.clock.ticks;
-    run.elapsed = elapsed;
+    run.elapsed ??= elapsed;
     this.traffic.reseed?.(run.seed, run.x, run.z);
     this.run = run;
     capturePose(car, this.prev);
     capturePose(car, this.curr);
     this.onRun?.(run, car);
+    return run.elapsed;
   }
 
   // One tick of everything the car's run depends on, in the order the frame loop ran them
