@@ -216,13 +216,24 @@ function beatDonuts(ctx) {
   const startIndex = trace.frames.indexOf(donut[0]);
   const endIndex = trace.frames.indexOf(donut[donut.length - 1]);
   const swept = trace.frames.slice(Math.max(0, startIndex - 1), Math.min(trace.frames.length, endIndex + 2));
+  // (an injected start sweeps from where the injection put the car: the first frame is logged after it has moved)
+  if (startIndex === 0 && trace.meta?.injectedAt) swept.unshift(trace.meta.injectedAt);
+  // (and the measurement's resolution, one frame's sweep: the trace logs a frame after its physics, the donut driver
+  // reads its bearing before, so the two counts of the same laps differ by up to that much either way)
+  // (the typical frame's: the median, so a gap in the trace can't widen it)
+  const steps = [];
   for (const f of swept) {
     const a = Math.atan2(f.x - cop.x, f.z - cop.z);
-    if (last !== null) sweep += wrapAngle(a - last);
+    if (last !== null) {
+      const d = wrapAngle(a - last);
+      sweep += d;
+      steps.push(Math.abs(d));
+    }
     last = a;
   }
   const before = trace.meta?.lapsBefore ?? 0;
   const laps = Math.abs(sweep) / (2 * Math.PI) + before;
+  const lapResolution = (median(steps) ?? 0) / (2 * Math.PI);
   // (the donut driver's own counter at the same frame: a run trace logs it)
   const showLaps = swept[swept.length - 1].laps ?? donut[donut.length - 1].laps ?? null;
   // (a session doesn't log the show's phases: its way out is read back from where the car leaves the circle, which on
@@ -245,7 +256,7 @@ function beatDonuts(ctx) {
   const buildings = donut.filter((f) => (f.bHit ?? 0) > 0);
   const time = span(donut);
   const criteria = [
-    criterion('laps round the cop', `${fmt(laps, 3)}${before ? ` (incl. ${fmt(before, 2)} before the injection)` : ''}${showLaps === null ? '' : `; the show's own count ${fmt(showLaps, 3)}`}${readBack ? ` (way out read back from the driving: up to ${T.sessionLapSlack} too many)` : ''}`, laps >= T.donutLaps + (readBack ? T.sessionLapSlack : 0), `≥ ${T.donutLaps}${readBack ? ` + ${T.sessionLapSlack}` : ''}`),
+    criterion('laps round the cop', `${fmt(laps, 3)} ±${fmt(lapResolution, 3)} (one frame)${before ? ` (incl. ${fmt(before, 2)} before the injection)` : ''}${showLaps === null ? '' : `; the show's own count ${fmt(showLaps, 3)}`}${readBack ? ` (way out read back from the driving: up to ${T.sessionLapSlack} too many)` : ''}`, laps + lapResolution >= T.donutLaps + (readBack ? T.sessionLapSlack : 0), `≥ ${T.donutLaps}${readBack ? ` + ${T.sessionLapSlack}` : ''}`),
     criterion('circle centre off the cop', fmt(offset), offset === null ? null : offset <= T.donutCentre, `≤ ${T.donutCentre}`, ' m'),
     criterion('circle radius', fmt(fit?.r), fit ? fit.r >= T.donutRadiusMin && fit.r <= T.donutRadiusMax : null, `${T.donutRadiusMin}-${T.donutRadiusMax}`, ' m'),
     criterion('off the fitted circle (RMS)', fmt(rms, 2), rms === null ? null : rms <= T.donutFitRms, `≤ ${T.donutFitRms}`, ' m'),

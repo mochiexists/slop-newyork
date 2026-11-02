@@ -51,6 +51,8 @@ async function checkRunDir(runDir, mapFile = null) {
   const run = JSON.parse(readFileSync(join(runDir, 'run.json'), 'utf8'));
   const trace = JSON.parse(readFileSync(join(runDir, 'trace.json'), 'utf8'));
   const map = loadMap(mapFile ?? run.mapFile ?? findMap(runDir));
+  // (where the injection put the car, for traces written before the runner logged it in the trace itself)
+  if (run.injected && !trace.meta.injectedAt) trace.meta.injectedAt = { x: run.injected.x, z: run.injected.z };
   const result = checkTrace(trace, map);
   const failureShots = failureStills(runDir, run, trace, result);
   writeFileSync(join(runDir, 'verdict.json'), JSON.stringify({ ...result, scenario: run.scenario.name, sha: run.sha, failureShots }, null, 1));

@@ -234,7 +234,7 @@ async function runScenario(scenario, { outDir, port, repo, mapDir }) {
     for (let from = 0; from < head.frames; from += TRACE_SLICE) traceFrames.push(...(await page.evaluate(readTrace, { from, count: TRACE_SLICE })));
     const trace = {
       source: 'run', label: scenario.name, cop: probe.cop, showSpot: probe.showSpot, frames: traceFrames, events: head.events,
-      meta: { sha, profile: scenario.profile, trafficSeed: scenario.trafficSeed, seed: scenario.seed, warmup: scenario.warmup, injected: scenario.inject ? scenario.inject.label : null, lapsBefore: scenario.inject ? (scenario.inject.swept ?? 0) / (2 * Math.PI) : 0 }
+      meta: { sha, profile: scenario.profile, trafficSeed: scenario.trafficSeed, seed: scenario.seed, warmup: scenario.warmup, injected: scenario.inject ? scenario.inject.label : null, injectedAt: run.injected ? { x: run.injected.x, z: run.injected.z } : null, lapsBefore: scenario.inject ? (scenario.inject.swept ?? 0) / (2 * Math.PI) : 0 }
     };
     writeFileSync(join(runDir, 'trace.json'), JSON.stringify(trace));
     run.frames = traceFrames.length;
