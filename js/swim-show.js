@@ -166,9 +166,32 @@ function routeCorridors(route) {
     }
     const centre = (best.cx - mx) * uz - (best.cz - mz) * ux;
     const half = Math.max(1, best.road.w / 2 - CURB_MARGIN);
-    corridors.push({ left: centre + half, right: centre - half, centre: best.road.dir === 'TW' ? centre : null });
+    const corridor = { left: centre + half, right: centre - half, centre: best.road.dir === 'TW' ? centre : null };
+    corridors.push(onCarriageway(corridor, a, ux, uz, length));
   }
   return corridors;
+}
+
+// A corridor narrowed to the carriageway (swim-carriageway.js, the road the corners and the donuts are planned on): the
+// car's body, straight down the leg and grown by CORRIDOR_RESERVE, on the road at either edge every CORRIDOR_STEP m of it
+// (the road data's widths put 7th Ave's west edge 0.2 m from the real curb: at 90 mph its curb polygon's wiggles had the
+// body over it, worker C 2026-11-03). Stretches where the corridor's middle isn't road (the way off the donuts' plaza)
+// don't narrow it.
+const CORRIDOR_RESERVE = 0.4;
+const CORRIDOR_STEP = 5;
+const CORRIDOR_END = 15; // m at each end of a leg left out (the corners, which drift-corner.js fits for itself)
+const CORRIDOR_SHRINK = 0.25; // m an edge is brought in by at a time
+function onCarriageway(corridor, a, ux, uz, length) {
+  const heading = Math.atan2(ux, uz);
+  const fits = (along, lateral) => CARRIAGEWAY.footprintOff(a.x + ux * along + uz * lateral, a.z + uz * along - ux * lateral, heading, CORRIDOR_RESERVE) === 0;
+  const middle = (corridor.left + corridor.right) / 2;
+  let { left, right } = corridor;
+  for (let along = CORRIDOR_END; along <= length - CORRIDOR_END; along += CORRIDOR_STEP) {
+    if (!fits(along, middle)) continue;
+    while (left > middle && !fits(along, left)) left = Math.max(middle, left - CORRIDOR_SHRINK);
+    while (right < middle && !fits(along, right)) right = Math.min(middle, right + CORRIDOR_SHRINK);
+  }
+  return { ...corridor, left, right };
 }
 
 // The opening as the BMW short drives it, on the keys as a player holds them, closed-loop on what the driver sees (how
