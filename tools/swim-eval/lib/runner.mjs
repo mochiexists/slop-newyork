@@ -54,9 +54,13 @@ function rewriteFile(file, body, patches = []) {
     body = body.replace(from, to);
     applied.push(`${file}: ${from}`);
   }
-  for (const { from, to } of patches) {
-    if (body.split(from).length !== 2) throw new Error(`patch of ${file}: "${from}" must match exactly once`);
-    body = body.replace(from, to);
+  // (a patch's `from` is text, or `pattern` a regular expression's source: a constant's line whatever its value, so the
+  // broken build still breaks when the show retunes it)
+  for (const { from, pattern, to } of patches) {
+    const matcher = pattern ? new RegExp(pattern, 'g') : null;
+    const count = matcher ? (body.match(matcher) ?? []).length : body.split(from).length - 1;
+    if (count !== 1) throw new Error(`patch of ${file}: "${pattern ?? from}" must match exactly once (matched ${count})`);
+    body = matcher ? body.replace(matcher, to) : body.replace(from, to);
   }
   return { body, applied };
 }
