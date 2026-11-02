@@ -15,7 +15,9 @@ test.before(async () => {
   config = await import('../js/city-config.js');
   roam = await import('../js/swim-roam.js');
   physics = loadModule(read('js/drift-physics.js'));
-  const autopilot = loadModule(read('js/drift-autopilot.js'), { imports: { './drift-physics.js': physics } });
+  const autopilot = loadModule(read('js/drift-autopilot.js'), {
+    imports: { './drift-physics.js': physics, './drift-corner.js': loadModule(read('js/drift-corner.js')) }
+  });
   show = loadModule(read('js/swim-show.js'), {
     imports: {
       'three/webgpu': { Color: class { constructor() { this.r = this.g = this.b = 1; } } },
@@ -25,7 +27,8 @@ test.before(async () => {
       './drift-physics.js': physics,
       './drift-autopilot.js': autopilot,
       './vehicle-physics.js': {},
-      './swim-roam.js': roam
+      './swim-roam.js': roam,
+      './swim-carriageway.js': await import('../js/swim-carriageway.js')
     }
   });
 });

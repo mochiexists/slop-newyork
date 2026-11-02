@@ -15,6 +15,7 @@ import { KEYBOARD_DRIVER, KeyboardDriver, M5_DRIFT, stepDriftCar } from './drift
 import { DriftAutopilot, Hands, steeringKey, travelHeading } from './drift-autopilot.js';
 import { resolveVehicleContact, vehicleContact } from './vehicle-physics.js';
 import { RoamRoute } from './swim-roam.js';
+import * as CARRIAGEWAY from './swim-carriageway.js';
 
 // The swimming show: the AI takes the car through the reference clips' greatest hits, and keeps driving for as long as
 // the player lets it. Times Square is cleared of traffic, an NYPD cruiser watches with its lights on, the car rolls up
@@ -646,7 +647,8 @@ class SwimShow {
   // hangs on the run alone (a replay from the run's start does the same, swim-clock.js)
   freshPilot() {
     // The avenues are four or five lanes wide: weave across all of them, faster and closer than a driver would
-    this.pilot = new DriftAutopilot({ ...SHOW_SWIMMING, lanes: 2, laneWidth: 2.8 });
+    // (its drifted corners fitted to the carriageway, the road the donuts are planned on: swim-carriageway.js)
+    this.pilot = new DriftAutopilot({ ...SHOW_SWIMMING, lanes: 2, laneWidth: 2.8, road: CARRIAGEWAY });
     // One pair of hands for everything the show presses: the swimming, the donuts, backing out (fly)
     this.hands = this.pilot.hands;
   }

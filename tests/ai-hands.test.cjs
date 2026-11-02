@@ -6,7 +6,9 @@ const { loadModule } = require('./helpers/module.cjs');
 
 const read = (path) => readFileSync(join(__dirname, '..', path), 'utf8');
 const physics = loadModule(read('js/drift-physics.js'));
-const autopilot = loadModule(read('js/drift-autopilot.js'), { imports: { './drift-physics.js': physics } });
+const autopilot = loadModule(read('js/drift-autopilot.js'), {
+    imports: { './drift-physics.js': physics, './drift-corner.js': loadModule(read('js/drift-corner.js')) }
+  });
 const { DriftAutopilot, HANDS, Hands } = autopilot;
 const KEYS = ['forward', 'backward', 'left', 'right', 'handbrake'];
 const EPSILON = 1e-9;

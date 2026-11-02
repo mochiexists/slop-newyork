@@ -17,7 +17,8 @@ test.before(async () => {
       './drift-physics.js': { M5_DRIFT: {} },
       './drift-autopilot.js': {},
       './vehicle-physics.js': {},
-      './swim-roam.js': {}
+      './swim-roam.js': {},
+      './swim-carriageway.js': {}
     }
   });
   swim = loadModule(read('js/swim-mode.js'), {

@@ -6,7 +6,7 @@ const { loadModule } = require('./helpers/module.cjs');
 
 const physics = loadModule(readFileSync(join(__dirname, '../js/drift-physics.js'), 'utf8'));
 const { DriftAutopilot } = loadModule(readFileSync(join(__dirname, '../js/drift-autopilot.js'), 'utf8'), {
-  imports: { './drift-physics.js': physics }
+  imports: { './drift-physics.js': physics, './drift-corner.js': loadModule(readFileSync(join(__dirname, '../js/drift-corner.js'), 'utf8')) }
 });
 
 const FRAME = 1 / 60;
