@@ -29,18 +29,40 @@ const MAIN_HOOKS = [
   ["markInit('traffic');", "markInit('traffic'); globalThis.__evalWorld = { cityGrid, streetDetails, trafficSystem, allColliders };"],
   ['const controllerManager = new ThirdPersonControllerManager(scene, allColliders);',
     'const controllerManager = new ThirdPersonControllerManager(scene, allColliders); globalThis.__evalControllers = controllerManager;'],
-  ['renderer.setAnimationLoop((now) => {', 'globalThis.__clock?.loopStarting(); renderer.setAnimationLoop((now) => {']
+  ['renderer.setAnimationLoop((now) => {', 'globalThis.__clock?.loopStarting(); renderer.setAnimationLoop((now) => {'],
+  // (the cockpit: whether the driver's bird is up and in view, for beat 4)
+  ['const m5Cockpit = setUpSwimCar({', 'const m5Cockpit = globalThis.__evalCockpit = setUpSwimCar({']
 ];
 
-function rewriteMain(body) {
+// And in the game's contact code, a call to the probe with every contact the game accepts, before it pushes the cars
+// apart and whatever its speed (Codex #10: a box overlap sampled after the separation, and the collision report that
+// drops impacts under 0.5 m/s, let a grazing sideswipe through both)
+const GAME_HOOKS = {
+  'js/main.js': MAIN_HOOKS,
+  // traffic.js collideWithPlayer: `pe` the player's car, `v` the vehicle, `hit` the contact (its normal and depth)
+  'js/traffic.js': [['const speed = resolveVehicleContact(a, b, hit);', 'globalThis.__evalTouch?.(pe, v, hit, a, b); const speed = resolveVehicleContact(a, b, hit);']],
+  // swim-show.js PoliceCruiser.collide: `player` the car, `hit` the contact
+  'js/swim-show.js': [['const hit = this._contact;', 'const hit = this._contact; globalThis.__evalCopTouch?.(player, hit);']]
+};
+
+// One served file rewritten: its hooks, then a scenario's patches (each must match exactly once)
+function rewriteFile(file, body, patches = []) {
   const applied = [];
-  for (const [from, to] of MAIN_HOOKS) {
+  for (const [from, to] of GAME_HOOKS[file] ?? []) {
     const count = body.split(from).length - 1;
-    if (count !== 1) throw new Error(`main.js hook "${from}" matched ${count} times (want 1): the game changed under the harness`);
+    if (count !== 1) throw new Error(`${file} hook "${from}" matched ${count} times (want 1): the game changed under the harness`);
     body = body.replace(from, to);
-    applied.push(from);
+    applied.push(`${file}: ${from}`);
+  }
+  for (const { from, to } of patches) {
+    if (body.split(from).length !== 2) throw new Error(`patch of ${file}: "${from}" must match exactly once`);
+    body = body.replace(from, to);
   }
   return { body, applied };
+}
+
+function rewriteMain(body) {
+  return rewriteFile('js/main.js', body);
 }
 
 // The build: the last commit that changed the game (js/, css/, index.html), so a commit that only adds tooling
@@ -96,24 +118,21 @@ async function runScenario(scenario, { outDir, port, repo, mapDir }) {
   page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
   page.on('console', (m) => { if (m.type() === 'error') errors.push(`console: ${m.text().slice(0, 300)}`); });
   await page.addInitScript(clockInit, cfg);
-  let hooks = null;
-  await page.route('**/js/main.js', async (route) => {
-    const response = await route.fetch();
-    const rewritten = rewriteMain(await response.text());
-    hooks = rewritten.applied;
-    await route.fulfill({ response, body: rewritten.body });
-  });
-  // A scratch-patched build (scenario.patches: [{ file: 'js/x.js', from, to }]): text replaced as the page fetches the
-  // file, to see a check fail on a deliberately broken game. Nothing in the repo changes; each must match once.
-  for (const [file, patches] of Object.entries(Object.groupBy(scenario.patches ?? [], (p) => p.file))) {
+  // The hooked files, and a scratch-patched build (scenario.patches: [{ file: 'js/x.js', from, to }]): text replaced as
+  // the page fetches the file, to see a check fail on a deliberately broken game. Nothing in the repo changes.
+  const hooks = new Set();
+  const patchesByFile = Object.groupBy(scenario.patches ?? [], (p) => p.file);
+  for (const file of new Set([...Object.keys(GAME_HOOKS), ...Object.keys(patchesByFile)])) {
     await page.route(`**/${file}`, async (route) => {
       const response = await route.fetch();
-      let body = await response.text();
-      for (const { from, to } of patches) {
-        if (body.split(from).length !== 2) throw new Error(`patch of ${file}: "${from}" must match exactly once`);
-        body = body.replace(from, to);
+      try {
+        const rewritten = rewriteFile(file, await response.text(), patchesByFile[file] ?? []);
+        for (const hook of rewritten.applied) hooks.add(hook);
+        await route.fulfill({ response, body: rewritten.body });
+      } catch (error) {
+        errors.push(`rewrite: ${error.message}`);
+        await route.abort();
       }
-      await route.fulfill({ response, body });
     });
   }
   // The game's flight recorder: its chunks, kept with the run (scored offline as a cross-check)
@@ -134,8 +153,9 @@ async function runScenario(scenario, { outDir, port, repo, mapDir }) {
       if (Date.now() > loadDeadline) throw new Error('the game loop never started');
       await page.waitForTimeout(1000);
     }
-    if (!hooks) throw new Error('main.js was not rewritten');
-    log(runDir, `game loop started after ${((Date.now() - started) / 1000).toFixed(0)} s; hooks: ${hooks.length}`);
+    const wanted = Object.values(GAME_HOOKS).flat().length;
+    if (hooks.size !== wanted) throw new Error(`${hooks.size} of ${wanted} hooks applied: ${errors.filter((e) => e.startsWith('rewrite')).join('; ') || 'a hooked file was never fetched'}`);
+    log(runDir, `game loop started after ${((Date.now() - started) / 1000).toFixed(0)} s; hooks: ${hooks.size}`);
     // The loading screen goes once the GPU has got through the first frame; then the city runs to PRE_P_FRAMES
     let frames = 0;
     while (!(await page.evaluate(() => document.getElementById('loading-overlay')?.classList.contains('hidden')))) {
@@ -222,13 +242,25 @@ async function runScenario(scenario, { outDir, port, repo, mapDir }) {
     const first = await page.evaluate(() => globalThis.__clock.run(1));
     await shoot('p', { t: 0, frame: first.frame });
 
-    // The show, run to the end with a stop for a screenshot at each beat change and contact
+    // The show, run to the end with a stop for a screenshot at each beat change and contact, and at each of the
+    // scenario's key presses (scenario.inputs: [{ t: s since P, key, action: 'down' | 'up' | 'press' }]: a player
+    // taking the wheel mid-show, I to hand it back), each logged in the trace at the moment it lands (between ticks)
+    const inputs = [...(scenario.inputs ?? [])].sort((a, b) => a.t - b.t);
     let simSinceP = 0;
     let lastReport = 0;
     while (simSinceP < scenario.duration) {
-      const result = await page.evaluate((t) => globalThis.__clock.run(Infinity, t), pAt.simTime + scenario.duration);
+      const next = inputs[0];
+      const target = next ? Math.min(next.t, scenario.duration) : scenario.duration;
+      const result = await page.evaluate((t) => globalThis.__clock.run(Infinity, t), pAt.simTime + target);
       simSinceP = result.simTime - pAt.simTime;
       if (result.stop) await shoot(result.stop.label, { t: result.stop.t, frame: result.stop.frame, kind: result.stop.kind });
+      if (next && simSinceP >= next.t) {
+        inputs.shift();
+        await page.evaluate((e) => globalThis.__trace.events.push({ kind: 'input', key: e.key, action: e.action, t: +globalThis.__trace.simT.toFixed(4), frame: globalThis.__clock.loopFrame }), next);
+        await page.keyboard[next.action](next.key);
+        log(runDir, `t ${simSinceP.toFixed(2)} s: ${next.key} ${next.action}`);
+        await shoot(`key-${next.key}-${next.action}`, { t: simSinceP, kind: 'input' });
+      }
       if (simSinceP - lastReport >= 15 || simSinceP >= scenario.duration) {
         lastReport = simSinceP;
         const state = await page.evaluate(() => ({ phase: globalThis.__swim.show.phase, x: globalThis.__swim.car.position.x, z: globalThis.__swim.car.position.z, v: globalThis.__swim.car.speed }));
@@ -269,4 +301,4 @@ async function runScenario(scenario, { outDir, port, repo, mapDir }) {
   return { runDir, run };
 }
 
-export { MAIN_HOOKS, rewriteMain, runScenario };
+export { GAME_HOOKS, MAIN_HOOKS, rewriteFile, rewriteMain, runScenario };

@@ -7,7 +7,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { checkTrace } from './lib/check.mjs';
 import { SwimMap } from './lib/map.mjs';
-import { BREAKS, LAYOUTS, brokenTrace, idealTrace } from './lib/synthetic.mjs';
+import { BREAKS, LAYOUTS, brokenTrace, handoffTrace, idealTrace } from './lib/synthetic.mjs';
 
 const FIXTURE_REACH = 40; // m round the synthetic path that the fixture keeps of the map
 
@@ -19,6 +19,10 @@ function selftest(dump) {
     const ideal = checkTrace(idealTrace(layout), map);
     const idealPass = ideal.beats.every((b) => b.verdict === 'VERIFIED' || b.verdict === 'N/A');
     rows.push({ name: `ideal show, ${layout} St layout (no break)`, beat: '-', expected: 'all VERIFIED', got: ideal.beats.map((b) => `${b.id}:${b.verdict === 'VERIFIED' ? 'V' : b.verdict}`).join(' '), ok: idealPass, why: ideal.beats.filter((b) => b.verdict !== 'VERIFIED' && b.verdict !== 'N/A').map((b) => `${b.id}: ${b.summary}`).join(' | ') });
+    // (and with a player taking the wheel mid-run and handing it back: beat 9 VERIFIED, the beats cut short N/A)
+    const handoff = checkTrace(handoffTrace(layout), map);
+    const handoffPass = handoff.beats[8].verdict === 'VERIFIED' && handoff.beats.every((b) => b.verdict === 'VERIFIED' || b.verdict === 'N/A');
+    rows.push({ name: `ideal handoff, ${layout} St layout (no break)`, beat: 9, expected: '9 VERIFIED, the rest VERIFIED or N/A', got: handoff.beats.map((b) => `${b.id}:${b.verdict === 'VERIFIED' ? 'V' : b.verdict}`).join(' '), ok: handoffPass, why: handoff.beats.filter((b) => b.verdict !== 'VERIFIED' && b.verdict !== 'N/A').map((b) => `${b.id}: ${b.summary}`).join(' | ') });
   }
   const cases = BREAKS.flatMap((brk) => (brk.layouts ?? ['45th']).map((layout) => ({ brk, layout })));
   for (const { brk, layout } of cases) {

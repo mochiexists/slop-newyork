@@ -14,7 +14,7 @@ const MAX_CLOSE_UPS = 12;
 const BEATS = [
   { id: 1, name: 'Start on the road' }, { id: 2, name: 'Slow roll' }, { id: 3, name: 'Floor it' },
   { id: 4, name: 'Donuts round the cop' }, { id: 5, name: 'Drift out, 50 mph' }, { id: 6, name: 'Swim > 70 mph' },
-  { id: 7, name: 'Corners' }, { id: 8, name: 'Endless roam' }
+  { id: 7, name: 'Corners' }, { id: 8, name: 'Endless roam' }, { id: 9, name: 'Takeover, I hands back' }
 ];
 // The path's colour per beat: categorical slots 1-7 in their fixed order (beat 1 is a point, the start, not a stretch)
 const BEAT_SLOT = { 2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 7: 6, 8: 7, 0: 0 };
@@ -282,7 +282,8 @@ const METRICS = [
   { name: 'circle radius', unit: 'm', beat: 4, read: (r) => num(r, 4, 'circle radius'), want: [T.donutRadiusMin, T.donutRadiusMax] },
   { name: 'donut frames off the road', unit: '%', beat: 4, read: (r) => share(r, 4, 'frames on kerb/pavement/plaza'), want: [null, 0] },
   { name: 'time to 50 mph', unit: 's', beat: 5, read: (r) => num(r, 5, 'time to 50 mph'), want: [null, T.exitTime] },
-  { name: 'top speed on 7th Ave', unit: 'mph', beat: 6, read: (r) => num(r, 6, 'top speed on 7th Ave'), want: [T.swimMph, null] },
+  { name: 'top speed on 7th Ave', unit: 'mph', beat: 6, read: (r) => num(r, 6, 'top speed on 7th Ave'), want: [null, null] },
+  { name: `held ≥ ${T.swimMph} mph on 7th Ave`, unit: 's', beat: 6, read: (r) => r.beats[5].held ?? null, want: [T.swimHold, null] },
   { name: 'traffic contacts', unit: '', beat: 6, read: (r) => num(r, 6, 'traffic contacts'), want: [null, 0] },
   { name: 'roam stopped', unit: '%', beat: 8, read: (r) => (r.beats[7].stoppedShare ?? null) === null ? null : r.beats[7].stoppedShare * 100, want: [null, T.stoppedShare * 100] }
 ];

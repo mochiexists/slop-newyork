@@ -5,8 +5,10 @@
 //                  handed timestamps from the scenario's frame-time profile, and once main.js starts its loop the clock
 //                  only moves when the runner lets it (run), frame by frame, so key presses, the P press and the
 //                  screenshots land on exact frames whatever the headless browser's real frame rate.
-//   installProbe   once the city is up: the per-frame trace (the car, the show, the cop, keys, contacts), wrapped
-//                  round the game's own objects without changing what they do, plus the stop points for screenshots.
+//   installProbe   once the city is up: the per-frame trace (the car, the show, the cop, keys, contacts, the bird),
+//                  wrapped round the game's own objects without changing what they do, plus the stop points for
+//                  screenshots. Contacts come from hooks the runner writes into traffic.js and swim-show.js as they
+//                  are served (runner.mjs GAME_HOOKS), called with every contact the game accepts.
 //   dumpMap        the game's own geometry round Midtown, for the checker's road / pavement / plaza / building map.
 //   injectState    a scenario's start state, written once at the P frame (before the beat, never during it).
 //   readTrace      the trace, in slices (it is too big for one evaluate on a long run).
@@ -116,7 +118,8 @@ async function installProbe(cfg) {
   const cruiser = d.cruiser;
   // (t0: the simTime of the P frame, set by the runner as it starts recording: every t in the trace is s since P)
   const trace = globalThis.__trace = { frames: [], events: [], recording: false, t0: 0 };
-  const acc = { building: 0, buildingDepth: 0, cop: 0, copDepth: 0, traffic: 0, trafficSpeed: 0 };
+  const acc = { building: 0, buildingDepth: 0, cop: 0, copDepth: 0, traffic: 0, trafficSpeed: 0, touch: 0 };
+  const cockpit = globalThis.__evalCockpit;
   // (s since P, of the sim's own steps: a frame on a fixed-clock build, 2771a69 on, steps 0-n ticks, and every event
   // and record is stamped with the tick it happens in. simT is added to at the start of each step, the runner zeroes it
   // at P.)
@@ -156,16 +159,32 @@ async function installProbe(cfg) {
     return result;
   };
 
-  // The cop: the cruiser's own contact resolution with the car
-  const collide = cruiser.collide.bind(cruiser);
-  cruiser.collide = (player) => {
-    const x = player.position.x, z = player.position.z;
-    collide(player);
-    const moved = Math.hypot(player.position.x - x, player.position.z - z);
-    if (moved > 1e-4) {
-      acc.cop++;
-      acc.copDepth = Math.max(acc.copDepth, moved);
-    }
+  // The cop: every contact the cruiser's collide accepts with the car, before it pushes them apart (swim-show.js hook)
+  globalThis.__evalCopTouch = (player, hit) => {
+    if (player !== car) return;
+    acc.cop++;
+    acc.copDepth = Math.max(acc.copDepth, hit.depth ?? 0);
+  };
+
+  // Traffic: every contact traffic.js's collideWithPlayer accepts, before the correction moves the cars apart and
+  // whatever the impact speed (traffic.js hook; Codex #10). One event per touch: a vehicle touched again within
+  // TOUCH_MERGE s is the same touch going on.
+  const TOUCH_MERGE = 0.05; // s
+  const lastTouch = new Map();
+  globalThis.__evalTouch = (pe, v, hit, a, b) => {
+    if (pe !== car || !trace.recording) return;
+    acc.touch++;
+    const before = lastTouch.get(v);
+    lastTouch.set(v, trace.simT);
+    if (before !== undefined && trace.simT - before <= TOUCH_MERGE) return;
+    // (closing speed along the contact normal, which points from the vehicle toward the car: + is coming together)
+    const closing = -((a.vx - b.vx) * hit.nx + (a.vz - b.vz) * hit.nz);
+    trace.events.push({
+      kind: 'touch-traffic', t: now(), frame: clock.loopFrame, depth: +(hit.depth ?? 0).toFixed(3), closing: +closing.toFixed(2),
+      mph: Math.round(Math.abs(car.speed) * 2.237), x: +car.position.x.toFixed(2), z: +car.position.z.toFixed(2), bus: !!v.bus,
+      staged: !!v.staged, phase: show.phase
+    });
+    incident('touch-traffic');
   };
 
   // Traffic: the game's own collision reports (impacts over 0.5 m/s), chained in front of whatever listens already
@@ -246,6 +265,8 @@ async function installProbe(cfg) {
   const COP_HALF = [1.0, 2.4]; // swim-show.js PoliceCruiser.collide
   const NEAR = 14;
   const touching = new Set();
+  const BIRD_UP = 0.9; // the cockpit's bird amount (0-1) that is the hand out of the window: a screenshot the first time
+  let birdShot = false;
   let lastPath = null;
   let lastPathLength = 0;
 
@@ -282,7 +303,7 @@ async function installProbe(cfg) {
   function record(dt) {
     // (before P, a warm-up's pushes and impacts are dropped tick by tick: they'd land on the first frame of the show)
     if (!trace.recording) {
-      acc.building = acc.buildingDepth = acc.cop = acc.copDepth = acc.traffic = acc.trafficSpeed = 0;
+      acc.building = acc.buildingDepth = acc.cop = acc.copDepth = acc.traffic = acc.trafficSpeed = acc.touch = 0;
       return;
     }
     const c = car;
@@ -333,7 +354,17 @@ async function installProbe(cfg) {
       lastPathLength = p.path.length;
       trace.events.push({ kind: 'path', t: now(), frame: clock.loopFrame, points: p.path.map((q) => [+q.x.toFixed(1), +q.z.toFixed(1)]) });
     }
-    const k = `${keys.forward ? 'W' : ''}${keys.backward ? 'S' : ''}${keys.left ? 'A' : ''}${keys.right ? 'D' : ''}${keys.handbrake ? 'H' : ''}`;
+    const keyString = (q, handbrake) => `${q.forward ? 'W' : ''}${q.backward ? 'S' : ''}${q.left ? 'A' : ''}${q.right ? 'D' : ''}${q[handbrake] ? 'H' : ''}`;
+    // (the keys the car got this tick, and the player's own: the AI presses its keys in the player's place)
+    const k = keyString(keys, 'handbrake');
+    const pk = keyString(cm.keys ?? {}, 'up');
+    // The bird: how far up the driver's hand is (m5-cockpit.js birdAmount) and whether the arms are drawn at all
+    const bird = cockpit ? +(cockpit.birdAmount ?? 0).toFixed(2) : null;
+    const birdSeen = cockpit ? (cockpit.arms?.visible && cockpit.driver?.group?.visible ? 1 : 0) : null;
+    if (bird !== null && bird >= BIRD_UP && !birdShot && cfg.snapBeats) {
+      birdShot = true;
+      clock.stop = clock.stop ?? { kind: 'beat', label: 'bird-up', frame: clock.loopFrame, t: now() };
+    }
     trace.frames.push({
       f: clock.loopFrame, t: now(), dt: +dt.toFixed(5), wall: Date.now(),
       phase: show.phase, dp: show.donut?.phase ?? null, laps: show.donut ? +show.donut.laps.toFixed(3) : null,
@@ -345,9 +376,13 @@ async function installProbe(cfg) {
       ch: +cop.heading.toFixed(3), cs: cruiser.state, copGap: copGap === null ? null : +copGap.toFixed(3),
       tGap: Number.isFinite(trafficGap) ? +trafficGap.toFixed(3) : null, tHit: overlapping,
       bHit: acc.building, copHit: acc.cop,
-      seg: p.segment, rev: show.reversing > 0 ? 1 : 0, queued: p.queued ? 1 : 0, cam: c.cameraYawOverride === null || c.cameraYawOverride === undefined ? 0 : 1
+      seg: p.segment, rev: show.reversing > 0 ? 1 : 0, queued: p.queued ? 1 : 0, cam: c.cameraYawOverride === null || c.cameraYawOverride === undefined ? 0 : 1,
+      pk, pilot: cm.swimPilot ? 1 : 0, touch: acc.touch, bird, birdSeen, showBird: c.showBird ? 1 : 0,
+      pov: cockpit ? (cockpit.interior?.visible ? 1 : 0) : null,
+      // (the city's clock, which runs the signals: city-config.js signalPhase)
+      sig: fixedClock ? +swimClock.elapsed.toFixed(3) : null
     });
-    acc.building = acc.buildingDepth = acc.cop = acc.copDepth = acc.traffic = acc.trafficSpeed = 0;
+    acc.building = acc.buildingDepth = acc.cop = acc.copDepth = acc.traffic = acc.trafficSpeed = acc.touch = 0;
   }
   // (the show's own fixed points, which the checker judges by: where the cop parks, where the car starts, the run)
   const route = (showModule.ESCAPE_ROUTE ?? []).map((q) => ({ x: q.x, z: q.z }));
