@@ -259,70 +259,112 @@ class CornerDriver {
   }
 
   // The choice for this moment (re-weighed every decideEvery): { wheel (share of lock, + left as the driver's steer),
-  // forward (W), handbrake }
+  // forward (W), handbrake }. The weighing for the next moment is spread over the frames up to it, from where the
+  // choice it holds meanwhile takes the car (played ahead on the same copies: the car's own physics, so where it will
+  // be): weighed all at once, its 20-30 choices × 1.2 s took 100-170 ms in one frame, every 0.1 s round a corner
+  // (offline, 2026-11-03; Codex round 1).
   update(car, dt, driver, hands, path, speed, obstacles = []) {
+    const o = this.o;
     this.speed = speed; // m/s the corner is planned at
     this.obstacles = obstacles;
     this.sinceChoice += dt;
-    if (!this.choice || this.sinceChoice >= this.o.decideEvery - 1e-9) {
-      this.choice = this.choose(car, driver, hands, path, dt);
+    if (!this.choice) {
+      // (the first moment, the turn-in: the wheel into the turn on W while the first weighing runs)
+      this.choice = { cost: 0, wheel: path.into, forward: 1, brake: 0, handbrake: 0 };
       this.sinceChoice = 0;
+      this.startWeighing(car, driver, hands, path, dt);
+    } else if (this.sinceChoice >= o.decideEvery - 1e-9) {
+      this.weigh(path, Infinity);
+      this.choice = this.weighing.best ?? this.choice;
+      this.sinceChoice = 0;
+      this.startWeighing(car, driver, hands, path, dt);
+    } else {
+      const left = Math.max(1, Math.round((o.decideEvery - this.sinceChoice) / dt));
+      this.weigh(path, Math.ceil((this.weighing.choices.length - this.weighing.next) / left));
     }
     return this.choice;
   }
 
-  choose(car, driver, hands, path, frame) {
+  // Plays the choice it holds on from here to the next moment (where the car will be then), and lists the choices
+  // to weigh from there
+  startWeighing(car, driver, hands, path, frame) {
     const o = this.o;
-    const { stepDriftCar, steeringKey, Hands } = this.tools;
-    const model = driver.model;
-    const base = this._base = snapshotCar(car, this._base);
-    const sim = this._sim ??= snapshotCar(car);
-    sim.drift ??= {};
-    const keys = this._keys ??= { forward: 0, backward: 0, left: 0, right: 0, handbrake: 0 };
-    const simHands = this._simHands ??= new Hands();
-    const telemetry = this._telemetry ??= {};
-    const frames = Math.max(1, Math.round(o.horizon / frame));
-    const substeps = Math.max(1, Math.round(frame / o.physicsStep));
-    const step = frame / substeps;
-    const into = path.into;
+    const w = this.weighing ??= { choices: [], next: 0, best: null };
+    const ticks = Math.max(1, Math.round(o.decideEvery / frame));
+    w.frame = frame;
+    w.offset = ticks * frame; // s from now to that moment (the traffic is flown on that much further)
+    const start = this._base = snapshotCar(car, this._base);
+    const ahead = this._ahead ??= snapshotCar(car);
+    ahead.drift ??= {};
+    restoreCar(start, ahead);
+    this._aheadDriver = copyDriver(driver, this._aheadDriver);
+    const aheadHands = this._aheadHands ??= new this.tools.Hands();
+    aheadHands.copyFrom(hands);
+    this.play(ahead, this._aheadDriver, aheadHands, this.choice, ticks, frame);
     // (the cars near enough to matter, with their velocities)
     const near = this._near ??= [];
     near.length = 0;
     for (const ob of this.obstacles ?? []) {
-      const dx = ob.x - car.position.x, dz = ob.z - car.position.z;
+      const dx = ob.x - ahead.position.x, dz = ob.z - ahead.position.z;
       if (dx * dx + dz * dz > o.trafficReach * o.trafficReach || dx * dx + dz * dz < 2.25) continue;
       const yaw = ob.yaw ?? 0;
       near.push({ x: ob.x, z: ob.z, yaw, vx: Math.sin(yaw) * (ob.speed || 0) + (ob.vx || 0), vz: Math.cos(yaw) * (ob.speed || 0) + (ob.vz || 0), half: ob.half ?? 2.3, halfWidth: ob.halfWidth ?? 0.95 });
     }
     // (on the way in: the handbrake to flick it, and the brake)
-    const now = path.locate(car.position.x, car.position.z);
-    const entering = now.phase === 'entry' || (now.phase === 'arc' && now.progress < o.kickShare);
+    const then = path.locate(ahead.position.x, ahead.position.z);
+    const entering = then.phase === 'entry' || (then.phase === 'arc' && then.progress < o.kickShare);
     const handbrakes = o.fromTurnIn && entering ? o.kickHandbrakes : o.handbrakes;
-    const pedals = o.fromTurnIn && now.phase === 'entry' ? PEDALS_IN : PEDALS;
-    let best = null;
+    const pedals = o.fromTurnIn && then.phase === 'entry' ? PEDALS_IN : PEDALS;
+    w.choices.length = 0;
     for (const wheel of o.wheels) for (const pedal of pedals) for (const handbrake of handbrakes) {
-      const forward = pedal === 'W' ? 1 : 0;
-      const brake = pedal === 'S' ? 1 : 0;
-      restoreCar(base, sim);
-      const simDriver = this._simDriver = copyDriver(driver, this._simDriver);
-      simHands.copyFrom(hands);
-      let cost = 0;
-      for (let f = 0; f < frames; f++) {
-        const t = f * frame;
-        const key = steeringKey(simDriver, wheel * into, sim.speed, frame, simHands);
-        keys.left = key > 0 ? 1 : 0;
-        keys.right = key < 0 ? 1 : 0;
-        keys.forward = t < o.pedalTime ? forward : 1;
-        keys.backward = t < o.pedalTime && brake && sim.speed > 1 ? 1 : 0;
-        if (keys.backward) keys.forward = 0;
-        keys.handbrake = t < o.decideEvery ? handbrake : 0;
-        const input = simDriver.update(sim, simHands.press(keys, frame), frame);
-        for (let i = 0; i < substeps; i++) stepDriftCar(sim, input, step, model, telemetry);
-        cost += this.cost(sim, path, f, (f + 1) * frame);
-      }
-      if (!best || cost < best.cost) best = { cost, wheel: wheel * into, forward, brake, handbrake };
+      w.choices.push({ cost: 0, wheel: wheel * path.into, forward: pedal === 'W' ? 1 : 0, brake: pedal === 'S' ? 1 : 0, handbrake });
     }
-    return best;
+    w.next = 0;
+    w.best = null;
+  }
+
+  // Weighs up to `count` more of the listed choices: each played horizon s ahead from where the car will be
+  weigh(path, count) {
+    const o = this.o;
+    const w = this.weighing;
+    if (!w) return;
+    const sim = this._sim ??= snapshotCar(this._ahead);
+    sim.drift ??= {};
+    const simHands = this._simHands ??= new this.tools.Hands();
+    const frames = Math.max(1, Math.round(o.horizon / w.frame));
+    for (let n = 0; n < count && w.next < w.choices.length; n++) {
+      const choice = w.choices[w.next++];
+      restoreCar(this._ahead, sim);
+      this._simDriver = copyDriver(this._aheadDriver, this._simDriver);
+      simHands.copyFrom(this._aheadHands);
+      choice.cost = this.play(sim, this._simDriver, simHands, choice, frames, w.frame, path, w.offset);
+      if (!w.best || choice.cost < w.best.cost) w.best = choice;
+    }
+  }
+
+  // Plays `choice` for `frames` frames on the copies (sim, its driver and hands); with a path, returns its cost
+  play(sim, simDriver, simHands, choice, frames, frame, path = null, offset = 0) {
+    const o = this.o;
+    const { stepDriftCar, steeringKey } = this.tools;
+    const keys = this._keys ??= { forward: 0, backward: 0, left: 0, right: 0, handbrake: 0 };
+    const telemetry = this._telemetry ??= {};
+    const substeps = Math.max(1, Math.round(frame / o.physicsStep));
+    const step = frame / substeps;
+    let cost = 0;
+    for (let f = 0; f < frames; f++) {
+      const t = f * frame;
+      const key = steeringKey(simDriver, choice.wheel, sim.speed, frame, simHands);
+      keys.left = key > 0 ? 1 : 0;
+      keys.right = key < 0 ? 1 : 0;
+      keys.forward = t < o.pedalTime ? choice.forward : 1;
+      keys.backward = t < o.pedalTime && choice.brake && sim.speed > 1 ? 1 : 0;
+      if (keys.backward) keys.forward = 0;
+      keys.handbrake = t < o.decideEvery ? choice.handbrake : 0;
+      const input = simDriver.update(sim, simHands.press(keys, frame), frame);
+      for (let i = 0; i < substeps; i++) stepDriftCar(sim, input, step, simDriver.model, telemetry);
+      if (path) cost += this.cost(sim, path, f, offset + (f + 1) * frame);
+    }
+    return cost;
   }
 
   // The cost of one look-ahead frame's pose
