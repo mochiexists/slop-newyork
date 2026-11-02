@@ -114,6 +114,9 @@ const PULL_ROUND_PAST = -2; // m past the tail of what it is stopped behind (- s
 const UNSTICK_ALIGNED = 5 * RAD; // to within this
 const PULL_ROUND_AFTER = 0.6; // s stopped behind something with a way round it before it backs out to pull round,
 const PULL_ROUND_TIME = 1.5; // ...backing out this long at most, the wheel turned to swing the nose toward the way round
+const REVERSE_LOCK_SET = 0.5; // rad of the wheels' lock (0.62 standing) the way it checked before it backs out,
+const REVERSE_WHEEL_SET = 0.1; // ...or within this of straight, backing straight out
+const REVERSE_WHEEL_WAIT = 1; // s it waits for the wheels, at most (the clock it backs out by starts once they are set)
 const MAX_PULL_ROUND_TRIES = 2; // tries at pulling round before it backs straight out instead (the way round may be a
 // gap it can't actually fit through, and it would swing at it forever)
 const REROUTE_SEED_STEP = 101; // each reroute's roam seed on from the show's (ROAM_SEED), so a run replays its reroutes
@@ -1152,16 +1155,23 @@ class SwimShow {
   unstick(car, dt, keys) {
     const recovery = this.recovery ??= new Recovery();
     if (this.reversing > 0) {
-      this.reversing -= dt;
-      // (the nose swung toward the point beside the tail of what it is stuck behind, or the wheel it checked the way
-      // back with)
+      const steer = this.reverseSteer ?? 0;
+      // (S only once the wheels are turned the way it checked: from the other lock they take 0.4 s to come round, and
+      // the hands a moment more, and backing meanwhile swung the tail the unchecked way into a car)
+      this.wheelSet ||= steer === 0 ? Math.abs(car.steerAngle) < REVERSE_WHEEL_SET : steer * car.steerAngle > REVERSE_LOCK_SET;
+      if (this.wheelSet) this.reversing -= dt;
+      else {
+        this.wheelWait += dt;
+        if (this.wheelWait > REVERSE_WHEEL_WAIT) this.reversing = 0;
+      }
+      // (always the wheel it checked the way back with: pulling round, that is the one swinging the nose toward the point
+      // beside the tail of what it is stuck behind. Steered by the pull instead, it backed round a way it never checked:
+      // fresh-s4-30 on 9f70d21 swung its tail to 0.2 m off a car and stood there 88 s; Codex 2026-11-03 round 1)
       const pulling = this.roundLine !== null;
-      let steer = this.reverseSteer ?? 0;
       if (pulling) {
         const error = wrapAngle(Math.atan2(this.pullPoint.x - car.position.x, this.pullPoint.z - car.position.z) - car.heading);
         // Pulling round, it backs out only until the nose points past it: then it drives round
         if (Math.abs(error) < UNSTICK_ALIGNED) this.reversing = 0;
-        steer = Math.abs(error) > UNSTICK_ALIGNED ? -Math.sign(error) : 0;
       }
       // ...and no further than the way back it found clear, counting the roll it still has to stop (let go at the
       // length itself, the car rolled on 0.6 m into the car behind)
@@ -1173,7 +1183,7 @@ class SwimShow {
         this.pilot.forgetPlans();
         if (pulling) this.pilot.pullRound(this.roundLine, this.pullPoint);
       }
-      const back = this.reversing > 0 && car.speed > -RECOVERY.reverseSpeed ? 1 : 0;
+      const back = this.reversing > 0 && this.wheelSet && car.speed > -RECOVERY.reverseSpeed ? 1 : 0;
       Object.assign(keys, { forward: 0, backward: back, left: steer > 0 ? 1 : 0, right: steer < 0 ? 1 : 0, handbrake: 0 });
       return;
     }
@@ -1209,12 +1219,16 @@ class SwimShow {
       const wanted = Math.abs(error) > UNSTICK_ALIGNED ? -Math.sign(error) : 0;
       const way = chooseReverse(car, wanted, this.obstacles, CARRIAGEWAY);
       if (!way) return;
-      this.roundLine = round === null ? null : round.line;
-      this.pullPoint = round === null ? null : aim;
+      // (pulling round only if the way back that swings the nose toward it is the clear one: else straight back out)
+      const pull = round !== null && way.steer === wanted;
+      this.roundLine = pull ? round.line : null;
+      this.pullPoint = pull ? aim : null;
       this.reverseSteer = way.steer;
+      this.wheelSet = false;
+      this.wheelWait = 0;
       this.reverseFrom = { x: car.position.x, z: car.position.z };
-      this.reverseLength = round === null ? way.distance : Math.min(way.distance, RECOVERY.reverseDistance);
-      this.reversing = round === null ? REVERSE_TIME * MAX_REVERSE_TRIES : PULL_ROUND_TIME;
+      this.reverseLength = way.distance;
+      this.reversing = pull ? PULL_ROUND_TIME : REVERSE_TIME * MAX_REVERSE_TRIES;
       recovery.state = 'reverse';
     }
   }

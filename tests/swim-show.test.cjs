@@ -485,6 +485,31 @@ test('stopped right behind a bus at its stop, the AI backs out at an angle and p
   assert.ok(reversing < 2.5, `backing out ${reversing.toFixed(1)} s in all`);
 });
 
+test('stopped behind a bus with a car behind its tail on the side pulling round would swing it, the AI never backs into that car', () => {
+  // (the bus scene above, and a car standing off its tail on the right: backing with the nose swung left, toward the
+  // free lanes, swings the tail right into it. fresh-s4-30 on 9f70d21 backed round that way unchecked, ended 0.2 m off a
+  // car and stood there 88 s)
+  const { vehicleContact } = loadModule(read('js/vehicle-physics.js'));
+  const car = makeCar({ x: config.avenueX('7') - 4, z: config.streetZ(36), heading: 0 });
+  const { swimShow, controllers, driver } = makeShow(car);
+  assert.equal(swimShow.roam(5), true);
+  const bus = { x: car.position.x, z: car.position.z + 9.2, yaw: 0, speed: 0, half: 6.1, halfWidth: 1.3, edge: true };
+  const parked = { x: car.position.x - 3.4, z: car.position.z + 9, yaw: 0, speed: 0, half: 2.3, halfWidth: 0.92, edge: true };
+  const offTail = { x: car.position.x - 2.6, z: car.position.z - 5.5, yaw: -0.3, speed: 0, half: 2.3, halfWidth: 0.92, edge: true };
+  swimShow.obstacles = [bus, parked, offTail];
+  let contacts = 0, reversing = 0;
+  for (let n = 0; n < 20 * 60; n++) {
+    frame(car, controllers, driver);
+    if (car.speed < -0.2) reversing += FRAME;
+    const a = { x: car.position.x, z: car.position.z, sin: Math.sin(car.heading), cos: Math.cos(car.heading), halfW: 0.97, halfL: 2.52 };
+    for (const o of swimShow.obstacles) {
+      if (vehicleContact(a, { x: o.x, z: o.z, sin: Math.sin(o.yaw), cos: Math.cos(o.yaw), halfW: o.halfWidth, halfL: o.half }, {})) contacts++;
+    }
+  }
+  assert.ok(reversing > 0, 'it backs out');
+  assert.equal(contacts, 0, 'never touches the bus, the car beside it or the car off its tail');
+});
+
 test('coming up on a red light\'s queue with the light\'s red still to run, the AI rolls up timed for the green instead of standing behind it', () => {
   // Rolling south down 7th Ave at 30 mph, a queue standing across all its lanes 120 m ahead, 25 s of red to come
   const car = makeCar({ x: config.avenueX('7'), z: config.streetZ(36), heading: 0 });
