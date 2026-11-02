@@ -353,6 +353,9 @@ test('the roam only drives roads the right way and stays inside Midtown', () => 
   }
   // ...and no leg it may choose runs through a curb block (57th St west of 10th Ave has one across it)
   assert.equal(roam.streetOpen(57, config.avenueX('10'), config.avenueX('11'), true), false);
+  // ...nor one whose street isn't roadway either side of its line (14th St by Union Square, Madison to Lex)
+  assert.equal(roam.streetOpen(14, config.avenueX('madison'), config.avenueX('lex'), true), false);
+  assert.equal(roam.streetOpen(14, config.avenueX('7'), config.avenueX('6'), true), true, 'while a plain block of 14th St is');
 });
 
 test('I hands the car back to the AI: it roams on from wherever the car is', () => {

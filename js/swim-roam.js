@@ -1,4 +1,5 @@
 import { ALL_AVENUES, ALL_STREETS, avenueX, blockAt, streetZ } from './city-config.js';
+import { onCarriageway } from './swim-carriageway.js';
 
 // The AI's endless run through Midtown: once the show's route is driven, it keeps going, choosing a street at every
 // corner it comes to. It drives the ladder of Midtown's wide roads: the avenues (one-way, driven the way they run;
@@ -24,6 +25,8 @@ const END_TOLERANCE = 20; // m a run may stop short of an avenue's centre line a
 const ON_ROAD = 30; // m from a road's line that counts as being on it (starting from wherever the car is)
 const BLOCK_STEP = 8; // m between the points a leg's line is checked for curb blocks at
 const BLOCK_END = 12; // m at each end of a leg left unchecked (the corner itself, where the car turns)
+const ENVELOPE = 3; // m either side of a leg's line that must be carriageway too (swim-carriageway.js): the street, not
+// only its middle (Codex 2026-11-03 #6; 14th St between Madison and Lex is not)
 
 const AVENUE_BY_ID = new Map(ALL_AVENUES.map((a) => [a.id, a]));
 const STREET_BY_NUMBER = new Map(ALL_STREETS.filter((s) => s.number !== null).map((s) => [s.number, s]));
@@ -56,7 +59,7 @@ function avenueRun(id, z0, z1) {
 }
 
 // Whether a straight line crosses no curb block (the street data has the odd break where a block stands across a street:
-// 57th St between 10th and 11th Ave). Remembered per line.
+// 57th St between 10th and 11th Ave), and the road either side of it is carriageway. Remembered per line.
 const clearLines = new Map();
 function lineClear(x0, z0, x1, z1) {
   const key = `${Math.round(x0)},${Math.round(z0)},${Math.round(x1)},${Math.round(z1)}`;
@@ -65,7 +68,10 @@ function lineClear(x0, z0, x1, z1) {
   let clear = true;
   for (let d = BLOCK_END; d < length - BLOCK_END && clear; d += BLOCK_STEP) {
     const t = d / length;
-    if (blockAt(x0 + (x1 - x0) * t, z0 + (z1 - z0) * t)) clear = false;
+    const x = x0 + (x1 - x0) * t, z = z0 + (z1 - z0) * t;
+    // (left of the line is (dz, -dx) per metre)
+    const lx = (z1 - z0) / length, lz = -(x1 - x0) / length;
+    if (blockAt(x, z) || !onCarriageway(x + lx * ENVELOPE, z + lz * ENVELOPE) || !onCarriageway(x - lx * ENVELOPE, z - lz * ENVELOPE)) clear = false;
   }
   clearLines.set(key, clear);
   return clear;
