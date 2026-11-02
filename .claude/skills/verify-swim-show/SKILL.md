@@ -39,14 +39,15 @@ have told you already).
 ```
 # one scenario (2-10 min): run, check, report page
 node tools/swim-eval/run.mjs fresh-s1-120 --out <dir> --port <port>
-# the whole suite (22 runs), then the summary page. At most 2 browsers at once: WebGPU browsers starve each other on
+# the whole suite (baseline 22 runs, deterministic 20), then the summary page (always over the whole set's finished
+# runs: --only a,b reruns just those). At most 2 browsers at once: WebGPU browsers starve each other on
 # one Mac (3 at once sat 13 min without loading). Each run's wall clock is in run.json and the summary.
 node tools/swim-eval/suite.mjs --out <dir> --port <port> --jobs 2
 # score a player session offline (its AI part)
 node tools/swim-eval/check.mjs <session.jsonl> --map <dir>/maps/map-<sha>.json --out <dir>
 # re-check a run folder without re-running (after a checker change)
 node tools/swim-eval/check.mjs <dir>/<scenario>
-# every check seen failing (the synthetic ideal show and its 18 breaks)
+# every check seen failing (the synthetic ideal show and its 23 breaks)
 node tools/swim-eval/selftest.mjs --map tools/swim-eval/test/map-fixture.json
 ```
 
