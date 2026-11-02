@@ -61,8 +61,11 @@ the run (89419cc and before). From 2771a69 the game steps on a fixed 1/120 s clo
 run is the same tick for tick at any frame rate (checked through this harness: 120 Hz and 30 Hz, 3001 ticks, every
 field equal), so use `--set deterministic`: one run per seed on the 30 Hz clock (a quarter of the frames to render),
 eight traffic seeds, each scenario kind once more on a second clock. Spend runs on seeds and scenarios, not repeats.
-On a fixed-clock build the trace has one row per tick (after `director.step`, the car's sim state), not per frame (the
-frame's car is the drawn pose between two ticks).
+On a fixed-clock build the trace has one row per tick (after the whole `SwimClock.step`: car, director, traffic; the
+car's sim state), not per frame (the frame's car is the drawn pose between two ticks). Math.random doesn't reach the
+sim there (seed 1 vs 11: 40 s identical). A warm-up does: P starts the show's run on the city's signal clock as it
+stands (`swim-clock.js beginRun`, no `elapsed` from the show), so a warm run parts from the fresh run of the same seed
+at its first red light (s1: 24 s in). Compare a warm run with a warm run of the same length, never with a fresh one.
 
 How it drives: a virtual animation clock (`lib/page.mjs clockInit`) hands the game the scenario's frame times and is
 paused between the runner's steps, so every key press, the P press and every screenshot lands on an exact frame;
