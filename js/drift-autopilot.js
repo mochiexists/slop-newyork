@@ -1,5 +1,5 @@
 import { M5_DRIFT, fullDriveForce, stepDriftCar } from './drift-physics.js';
-import { CornerDriver, fitCorner, sizeCorner } from './drift-corner.js';
+import { CornerDriver, copyDriver, fitCorner, restoreCar, sizeCorner, snapshotCar } from './drift-corner.js';
 
 // The AI driver for swimming: it presses the player's keys (W, S, A, D, the handbrake), one frame at a time, through
 // the car's own KeyboardDriver, to follow a route along the streets as fast as the corners allow, handbrake-flick into
@@ -13,6 +13,8 @@ const ALONG_STREET = 15 * RAD; // travelling this close to the street's directio
 const MIN_PEDAL = 0.05; // pedal below which the traction control's share of it isn't read
 const MIN_PASSED = 0.1; // least share of the pedal it reckons the traction control passes on
 const NO_HOLD = [0]; // a split or a step along its own line is flown at once
+const NO_TRAFFIC = []; // a plan flown again sees the traffic its planner saw, not this (flyPlan)
+const SAFE_RANK = 1e6; // a plan clear on the sketch ranks above every one that isn't (planGap's shortlist)
 const COMMIT_CLEARANCE = 0.05; // share of the lock it keeps short of the keyboard driver's power-over lock, swimming
 const COAST = 'coast'; // the pedal plan off both pedals (a lift)
 const FLINCH_MARGIN = 0.3; // m a driver adds round both cars, reckoning whether the swimmer will hit it (traffic.js)
@@ -153,6 +155,25 @@ const AUTOPILOT = {
   flinchCost: 20,
   flinchHorizon: 1.2, // s of each plan it checks that over
   hitCost: 200, // score against a plan that touches a car
+  // A plan inside its passing margins of a car but with squeezeMargin of real air left is a squeeze: worse than any
+  // plan clear of the margins, better than one that touches (with every plan inside the margins, "the one that meets
+  // trouble latest" was a line straight behind the car being passed, braking: it rear-ended it at 16 m/s)
+  squeezeMargin: 0.1,
+  squeezeCost: 150,
+  // Its best few safe plans are flown again before it takes one: its own keys through a copy of the keyboard driver,
+  // its hands and the car's physics (the plans' lateral flight is a sketch of that), against traffic that may speed up
+  // by trafficGas or brake by trafficBrake and drift across by trafficDrift m/s, the boxes swept tick by tick. The best
+  // that clears every car by verifyMargin is the one it flies (Codex 2026-11-03 #5: fresh-s1's contacts came from plans
+  // marked safe on the sketch)
+  verifyPlans: 3, // plans it checks (0: none)
+  verifyTime: 1.2, // s it flies each
+  verifyEvery: 2, // ticks between the checks against the traffic
+  verifyMargin: 0.12, // m of air below which a flown plan touches a car
+  trafficGas: 2, // m/s²: a driver's IDM pick-up (traffic.js), and its flinch's floor-it is 3 s from now at most
+  trafficBrake: 4,
+  trafficDrift: 0.4, // m/s across
+  splitLockout: 1, // s a split it gave up on (the pair still ahead) is not tried again
+  openingWeight: 8, // score per m/s a split's gap is opening (its pair moving apart; closing, against)
   oncomingCost: 25 // score against the oncoming half of a two-way street: used to pass, not to cruise in
 };
 
@@ -524,7 +545,7 @@ class DriftAutopilot {
   // across the street and a pedal (brake hard, ease off, hold, floor it). It flies each one forward and keeps the one
   // that covers the most ground without touching anyone. The cars it is threading keep moving while it moves, so it
   // finds the staggered gaps a swimmer uses: pass one car on its left, then dive across in front of the next.
-  planGap(car, obstacles) {
+  planGap(car, obstacles, driver = null, dt = 1 / 120) {
     const o = this.options;
     const s = this.seg(this.segment);
     const lx = s.uz, lz = -s.ux; // left of the direction of travel
@@ -586,6 +607,7 @@ class DriftAutopilot {
       entry.across = extentAcross;
       entry.extentAlong = extentAlong;
       entry.sameWay = ob.yaw !== undefined && Math.cos(rel) > SAME_WAY;
+      entry.ref = ob; // (the car itself: a split it gave up on is known by its pair)
       entry.inside = inside;
       entry.reach = inside ? Math.max(extentAcross + egoAcross, Math.min(reach, Math.abs(lateral - carLat) - 0.05)) : reach;
       // (the most it reaches across in any flight: see the footprint in the flight below)
@@ -630,6 +652,14 @@ class DriftAutopilot {
       if (ob.sameWay && inLine && ob.along > 0 && ob.along < o.queueReach && ob.vAlong < o.queueSpeed) oncomingCost = 0;
     }
     let best = null;
+    // (and its best few safe plans, best first, for flying again before it takes one)
+    const short = this._short ??= [];
+    const shortPool = this._shortPool ??= [];
+    short.length = 0;
+    // (and the best plan on the line it is flying now: flown clean, it is kept, whatever the sketch says)
+    const onTarget = this._onTarget ??= {};
+    onTarget.rank = -Infinity;
+    const keep = Math.max(0, o.verifyPlans);
     const near = this._near ??= [];
     // Per car near the move: the least air beside it while alongside, the side it was on, when the plan passes it
     const air = this._air ??= [];
@@ -649,6 +679,10 @@ class DriftAutopilot {
     const lines = this._lines ??= [];
     const clear = this._clear ??= [];
     const clearSpeed = this._clearSpeed ??= [];
+    const pairs = this._pairs ??= []; // per split line, its pair (right car, left car) and whether its gap is opening
+    const opening = this._opening ??= [];
+    const lockouts = this._lockouts ??= [];
+    for (let i = lockouts.length - 1; i >= 0; i--) if (lockouts[i].until <= this.clock) lockouts.splice(i, 1);
     let lineCount = 0;
     for (let y = band.right; y <= band.left + 1e-6; y += o.gapStep) lines[lineCount++] = y;
     // (lining up for a drifted corner, its entry line too: the steps may miss it)
@@ -666,6 +700,12 @@ class DriftAutopilot {
         // already cover)
         const air = (leftCar.lateral - rightCar.lateral - leftCar.across - rightCar.across) / 2 - o.carHalfWidth;
         if (to - from < o.splitRoom || air > o.closeGap || rightCar.along < 0 || y < band.right || y > band.left) continue;
+        // (a pair it gave up splitting a moment ago stays given up: no back and forth at a closing gap)
+        if (lockouts.some((l) => l.right === rightCar.ref && l.left === leftCar.ref)) continue;
+        pairs[lineCount] = pairs[lineCount] ?? {};
+        pairs[lineCount].right = rightCar.ref;
+        pairs[lineCount].left = leftCar.ref;
+        opening[lineCount] = leftCar.vLateral - rightCar.vLateral;
         clear[lineCount] = Math.max(rightCar.along + rightCar.length, leftCar.along + leftCar.length);
         clearSpeed[lineCount] = Math.max(rightCar.vAlong, leftCar.vAlong);
         lines[lineCount++] = y;
@@ -720,7 +760,7 @@ class DriftAutopilot {
           const accel = coast ? 0 : pedal;
           const braking = accel < 0 ? Math.min(1, -accel / (this.model.brakeGrip * GRAVITY)) : 0;
           const sideways = o.lateralAccel * (1 - o.brakeSteerLoss * braking);
-          let travelled = 0, speed = u, lat = carLat, latVel = carLatVel, hitAt = Infinity;
+          let travelled = 0, speed = u, lat = carLat, latVel = carLatVel, hitAt = Infinity, touchAt = Infinity;
           let brakeAcross = 0; // m it moves across with the brake key down
           let heldUntil = Infinity; // when it first comes alongside a car on the line it held (a held plan)
           for (let i = 0; i < nearCount; i++) {
@@ -728,7 +768,7 @@ class DriftAutopilot {
             passedAt[i] = Infinity;
             aimed[i] = near[i].alarm;
           }
-          for (let step = 1; step * o.planStep <= o.planTime && hitAt === Infinity; step++) {
+          for (let step = 1; step * o.planStep <= o.planTime && touchAt === Infinity; step++) {
             const t = step * o.planStep;
             // A punch (or a brake) into the gap, then holding that speed through it
             const pedalOn = t <= o.pedalTime;
@@ -768,8 +808,14 @@ class DriftAutopilot {
               const spread = o.planSpread * Math.abs(lat - carLat);
               const gapAcross = Math.abs(across) - reach - spread;
               if (gapAlong < 0 && gapAcross < 0) {
-                hitAt = t;
-                break;
+                // (inside the margins; flown on until it would really touch: a squeeze, or a hit)
+                if (hitAt === Infinity) hitAt = t;
+                const real = ob.inside ? gapAcross : Math.abs(across) - ob.across - ownAcross;
+                const touchAlong = Math.abs(ahead) - (ob.inside ? ob.length : ob.extentAlong + ownAlong);
+                if (touchAlong < 0 && real < o.squeezeMargin) {
+                  touchAt = t;
+                  break;
+                }
               }
               if (hold > 0 && gapAlong < 0 && Math.abs(ob.lateral + ob.vLateral * t - carLat) < reach) {
                 heldUntil = Math.min(heldUntil, t);
@@ -796,7 +842,7 @@ class DriftAutopilot {
           // latest, slowest, wins (time to brake or for the next move to find a way).
           let score = travelled;
           let open = 0;
-          if (hitAt === Infinity) {
+          if (touchAt === Infinity) {
             // Where the plan leaves it matters as much as the ground it covers: open road ahead in the lane it ends in,
             // and the speed it carries into it. And a plan is only safe if it ends with room to brake to the speed of the car ahead in its lane: otherwise
             // it is a trap a step past the look-ahead (closing at 30 mph on a queue)
@@ -811,7 +857,7 @@ class DriftAutopilot {
                 if (closing > 0 && ahead < closing * closing / (2 * o.braking)) trapped = true;
               }
             }
-            if (trapped) hitAt = o.planTime;
+            if (trapped) hitAt = touchAt = o.planTime;
             score += o.openWeight * open + o.speedWeight * speed;
           }
           score -= (Math.abs(y - carLat) + Math.abs(then - y)) * o.moveCost;
@@ -837,22 +883,76 @@ class DriftAutopilot {
           // Unsafe plans rank by how late they meet trouble, then by how slow they are by then, then by how little they
           // move across (when trouble is a moment away every move meets it then, and a swerve to the far side of the
           // street would steer it into the car alongside)
-          if (hitAt !== Infinity) score = -o.hitCost * (o.planTime - hitAt) - speed - Math.abs(y - carLat) * o.moveCost;
+          // (a split's gap opening is the safe one, one closing the crash: research swimming-craft.md §3)
+          if (split) score += o.openingWeight * clamp(opening[line], -2, 2);
+          // (a squeeze scores as a clear plan would, less squeezeCost; only a touch ranks by when it comes)
+          if (hitAt !== Infinity && touchAt === Infinity) score -= o.squeezeCost;
+          if (touchAt !== Infinity) score = -o.hitCost * (o.planTime - touchAt) - speed - Math.abs(y - carLat) * o.moveCost;
           const safe = hitAt === Infinity;
-          if (!best || (safe && !best.safe) || (safe === best.safe && score > best.score)) {
+          const tier = safe ? 2 : touchAt === Infinity ? 1 : 0;
+          // (ranked as the best is: any safe plan before every unsafe one, then by score)
+          const rank = score + tier * SAFE_RANK;
+          if (keep > 0 && Math.abs(y - this.targetOffset) < o.gapStep * 0.5 && rank > onTarget.rank) {
+            Object.assign(onTarget, { rank, score, safe, tier, y, accel: coast ? coastAccel(u, this.model) : accel, coast, slowest, open, hold, pair: split ? pairs[line] : null });
+          }
+          if (keep > 0 && (short.length < keep || rank > short[short.length - 1].rank)) {
+            const entry = short.length < keep ? (shortPool[short.length] ??= {}) : short.pop();
+            Object.assign(entry, { rank, score, safe, tier, y, accel: coast ? coastAccel(u, this.model) : accel, coast, slowest, open, hold, pair: split ? pairs[line] : null });
+            let at = short.length;
+            while (at > 0 && short[at - 1].rank < rank) at--;
+            short.splice(at, 0, entry);
+          }
+          if (!best || tier > best.tier || (tier === best.tier && score > best.score)) {
             best = this._best ??= {};
             best.score = score;
             best.safe = safe;
+            best.tier = tier;
             best.y = y;
             best.accel = coast ? coastAccel(u, this.model) : accel;
             best.coast = coast;
             best.slowest = slowest;
             best.open = open;
             best.hold = hold;
+            best.pair = split ? pairs[line] : null;
           }
         }
       }
     }
+    // Fly the shortlist again on the car's own keys and physics, against traffic that may not hold its speed: the
+    // first that clears every car is the one; none clearing, the one that meets trouble latest. (With no plan clear on
+    // the sketch, the best unsafe ones are flown: the sketch's "hits latest" was a line straight behind a 6 m/s car,
+    // braking, which rear-ended it at 16 m/s)
+    if (short.length && driver && o.verifyPlans > 0 && !this.cornering && count > 0) {
+      let pick = null, latest = -1;
+      // (the line it is on goes first when the sketch has nothing clear, last otherwise: at 80 mph the car's sideways
+      // speed takes half a second to turn round, and the sketch, judging the move it was making unsafe a replan later,
+      // braked it straight into the car it was moving round)
+      const flown = this._flown ??= [];
+      flown.length = 0;
+      const extra = onTarget.rank > -Infinity && !short.some((c) => c.y === onTarget.y && c.accel === onTarget.accel && c.hold === onTarget.hold);
+      if (extra && short[0].tier < 2) flown.push(onTarget);
+      flown.push(...short);
+      if (extra && short[0].tier === 2) flown.push(onTarget);
+      for (const candidate of flown) {
+        const touch = this.flyPlan(car, driver, dt, candidate, carLat, count);
+        if (touch === Infinity) {
+          pick = candidate;
+          break;
+        }
+        if (touch > latest) {
+          latest = touch;
+          pick = candidate;
+        }
+      }
+      Object.assign(best, pick);
+    }
+    // (a split it was on and has given up, its pair still ahead, is locked out for splitLockout)
+    const was = this.splitPair;
+    if (was && was !== best.pair && (best.pair?.right !== was.right || best.pair?.left !== was.left)) {
+      const ahead = (v) => (v.x - car.position.x) * s.ux + (v.z - car.position.z) * s.uz > 0;
+      if (ahead(was.right) && ahead(was.left)) lockouts.push({ right: was.right, left: was.left, until: this.clock + o.splitLockout });
+    }
+    this.splitPair = best.pair ? { right: best.pair.right, left: best.pair.left } : null;
     this.targetOffset = best.y;
     // (the way it is moving across, and since when: a new move starts the reverse lock)
     const way = Math.abs(best.y - carLat) > o.gapStep * 0.5 ? Math.sign(best.y - carLat) : 0;
@@ -875,6 +975,60 @@ class DriftAutopilot {
     plan.hold = best.hold; // s it holds the line it is on before it moves (a late flick)
     plan.holdLine = carLat;
     return plan;
+  }
+
+  // A plan flown on the car's own keys (planGap's shortlist): a copy of this autopilot set on the plan, pressing keys
+  // through a copy of its hands into a copy of the keyboard driver, the car's physics stepped as the swim car steps them,
+  // for verifyTime; every verifyEvery ticks its box against the box each car of the last plan's `count` may be in by
+  // then (sped up by trafficGas, braked by trafficBrake, drifted across). Returns s to the first touch, Infinity if none.
+  flyPlan(car, driver, dt, candidate, carLat, count) {
+    const o = this.options;
+    const s = this.seg(this.segment);
+    const lx = s.uz, lz = -s.ux;
+    const sim = this._flier ??= Object.create(DriftAutopilot.prototype);
+    Object.assign(sim, this);
+    sim.options = this._flierOptions ??= { ...o, replanInterval: Infinity, road: null, verifyPlans: 0 };
+    sim.hands = (this._flierHands ??= new Hands(o.hands)).copyFrom(this.hands);
+    sim.want = Object.assign(this._flierWant ??= {}, this.want);
+    sim.keys = Object.assign(this._flierKeys ??= {}, this.keys);
+    sim.cornerDriver = null;
+    sim.cornerChoice = null;
+    const plan = sim.plan = this._flierPlan ??= {};
+    Object.assign(plan, { start: Math.max(0, car.speed), accel: candidate.accel, coast: candidate.coast, safe: true, slowest: candidate.slowest, open: candidate.open, hold: candidate.hold, holdLine: carLat });
+    sim.targetOffset = candidate.y;
+    sim.sincePlan = 0;
+    sim.flickAt = candidate.hold > 0 ? this.clock + candidate.hold : undefined;
+    const simCar = restoreCar(this._flierBase = snapshotCar(car, this._flierBase), this._flierCar ??= snapshotCar(car));
+    const simDriver = this._flierDriver = copyDriver(driver, this._flierDriver);
+    const telemetry = this._flierTelemetry ??= {};
+    const x0 = car.position.x, z0 = car.position.z;
+    const seen = this._seen;
+    const ticks = Math.round(o.verifyTime / dt);
+    for (let n = 1; n <= ticks; n++) {
+      const keys = sim.update(simCar, dt, NO_TRAFFIC, simDriver);
+      const input = simDriver.update(simCar, keys, dt);
+      for (let i = 0; i < 2; i++) stepDriftCar(simCar, input, dt / 2, this.model, telemetry);
+      if (n % o.verifyEvery) continue;
+      const t = n * dt;
+      const along = (simCar.position.x - x0) * s.ux + (simCar.position.z - z0) * s.uz;
+      const lat = (simCar.position.x - s.a.x) * lx + (simCar.position.z - s.a.z) * lz;
+      const yaw = Math.abs(wrap(simCar.heading - Math.atan2(s.ux, s.uz)));
+      const ownAlong = footprintAlong(o, yaw), ownAcross = footprintAcross(o, yaw);
+      for (let i = 0; i < count; i++) {
+        const ob = seen[i];
+        // (where along it may be by then: its own way, braking to a stop at the most or speeding up)
+        const speed = Math.abs(ob.vAlong);
+        const way = speed > 0.5 ? Math.sign(ob.vAlong) : ob.sameWay ? 1 : -1;
+        const least = speed <= o.trafficBrake * t ? speed * speed / (2 * o.trafficBrake) : speed * t - 0.5 * o.trafficBrake * t * t;
+        const most = speed * t + 0.5 * o.trafficGas * t * t;
+        const lo = ob.along + way * (way > 0 ? least : most), hi = ob.along + way * (way > 0 ? most : least);
+        const gapAlong = Math.max(lo - along, along - hi, 0) - ob.extentAlong - ownAlong;
+        if (gapAlong > o.verifyMargin) continue;
+        const gapAcross = Math.abs(ob.lateral + ob.vLateral * t - lat) - ob.across - ownAcross - o.trafficDrift * t;
+        if (gapAcross < o.verifyMargin) return t;
+      }
+    }
+    return Infinity;
   }
 
   /**
@@ -1080,7 +1234,7 @@ class DriftAutopilot {
     this.sincePlan = (this.sincePlan ?? Infinity) + dt;
     this.clock += dt;
     if (this.sincePlan >= o.replanInterval || !this.plan) {
-      this.plan = this.planGap(car, obstacles);
+      this.plan = this.planGap(car, obstacles, driver, dt);
       this.sincePlan = 0;
     }
     const plan = this.plan;

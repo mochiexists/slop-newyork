@@ -363,4 +363,4 @@ class CornerDriver {
   }
 }
 
-export { CORNER_DRIVE, CORNER_FIT, CornerDriver, CornerPath, fitCorner, sizeCorner };
+export { CORNER_DRIVE, CORNER_FIT, CornerDriver, CornerPath, copyDriver, fitCorner, restoreCar, sizeCorner, snapshotCar };
