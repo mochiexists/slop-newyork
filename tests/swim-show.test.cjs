@@ -476,3 +476,18 @@ test('stopped nose to nose in a lane it can\'t get round, a car right behind it:
   assert.equal(touched, 0, 'never backs into the car behind');
   assert.ok(paths.size > 1, `it reroutes (${paths.size - 1} new routes in 20 s)`);
 });
+
+test('a swim corridor keeps the car\'s body on the carriageway at either edge, the length of 7th Ave from 42nd to 34th St', async () => {
+  const { footprintOff } = await import('../js/swim-carriageway.js');
+  const a = { x: config.avenueX('7'), z: config.streetZ(42) }, b = { x: config.avenueX('7'), z: config.streetZ(34) };
+  const [corridor] = show.routeCorridors([a, b]);
+  const length = Math.hypot(b.x - a.x, b.z - a.z), ux = (b.x - a.x) / length, uz = (b.z - a.z) / length;
+  let off = 0;
+  for (let along = 15; along < length - 15; along += 2.5) {
+    for (const lateral of [corridor.left, corridor.right]) {
+      off += footprintOff(a.x + ux * along + uz * lateral, a.z + uz * along - ux * lateral, Math.atan2(ux, uz), 0.2);
+    }
+  }
+  assert.equal(off, 0, `edges at ${corridor.left.toFixed(2)} / ${corridor.right.toFixed(2)} m keep the body on the road`);
+  assert.ok(corridor.left - corridor.right > 6, `and the avenue is still wide to swim (${(corridor.left - corridor.right).toFixed(1)} m)`);
+});
