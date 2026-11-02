@@ -15,6 +15,7 @@ import { KEYBOARD_DRIVER, KeyboardDriver, M5_DRIFT, stepDriftCar } from './drift
 import { DriftAutopilot, Hands, steeringKey, travelHeading } from './drift-autopilot.js';
 import { resolveVehicleContact, vehicleContact } from './vehicle-physics.js';
 import { RoamRoute } from './swim-roam.js';
+import { footprintOff } from './swim-carriageway.js';
 
 // The swimming show: the AI takes the car through the reference clips' greatest hits, and keeps driving for as long as
 // the player lets it. Times Square is cleared of traffic, an NYPD cruiser watches with its lights on, the car rolls up
@@ -24,39 +25,44 @@ import { RoamRoute } from './swim-roam.js';
 
 const RAD = Math.PI / 180;
 
-// The cruiser parks in the middle of 7th Ave & 45th St, at the foot of the bowtie, facing west across it. The car
-// comes down 7th Ave toward it at a crawl, on the line that passes it on the left at the circle's radius, and drifts
-// round it from there: it joins the circle due west of the cop, travelling south (the way 7th Ave runs), so the last
-// lap leaves it pointing down the avenue.
-const COP_SPOT = { x: avenueX('7') - 2, z: streetZ(45) };
+// The cruiser parks in the middle of 7th Ave & 42nd St, at the foot of Times Square, facing west across the avenue.
+// The car comes down 7th Ave toward it at a crawl in the avenue's westmost lane, floors it short of the crossing and
+// drifts round the cop, the crossing's whole width (eval-loop/fixes/opening, 2026-11-03: 45th St's crossing, under the
+// bowtie, is too narrow for the car's 1.9 × 5 m body sideways on any circle past 6 m: a fifth of the donuts were over
+// the plaza and the pavement; here a circle of 8.5 m keeps the whole body on the road at 30-50° and ±1.2 m off it).
+// It leaves the circle down the avenue.
+const COP_SPOT = { x: avenueX('7') - 0.7, z: streetZ(42) + 0.7 };
 const COP_HEADING = -Math.PI / 2;
-const DRIFT_RADIUS = 11; // m from the cop to the car: the circle fills the crossing, the way the clip's does, and
-// clears the Con Ed steam stack 6 m from the cop by two
-const ENTRY_BEARING = -Math.PI / 2; // bearing from the cop where the car joins the circle (due west)
-const ROLL_DISTANCE = 22; // m of crawl up 7th Ave before it is level with the cop
-const SHOW_SPOT = { x: COP_SPOT.x - DRIFT_RADIUS, z: COP_SPOT.z - ROLL_DISTANCE, heading: 0 };
+const DRIFT_RADIUS = 9; // m from the cop to the car it aims at (the donut runs ~0.5 m inside its aim)
+// The roll: down 7th Ave's westmost southbound lane (road-network.js lays four 3.6 m lanes across its 18.3 m; this one's
+// middle is 4.6 m west of the avenue's), from this far short of the cop
+const ROLL_LANE_X = avenueX('7') - 4.6;
+const ROLL_DISTANCE = 26;
+const SHOW_SPOT = { x: ROLL_LANE_X, z: COP_SPOT.z - ROLL_DISTANCE, heading: 0 };
 const SHOW_TRAFFIC_SEED = 1; // traffic layout of the opening (traffic.js reseed)
-// Where in the 60 s signal cycle (city-config.js SIGNAL_TIMING) the show starts: the avenues turn green as the car
-// leaves the drift circle (~20 s in: the roll, two laps), so the run down 7th Ave meets the same lights every time
-const SHOW_SIGNAL_TIME = 40;
+// Where in the 60 s signal cycle (city-config.js SIGNAL_TIMING) the show starts: the avenues turn green 10 s in, before
+// the car leaves the drift circle (~12-22 s in: the roll, two laps or so), and stay green ~26 s, the run down 7th Ave to
+// 34th St (with 40 they turned green at 20 s: from 42nd St the car came out of the circle onto a red light's queue)
+const SHOW_SIGNAL_TIME = 50;
 const SHOW_CLEAR_RADIUS = 42; // m of Times Square kept clear of traffic for the stunts
-// The run: down 7th Ave, west on 42nd St, up 8th Ave past Smith's, west on 57th St to 9th Ave, where the roam takes
-// over (swim-roam.js; past 10th Ave a block stands across 57th St). The avenues are one-way, so the line runs down
-// their middle; 42nd and 57th are two-way, so it keeps to the westbound (north, -z) half.
+// The run: down 7th Ave, eight blocks of it flat out, west on 34th St, up 8th Ave past Smith's, west on 57th St to 9th
+// Ave, where the roam takes over (swim-roam.js; past 10th Ave a block stands across 57th St). The avenues are one-way,
+// so the line runs down their middle; 34th and 57th are two-way, so it keeps to the westbound (north, -z) half.
 const WESTBOUND = -3.5;
-// The drift into 42nd St turns at this offset instead: its slide swings about 2 m wide, which from the westbound line
-// would end nose to nose with the eastbound queue (where the show once stalled for good)
-const INTO_42ND = -5.5;
+// The drift into 34th St turns at this offset instead: its slide swings about 2 m wide, which from the westbound line
+// would end nose to nose with the eastbound queue (where the show once stalled for good, in 42nd St)
+const INTO_34TH = -5.5;
 const ESCAPE_ROUTE = [
   [COP_SPOT.x, COP_SPOT.z],
-  [avenueX('7'), streetZ(42) + INTO_42ND],
-  [avenueX('8'), streetZ(42) + WESTBOUND],
+  [avenueX('7'), streetZ(34) + INTO_34TH],
+  [avenueX('8'), streetZ(34) + WESTBOUND],
   [avenueX('8'), streetZ(57) + WESTBOUND],
   [avenueX('9'), streetZ(57) + WESTBOUND]
 ].map(([x, z]) => ({ x, z }));
 
 const DONUT_LAPS = 2; // laps round the cop before it looks for the way out
-const DONUT_TIME_LIMIT = 30; // s of donuts before it powers out wherever it is (a fallback: the show goes on)
+const DONUT_TIME_LIMIT = 30; // s of donuts before it takes any way out it finds on the road, however slow (a fallback),
+const DONUT_LAST_CHANCE = 35; // and before it powers out wherever it is (the show goes on)
 // The roll-up and the first lap are seen from the chase camera turned across the car at the cop, so the circle round
 // it reads; the second lap from the driver's seat, as the BMW short is filmed: the driver looks across at the cop and
 // puts the bird out of the window (where the short has it against the chorus), the last thing before driving off
@@ -66,9 +72,16 @@ const BIRD_TO_LAP = 1.85;
 const CHASE_ACROSS = 0.45; // rad the chase camera turns past the line to the cop, so the car and the cop share the shot
 const COP_GLANCE_LIMIT = 70 * RAD; // how far round from the windshield the driver turns to watch the cop
 const GLANCE_RATE = 2.5; // 1/s easing of the driver's look
-const EXIT_WINDOW = 45 * RAD; // the way out this far ahead of the direction of travel: drive out (the lift that ends
-// the slide takes a moment, and the car comes round on it; at 25° it came out pointing past the avenue)
+// The way down the avenue between this far behind the direction of travel and this far ahead of it: it looks for a way
+// out (DonutDriver planExit plays each ahead and takes the first on the road)
+const EXIT_EARLY = 15 * RAD;
+const EXIT_WINDOW = 80 * RAD;
+// The lane it leaves down: 7th Ave's westmost south of 42nd St, the one it rolled up in
+const EXIT_LINE = { x: ROLL_LANE_X, z: COP_SPOT.z, heading: 0 };
 const EXIT_TIME_LIMIT = 3; // s of powering out before the autopilot takes over however straight the car is
+// m/s: the donut driver keeps the car floored down its lane until it is going this fast (handed over in the slide's last
+// wiggle, the autopilot lifted to straighten it and the 50 mph came a second late)
+const EXIT_HANDOVER_SPEED = 18;
 const EXIT_SLIP = 10 * RAD; // the slide is over below this drift angle,
 const EXIT_ALIGN = 60 * RAD; // and with the car travelling roughly the way out, the autopilot steers it back onto the avenue
 const ESCAPE_MERGE = 40; // m down 7th Ave from the cop where the escape is back in the avenue's middle: a long merge,
@@ -158,23 +171,29 @@ function routeCorridors(route) {
 // The opening as the BMW short drives it, on the keys as a player holds them, closed-loop on what the driver sees (how
 // far the cop is, whether the car is closing on it or running wide, and the angle of the slide), so it holds when the
 // handling changes:
-//   roll:     down the avenue at a crawl on a feathered W, lined up to pass the cop on the left;
-//   launch:   alongside the cop, W floored (the rears spin up as the traction control lets them) and the wheel turned
-//             onto the circle, aiming a little way round it;
-//   kick:     at speed, a flick of the handbrake with the lock on: the tail comes round;
+//   roll:     down the avenue at a crawl on a feathered W, in the lane it starts in;
+//   launch:   short of the circle, W floored (the rears spin up as the traction control lets them), the wheel and the
+//             handbrake as its look-ahead finds them to swing onto the circle (and again whenever the donut dies to a
+//             crawl or runs well off the circle);
 //   drift:    round and round the cop (below);
-//   powerOut: the way out comes round: flat out, the counter-steer unwinding the slide down the avenue.
+//   powerOut: the way out comes round: a way down the avenue it has played ahead and found on the road (planExit).
 const DONUT = {
-  rollSpeed: 5, // m/s (11 mph) of the crawl up to the cop
+  rollSpeed: 4.5, // m/s (10 mph) of the crawl up to the cop
   rollBand: 0.6, // m/s under rollSpeed at which W is pressed again (a feathered pedal)
+  // s ahead it reads the speed at (from how fast it is gaining) to let W go: the pedal takes a moment to come up and
+  // the hands hold a key 80 ms at least, so a W let go at the crawl overshoots it (12.2 mph from a 5 m/s crawl, Codex)
+  rollReleaseLead: 0.25,
   rollLookahead: 8, // m down the roll line that it steers at
   rollSteerGain: 3, // share of lock per radian of aim error, rolling
-  launchLead: 0.5, // s before the car is level with the cop that it floors it
-  aheadArc: 0.7, // rad along the circle ahead that it aims at while it drives onto it
-  steerGain: 5, // share of lock per radian of aim error while driving onto the circle
-  kickSpeed: 9, // m/s at which it flicks into the slide
-  kickTime: 0.25, // s of handbrake
-  slideAngle: 20 * RAD, // a slide this deep while driving onto the circle is the drift already: no flick needed
+  launchLead: 0.5, // s before the roll line meets the circle that it floors it
+  launchShort: 2, // m more short of it
+  launchWheels: [1, 0.6, 0.3, 0, -0.3, -0.6, -1], // shares of lock it tries driving onto the circle (either way)
+  launchHold: 0.5, // s floored before it may dab the handbrake
+  launchTime: 1.6, // s of the launch at most before it is the drift, sideways or not
+  relaunchSlow: 1, // s of the drift under minSpeed before it launches again,
+  relaunchOff: 1.8, // or m off the circle (in or out)
+  relaunchOffTime: 0.3, // for this many s
+  slideAngle: 20 * RAD, // a slide this deep while driving onto the circle is the drift already
   // On the circle it drives as a player feels a donut ahead: a few times a second it weighs each thing it could do
   // with its hands and feet (the wheel at one of `wheels`, W down or up, a dab of the handbrake), plays each a moment
   // ahead on the car's own physics through its own keyboard driver (so it knows the car as the player does, however
@@ -197,7 +216,33 @@ const DONUT = {
   spinCost: 10,
   minSpeed: 6, // m/s
   crawlCost: 2,
-  exitAngle: 12 * RAD // powering out, off the gas and counter-steering until the slide is down to this, then flat out
+  insideCost: 4, // times as much for a metre inside the circle, toward the cop, as for one outside it (the road's cost
+  // pushes the donut in, and a car coming round inside the circle reads as cutting it)
+  // ...and of the road: each point of the car's outline (grown by roadMargin) over the curb or the plaza, at every
+  // roadEvery-th moment (swim-carriageway.js), and the cop's car closer than copClearance to the middle of the car
+  roadMargin: 0.25, // m
+  roadCost: 60,
+  roadEvery: 3,
+  copClearance: 4.2, // m between the middles: the two cars' half lengths (2.5 + 2.4) less a little, side on
+  copCost: 400,
+  // The way out (planExit): a few times a second, past its laps, it plays each way of leaving the circle it could take
+  // ahead (the counter-steer at one of `exitCounter` shares of lock, held `exitUnwind` s with W down or up, then W
+  // floored and the wheel steering down the avenue's lane), and takes the first one whose whole body stays on the road
+  // and ends travelling down the lane: a way out found on the road, not a heading that might run over the curb
+  exitCounter: [-1, -0.5, 0],
+  exitGas: [1, 0],
+  exitUnwind: [0.15, 0.35, 0.6, 0.9],
+  exitHorizon: 3, // s each way out is played ahead (as long as the donut driver drives it, EXIT_TIME_LIMIT)
+  exitLookahead: 14, // m down the lane it steers at once the slide is unwound
+  exitSteerGain: 2.5, // share of lock per radian of aim error,
+  exitYawDamp: 0.3, // less this much per rad/s of yaw
+  exitHeading: 20 * RAD, // a way out ends (its last exitSettle s) travelling down the lane to within this,
+  exitSettle: 1,
+  exitLateral: 4, // m of it,
+  exitSlip: 18 * RAD, // and with the slide down to this (on the side it was: past exitManji the other way, a manji)
+  exitManji: 8 * RAD,
+  exitSpeed: 19, // m/s at the end of a way out that gets it to 50 mph within ~3 s: it waits for one this quick...
+  exitPatience: 1.5 // ...for this many s of looking, then takes any on the road
 };
 
 // s: the frame times the donuts' look-ahead plays, at most and least (a hitch of a frame doesn't make it a coarse one)
@@ -235,20 +280,25 @@ function copyDriver(driver, into) {
 }
 
 class DonutDriver {
-  // entry: the bearing from the centre where the car joins the circle; the roll comes up to it along the tangent.
-  // hands: the Hands that press its keys (drift-autopilot.js), which it reads to choose keys they can press, and whose
-  // copy its look-ahead plays its keys through
+  // entry: unused since the launch plays its keys ahead (kept in its place for the callers that pass it, the eval
+  // harness's injected launches among them). hands: the Hands that press its
+  // keys (drift-autopilot.js), which it reads to choose keys they can press, and whose copy its look-ahead plays its
+  // keys through. exitLine (options): the lane it leaves the circle down, { x, z, heading } (a point on it and its way;
+  // by default the show's, EXIT_LINE)
   constructor(center, radius, entry, options = {}, hands = new Hands()) {
     this.o = { ...DONUT, ...options };
     this.hands = hands;
     this.center = center;
     this.radius = radius;
-    this.entry = entry;
+    this.exitLine = options.exitLine ?? EXIT_LINE;
     this.feather = false;
-    this.phase = 'roll'; // 'roll' | 'launch' | 'kick' | 'drift' | 'powerOut'
+    this.rollLine = null; // the lane the roll keeps to: where the car started and its heading then
+    this.phase = 'roll'; // 'roll' | 'launch' | 'drift' | 'powerOut'
     this.time = 0; // s in the current phase
     this.swept = 0; // rad swept round the centre since the launch
     this.bearing = null;
+    this.wantOut = false; // its laps are done: it looks for the way out (planExit)
+    this.exit = null; // the way out it is driving: { counter, gas, unwind } and how long it has been on it
   }
 
   // Laps round the centre since the car floored it
@@ -256,10 +306,13 @@ class DonutDriver {
     return this.swept / (2 * Math.PI);
   }
 
-  // Flat out and counter-steering the slide down, as a player drives out of a drift
-  powerOut() {
-    this.phase = 'powerOut';
-    this.time = 0;
+  // Out of the drift on the way out `exit` (planExit's), or the best it can find now (the show's time limit: the show
+  // goes on wherever the car is)
+  powerOut(exit = null) {
+    this.exit = exit ?? this.planExit(this._car, this._driver, this._frame).best;
+    this.exit.time = 0;
+    this.exitSide = Math.sign(slideAngle(this._car)) || 1; // the side the slide is out on, that it counter-steers
+    this.setPhase('powerOut');
   }
 
   setPhase(phase) {
@@ -271,110 +324,240 @@ class DonutDriver {
   // keyboard driver and of its hands (the wheel tapped toward its share of lock all the way, W up only for pedalTime,
   // the handbrake only for one decision, every key as the hands can press it), the one whose look-ahead stays sideways
   // on the circle wins
-  choose(car, driver, frame) {
+  // (`pedals`: whether W may come up in the look-ahead; the launch keeps it floored)
+  choose(car, driver, frame, wheels = this.o.wheels, pedals = [1, 0]) {
     const o = this.o;
-    const model = driver.model;
-    const base = this._base = snapshotCar(car, this._base);
-    const sim = this._sim ??= snapshotCar(car);
-    const keys = this._keys ??= { forward: 0, backward: 0, left: 0, right: 0, handbrake: 0 };
-    const simHands = this._simHands ??= new Hands();
-    const telemetry = this._telemetry ??= {};
+    const sim = this.lookFrom(car);
+    const keys = this._keys;
     const frames = Math.round(o.horizon / frame);
-    const substeps = Math.max(1, Math.round(frame / o.physicsStep));
-    const step = frame / substeps;
     let best = null;
-    for (const wheel of o.wheels) for (const forward of [1, 0]) for (const handbrake of [0, 1]) {
-      restoreCar(base, sim);
-      const simDriver = this._simDriver = copyDriver(driver, this._simDriver);
-      simHands.copyFrom(this.hands);
+    for (const wheel of wheels) for (const forward of pedals) for (const handbrake of [0, 1]) {
+      const look = this.lookAgain(driver);
       let cost = 0;
       for (let f = 0; f < frames; f++) {
         const t = f * frame;
-        const key = steeringKey(simDriver, wheel, sim.speed, frame, simHands);
+        const key = steeringKey(look.driver, wheel, sim.speed, frame, look.hands);
         keys.left = key > 0 ? 1 : 0;
         keys.right = key < 0 ? 1 : 0;
         keys.forward = t < o.pedalTime ? forward : 1;
         keys.handbrake = t < o.decideEvery ? handbrake : 0;
-        const input = simDriver.update(sim, simHands.press(keys, frame), frame);
-        for (let i = 0; i < substeps; i++) stepDriftCar(sim, input, step, model, telemetry);
+        this.lookStep(look, frame);
         const distance = Math.hypot(sim.position.x - this.center.x, sim.position.z - this.center.z);
         const v = Math.hypot(sim.speed, sim.vx, sim.vz);
-        const lateral = sim.vx * Math.cos(sim.heading) - sim.vz * Math.sin(sim.heading);
-        const angle = v > 2 ? -Math.atan2(lateral, Math.abs(sim.speed)) : 0;
+        const angle = slideAngle(sim);
         const dead = Math.max(0, o.minAngle - angle) / (10 * RAD);
         const spin = Math.max(0, angle - o.maxAngle) / (10 * RAD);
         const crawl = Math.max(0, o.minSpeed - v);
-        cost += (distance - this.radius) ** 2 + o.deadCost * dead * dead + o.spinCost * spin * spin + o.crawlCost * crawl * crawl;
+        const inside = distance < this.radius ? o.insideCost : 1;
+        cost += inside * (distance - this.radius) ** 2 + o.deadCost * dead * dead + o.spinCost * spin * spin + o.crawlCost * crawl * crawl;
+        if (f % o.roadEvery === 0) cost += o.roadEvery * this.placeCost(sim);
       }
       if (!best || cost < best.cost) best = { cost, wheel, forward, handbrake };
     }
     return best;
   }
 
+  // The ways out it could take from here, each played ahead (the counter-steer, W, how long it unwinds, then floored
+  // down the lane): `best`, the cheapest, and whether it is `clean` (its whole body on the road and away from the cop
+  // the whole way, ending travelling down the lane with the slide caught and no manji)
+  planExit(car, driver, frame) {
+    const o = this.o;
+    const sim = this.lookFrom(car);
+    const keys = this._keys;
+    const frames = Math.round(o.exitHorizon / frame);
+    const line = this.exitLine;
+    const ux = Math.sin(line.heading), uz = Math.cos(line.heading);
+    const side = Math.sign(slideAngle(car)) || 1; // the side the slide is out on (+ a left drift)
+    let best = null;
+    for (const counter of o.exitCounter) for (const gas of o.exitGas) for (const unwind of o.exitUnwind) {
+      const look = this.lookAgain(driver);
+      let cost = 0;
+      let blocked = false;
+      let unsettled = false;
+      for (let f = 0; f < frames; f++) {
+        const t = f * frame;
+        const unwinding = t < unwind;
+        keys.forward = unwinding ? gas : 1;
+        const want = unwinding ? counter * side : this.laneSteer(sim);
+        const key = steeringKey(look.driver, want, sim.speed, frame, look.hands);
+        keys.left = key > 0 ? 1 : 0;
+        keys.right = key < 0 ? 1 : 0;
+        keys.handbrake = 0;
+        this.lookStep(look, frame);
+        if (f % o.roadEvery === 0) {
+          const place = this.placeCost(sim);
+          if (place > 0) blocked = true;
+          cost += o.roadEvery * place;
+        }
+        // (over its last exitSettle s it must already be running down the lane: not swinging through it)
+        if (t >= o.exitHorizon - o.exitSettle) {
+          const tailHeading = Math.abs(wrapAngle(travelHeading(sim) - line.heading));
+          const tailSlip = slideAngle(sim) * side;
+          if (tailHeading > o.exitHeading || tailSlip > o.exitSlip || tailSlip < -o.exitManji) unsettled = true;
+        }
+      }
+      // Where it ends: across the lane, its way against the lane's, the slide left and which side it is out on
+      const across = (sim.position.x - line.x) * uz - (sim.position.z - line.z) * ux;
+      const heading = wrapAngle(travelHeading(sim) - line.heading);
+      const slip = slideAngle(sim) * side; // + still the old slide, - swung through to the other side
+      const ground = Math.hypot(sim.vx + Math.sin(sim.heading) * sim.speed, sim.vz + Math.cos(sim.heading) * sim.speed);
+      const clean = !blocked && !unsettled && Math.abs(across) < o.exitLateral;
+      cost += (heading / (10 * RAD)) ** 2 * 20 + across * across * 4 + (Math.max(0, Math.abs(slip) - 10 * RAD) / (10 * RAD)) ** 2 * 20
+        + (slip < -o.exitManji ? 400 : 0) - ground * 4;
+      // (a clean way out over any other, however cheap)
+      if (!best || (clean && !best.clean) || (clean === best.clean && cost < best.cost)) best = { cost, clean, counter, gas, unwind, ground };
+    }
+    return { best, clean: best.clean };
+  }
+
+  // The look-ahead's own car, keyboard driver and hands: lookFrom(car) copies the car once a choice; lookAgain(driver)
+  // puts all three back as they are now for the next thing it tries; lookStep plays a frame of this._keys on them
+  lookFrom(car) {
+    this._base = snapshotCar(car, this._base);
+    this._sim ??= snapshotCar(car);
+    this._keys ??= { forward: 0, backward: 0, left: 0, right: 0, handbrake: 0 };
+    this._look ??= { driver: null, hands: new Hands(), telemetry: {} };
+    return this._sim;
+  }
+
+  lookAgain(driver) {
+    const look = this._look;
+    restoreCar(this._base, this._sim);
+    look.driver = copyDriver(driver, look.driver);
+    look.hands.copyFrom(this.hands);
+    return look;
+  }
+
+  lookStep(look, frame) {
+    const sim = this._sim;
+    const substeps = Math.max(1, Math.round(frame / this.o.physicsStep));
+    const input = look.driver.update(sim, look.hands.press(this._keys, frame), frame);
+    for (let i = 0; i < substeps; i++) stepDriftCar(sim, input, frame / substeps, look.driver.model, look.telemetry);
+  }
+
+  // The wheel once the slide is unwound (planExit plays it ahead, powerOut drives it): for a point down the lane ahead
+  // of the car, the yaw it still carries taken off (the car swinging on past the lane out of the slide's last wiggle)
+  laneSteer(car) {
+    const o = this.o;
+    const line = this.exitLine;
+    const ux = Math.sin(line.heading), uz = Math.cos(line.heading);
+    const along = (car.position.x - line.x) * ux + (car.position.z - line.z) * uz + o.exitLookahead;
+    const error = wrapAngle(Math.atan2(line.x + ux * along - car.position.x, line.z + uz * along - car.position.z) - travelHeading(car));
+    return Math.max(-1, Math.min(1, error * o.exitSteerGain - car.angularVel * o.exitYawDamp));
+  }
+
+  // The cost of the look-ahead's car being where it is: over the curb or the plaza, or on the cop
+  placeCost(sim) {
+    const o = this.o;
+    const off = footprintOff(sim.position.x, sim.position.z, sim.heading, o.roadMargin);
+    const cop = Math.hypot(sim.position.x - this.center.x, sim.position.z - this.center.z) < o.copClearance;
+    return o.roadCost * off + (cop ? o.copCost : 0);
+  }
+
   // One frame of keys orbiting the centre to the left (the bearing from the centre grows)
   update(car, dt, driver, keys) {
     const o = this.o;
     this.time += dt;
+    // (what powerOut() plans from, if the show calls it between frames)
+    this._car = car;
+    this._driver = driver;
+    this._frame = Math.min(MAX_LOOK_FRAME, Math.max(MIN_LOOK_FRAME, dt));
     const dx = car.position.x - this.center.x, dz = car.position.z - this.center.z;
-    const distance = Math.max(0.1, Math.hypot(dx, dz));
     const sin = Math.sin(car.heading), cos = Math.cos(car.heading);
     const vx = sin * car.speed + car.vx, vz = cos * car.speed + car.vz;
     const ground = Math.hypot(vx, vz);
-    const lateral = car.vx * cos - car.vz * sin;
-    const angle = ground > 2 ? -Math.atan2(lateral, Math.abs(car.speed)) : 0; // a left drift's angle, + nose in
+    const angle = slideAngle(car); // a left drift's angle, + nose in
     const bearing = Math.atan2(dx, dz);
     if (this.phase !== 'roll' && this.bearing !== null) this.swept += wrapAngle(bearing - this.bearing);
     this.bearing = bearing;
-    const radial = (vx * dx + vz * dz) / distance; // m/s away from the centre
     keys.forward = 0;
     keys.backward = 0;
     keys.handbrake = 0;
     let want = 0;
+    // A donut that has died to a pivot at a crawl (musa's over-rotated launch, 2026-11-01: round and round 4 m from the
+    // cop), or that runs well inside or outside the circle, doesn't come back to it on its own: it launches onto the
+    // circle again
+    const offCircle = Math.abs(Math.hypot(dx, dz) - this.radius) > o.relaunchOff;
+    if (this.phase === 'drift') {
+      this.slowTime = ground < o.minSpeed ? (this.slowTime ?? 0) + dt : 0;
+      this.offTime = offCircle ? (this.offTime ?? 0) + dt : 0;
+      if ((this.slowTime > o.relaunchSlow || this.offTime > o.relaunchOffTime) && !this.wantOut) {
+        this.slowTime = this.offTime = 0;
+        this.sinceChoice = Infinity;
+        this.setPhase('launch');
+      }
+    }
     if (this.phase === 'roll') {
-      // The roll line is the circle's tangent at the bearing it joins on, run the way the orbit goes
-      const entry = this.entry;
-      const px = this.center.x + Math.sin(entry) * this.radius, pz = this.center.z + Math.cos(entry) * this.radius;
-      const tx = Math.cos(entry), tz = -Math.sin(entry);
-      const toEntry = (px - car.position.x) * tx + (pz - car.position.z) * tz; // m still to go to the tangent point
-      const aimX = px - tx * (toEntry - o.rollLookahead), aimZ = pz - tz * (toEntry - o.rollLookahead);
+      // The roll keeps to the lane it starts in, the way the car points then
+      const line = this.rollLine ??= { x: car.position.x, z: car.position.z, ux: Math.sin(car.heading), uz: Math.cos(car.heading) };
+      const along = (car.position.x - line.x) * line.ux + (car.position.z - line.z) * line.uz;
+      const aimX = line.x + line.ux * (along + o.rollLookahead), aimZ = line.z + line.uz * (along + o.rollLookahead);
       const error = wrapAngle(Math.atan2(aimX - car.position.x, aimZ - car.position.z) - travelHeading(car));
       want = Math.max(-1, Math.min(1, error * o.rollSteerGain));
-      // A feathered W: pressed once the car has slowed under the band, let go once it is back up to the crawl
+      // A feathered W: pressed once the car has slowed under the band, let go before it is back up to the crawl, by
+      // the speed it is gaining (a pedal comes up late)
+      const gaining = Math.max(0, car.longAccel || 0);
       if (ground < o.rollSpeed - o.rollBand) this.feather = true;
-      else if (ground > o.rollSpeed) this.feather = false;
+      else if (ground + gaining * o.rollReleaseLead > o.rollSpeed) this.feather = false;
       keys.forward = this.feather ? 1 : 0;
-      if (toEntry < ground * o.launchLead) this.setPhase('launch');
+      // Floored short of where the lane meets the circle (or level with the centre, a lane wide of it)
+      const centreAlong = (this.center.x - line.x) * line.ux + (this.center.z - line.z) * line.uz;
+      const centreAcross = (this.center.x - line.x) * line.uz - (this.center.z - line.z) * line.ux;
+      const meets = centreAlong - Math.sqrt(Math.max(0, this.radius ** 2 - centreAcross ** 2));
+      if (meets - along < ground * o.launchLead + o.launchShort) this.setPhase('launch');
     } else if (this.phase === 'launch') {
-      // Floored, the wheel turned onto the circle, aiming a little way round it
+      // Floored, onto the circle the way the donuts go on: the wheel either way and the handbrake as the look-ahead
+      // finds them (from the lane the line onto the circle swings out first, then round), until the slide is the drift
+      this.sinceChoice = (this.sinceChoice ?? Infinity) + dt;
+      if (this.sinceChoice >= o.decideEvery) {
+        this.sinceChoice = 0;
+        this.choice = this.choose(car, driver, this._frame, o.launchWheels, [1]);
+      }
       keys.forward = 1;
-      const aim = bearing + o.aheadArc;
-      const aimX = this.center.x + Math.sin(aim) * this.radius, aimZ = this.center.z + Math.cos(aim) * this.radius;
-      const error = wrapAngle(Math.atan2(aimX - car.position.x, aimZ - car.position.z) - travelHeading(car));
-      want = Math.max(-1, Math.min(1, error * o.steerGain));
-      // (on the reworked slide steering the car often steps out on its own here: that is the drift already)
-      if (angle > o.slideAngle) this.setPhase('drift');
-      else if (ground > o.kickSpeed) this.setPhase('kick');
-    } else if (this.phase === 'kick') {
-      // The flick: off the gas, the handbrake and the lock into the turn
-      want = 1;
-      keys.handbrake = 1;
-      if (this.time > o.kickTime) this.setPhase('drift');
+      want = this.choice.wheel;
+      keys.handbrake = this.time > o.launchHold ? this.choice.handbrake : 0;
+      // (sideways at a crawl, or off the circle, is what it launches out of, not the drift yet)
+      if ((angle > o.slideAngle && ground >= o.minSpeed && !offCircle) || this.time > o.launchTime) this.setPhase('drift');
     } else if (this.phase === 'drift') {
       this.sinceChoice = (this.sinceChoice ?? Infinity) + dt;
       if (this.sinceChoice >= o.decideEvery) {
-        this.choice = this.choose(car, driver, Math.min(MAX_LOOK_FRAME, Math.max(MIN_LOOK_FRAME, dt)));
         this.sinceChoice = 0;
+        // Its laps done, it leaves on the first way out it finds on the road that is quick down the avenue (any on the
+        // road, once it has looked for exitPatience); until then, round again
+        this.lookingOut = this.wantOut ? (this.lookingOut ?? 0) + o.decideEvery : this.lookingOut;
+        const out = this.wantOut ? this.planExit(car, driver, this._frame) : null;
+        if (out?.clean && (out.best.ground >= o.exitSpeed || this.lookingOut > o.exitPatience)) this.powerOut(out.best);
+        else this.choice = this.choose(car, driver, this._frame);
       }
-      want = this.choice.wheel;
-      keys.forward = this.choice.forward;
-      keys.handbrake = this.choice.handbrake;
-    } else if (this.phase === 'powerOut') {
-      // Out of the slide as the handling has it (drift-physics.js): off the gas with the counter-steer held the rears
-      // grip and the car straightens (the counter key with the gas still on throws it into a slide the other way, a
-      // manji, and W alone holds the slide); then floored, the wheel let go to follow the car
-      const unwinding = angle > o.exitAngle;
-      keys.forward = unwinding ? 0 : 1;
-      want = unwinding ? -1 : 0;
+      if (this.phase === 'drift') {
+        want = this.choice.wheel;
+        keys.forward = this.choice.forward;
+        keys.handbrake = this.choice.handbrake;
+      }
+    }
+    if (this.phase === 'powerOut') {
+      // The way out it played ahead (planExit): the counter-steer and the gas it unwinds the slide on, then floored down
+      // the lane; played again a few times a second from where the car has got to, the time it has been on it counted
+      // off the unwinding (as the slide comes down, the gas comes in: the driver's traction control holds it to what the
+      // angle takes, drift-physics.js, and the counter key asks for a shallow one)
+      const exit = this.exit;
+      exit.time += dt;
+      this.sinceChoice = (this.sinceChoice ?? Infinity) + dt;
+      if (this.sinceChoice >= o.decideEvery && exit.time < exit.unwind) {
+        this.sinceChoice = 0;
+        const left = exit.unwind - exit.time;
+        const again = this.planExit(car, driver, this._frame).best;
+        // (only a way out on the road, and a shorter unwinding than what is left of this one: the plan doesn't start
+        // over)
+        if (again.clean && again.unwind <= left + 1e-9) Object.assign(exit, again, { time: 0 });
+      }
+      if (exit.time < exit.unwind) {
+        keys.forward = exit.gas;
+        want = exit.counter * this.exitSide;
+      } else {
+        keys.forward = 1;
+        want = this.laneSteer(car);
+      }
     }
     const key = steeringKey(driver, want, car.speed, dt, this.hands);
     keys.left = key > 0 ? 1 : 0;
@@ -385,6 +568,14 @@ class DonutDriver {
 
 function wrapAngle(angle) {
   return Math.atan2(Math.sin(angle), Math.cos(angle));
+}
+
+// The car's drift angle as a left donut has it: + the nose turned in (the velocity to the right of the nose), 0 at a
+// crawl
+function slideAngle(car) {
+  const ground = Math.hypot(car.speed, car.vx, car.vz);
+  const lateral = car.vx * Math.cos(car.heading) - car.vz * Math.sin(car.heading);
+  return ground > 2 ? -Math.atan2(lateral, Math.abs(car.speed)) : 0;
 }
 
 // A police SUV: drift physics with less power than the M5, so it can chase but not catch
@@ -663,7 +854,7 @@ class SwimShow {
     this.cruiser.park(COP_SPOT.x, COP_SPOT.z, COP_HEADING);
     this.takeWheel();
     this.roamer = null;
-    this.donut = new DonutDriver(COP_SPOT, DRIFT_RADIUS, ENTRY_BEARING, {}, this.hands);
+    this.donut = new DonutDriver(COP_SPOT, DRIFT_RADIUS, null, { exitLine: EXIT_LINE }, this.hands);
     this.onCamera?.('chase');
     this.setPhase('roll');
   }
@@ -797,20 +988,25 @@ class SwimShow {
         const watching = exiting ? 0 : Math.max(-COP_GLANCE_LIMIT, Math.min(COP_GLANCE_LIMIT, copBearing));
         this.glance(car, dt, watching);
         car.showBird = !exiting && laps > BIRD_FROM_LAP && laps < BIRD_TO_LAP;
-        // Once it has done its laps and the way down the avenue comes round, power out onto it
+        // Once it has done its laps and the way down the avenue's lane comes round, it looks for the way out onto it
+        // (the donut driver leaves on the first it finds on the road); past the time limit it powers out anyway
         const aimZ = Math.max(car.position.z + EXIT_LOOKAHEAD, COP_SPOT.z + ESCAPE_MERGE);
-        const exit = Math.atan2(COP_SPOT.x - car.position.x, aimZ - car.position.z);
+        const exit = Math.atan2(EXIT_LINE.x - car.position.x, aimZ - car.position.z);
         const travel = travelHeading(car);
         const ahead = Math.atan2(Math.sin(exit - travel), Math.cos(exit - travel)); // + to the left, the way it turns
-        const done = laps > DONUT_LAPS || this.time > DONUT_TIME_LIMIT;
-        if (!exiting && this.donut.phase === 'drift' && done && ahead > 0 && ahead < EXIT_WINDOW) {
-          this.exitAt = this.time;
-          this.donut.powerOut();
-        }
+        // (past the time limit, any way out on the road, wherever it is; past the last chance, any way out at all)
+        const late = this.time > DONUT_TIME_LIMIT;
+        this.donut.wantOut = (laps > DONUT_LAPS || late) && ahead > -EXIT_EARLY && ahead < EXIT_WINDOW;
+        if (late) this.donut.lookingOut = Infinity;
+        if (!exiting && this.donut.phase === 'drift' && this.time > DONUT_LAST_CHANCE) this.donut.powerOut();
+        // (the donut driver powers out on its own, in its update: the way out is timed from the first frame it is on)
+        if (this.donut.phase === 'powerOut' && this.exitAt === undefined) this.exitAt = this.time;
         const lateral = car.vx * Math.cos(car.heading) - car.vz * Math.sin(car.heading);
         const gripping = Math.abs(Math.atan2(lateral, Math.max(1, Math.abs(car.speed)))) < EXIT_SLIP;
-        if (exiting && ((gripping && Math.abs(ahead) < EXIT_ALIGN) || this.time - this.exitAt > EXIT_TIME_LIMIT)) {
-          // The swim autopilot takes the car on from the slide's end
+        const underWay = Math.hypot(car.speed, car.vx, car.vz) > EXIT_HANDOVER_SPEED;
+        const settled = gripping && Math.abs(ahead) < EXIT_ALIGN && underWay;
+        if (exiting && this.donut.exit.time >= this.donut.exit.unwind && (settled || this.time - this.exitAt > EXIT_TIME_LIMIT)) {
+          // The swim autopilot takes the car on from the slide's end, under way down the lane
           this.exitAt = undefined;
           this.traffic.setClearZone(null);
           // Off the circle (which reaches over the curb) straight back onto the avenue, then the run
