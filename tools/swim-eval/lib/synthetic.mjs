@@ -19,6 +19,7 @@ const CORNER_SLIP = 25 * RAD;
 const CORNER_SLIDE = 18; // m either side of a corner that the car is sideways
 const CORNER_RADIUS = 10; // m, the arc each corner of the run is driven on
 const MID_BLOCK = 0.47; // the share of the roam where the car is mid-block on 9th Ave (50th-49th St)
+const MISSED = 'corners missed (never within 25 m on their approach, then past them)'; // beat 7's criterion
 const STUCK = 'stuck, not at a red light (10 s inside 5 m)'; // beat 8's criterion
 const DRIFTED = 'drifted (one unbroken spell ≥ 15°, ≥ 0.5 s, ≥ 50% of the turn)'; // beat 7's criterion
 const PATH_STEP = 0.25; // m between the points of the run's path
@@ -260,11 +261,11 @@ const BREAKS = [
   { beat: 7, name: 'every corner sideways only 0.3 s', layouts: BOTH, criterion: DRIFTED, apply: (tr) => slipNearCorners(tr, (near) => { const mid = Math.floor(near.length / 2); near.forEach((f, i) => { f.slip = Math.abs(i - mid) < 0.15 / DT ? -CORNER_SLIP : 0; }); }) },
   { beat: 7, name: 'every corner\'s slide broken every 0.2 s', criterion: DRIFTED, apply: (tr) => slipNearCorners(tr, (near) => { near.forEach((f, i) => { if (Math.floor((i * DT) / 0.2) % 2) f.slip = 0; }); }) },
   { beat: 7, name: 'every corner gripped round, sideways only once out of it', criterion: DRIFTED, apply: (tr) => slipNearCorners(tr, (near, c) => { near.forEach((f) => { const past = (f.x - c[0]) * Math.sin(f.h) + (f.z - c[1]) * Math.cos(f.h); f.slip = past > 12 ? -CORNER_SLIP : 0; }); }) },
-  { beat: 7, name: 'the route turns where the car drives straight on', criterion: 'turns completed', apply: (tr) => { const p = tr.events.find((e) => e.kind === 'path'); p.points.splice(2, 0, [avenueX('7'), streetZ(44)], [avenueX('7') + 60, streetZ(44)], [avenueX('7'), streetZ(44) + 1]); } },
+  { beat: 7, name: 'the route turns where the car drives straight on', criterion: 'turns completed', apply: (tr) => { const p = tr.events.find((e) => e.kind === 'path'); p.points.splice(2, 0, [avenueX('7'), streetZ(44)], [avenueX('7') + 80, streetZ(44)], [avenueX('7') + 80, streetZ(44) + 80]); } },
   // (Codex round 1: a corner never come within 25 m of was left out of the beat, not failed)
-  { beat: 7, name: 'a corner never come within 25 m of', layouts: BOTH, criterion: 'corners missed (never within 25 m, the route beyond them driven)', apply: (tr) => { const c = tr.events.find((e) => e.kind === 'path').points[3]; tr.frames = tr.frames.filter((f) => Math.hypot(f.x - c[0], f.z - c[1]) >= 26); } },
+  { beat: 7, name: 'a corner never come within 25 m of', layouts: BOTH, criterion: MISSED, apply: (tr) => { const c = tr.events.find((e) => e.kind === 'path').points[3]; tr.frames = tr.frames.filter((f) => Math.hypot(f.x - c[0], f.z - c[1]) >= 26); } },
   // (Codex round 2: ...and the trace ending on the leg after it, short of the next corner)
-  { beat: 7, name: 'a corner never come within 25 m of, the trace ending 100 m on', layouts: BOTH, criterion: 'corners missed (never within 25 m, the route beyond them driven)', apply: (tr) => {
+  { beat: 7, name: 'a corner never come within 25 m of, the trace ending 100 m on', layouts: BOTH, criterion: MISSED, apply: (tr) => {
     const pts = tr.events.find((e) => e.kind === 'path').points;
     const c = pts[3], next = pts[4];
     const out = Math.atan2(next[0] - c[0], next[1] - c[1]);
@@ -273,6 +274,12 @@ const BREAKS = [
     tr.frames = tr.frames.slice(0, end);
   } },
   // (a corner over the kerb with the trace ending 40 m on, inside its turn's 60 m: its kerb still counts)
+  // (worker E 2026-11-03, on 960c15d: two good shows beat 7 failed. The route extended, while the car is on 8th Ave,
+  // with corners it never gets to before the trace ends, one of them leading back along 57th St, which the car then
+  // drives the other way: not missed. And a later corner at the first corner's spot, turning the other way: judged
+  // on its own approach, never on the escape's pass)
+  { beat: 7, name: 'route corners ahead whose next leg is a street the car drives the other way (not missed)', layouts: BOTH, criterion: MISSED, criterionPasses: true, expect: 'VERIFIED', apply: (tr) => extendRoute(tr, (f) => Math.abs(f.x - avenueX('8')) < 1 && f.z < streetZ(42) - 200, [[avenueX('10'), streetZ(42) + 30], [avenueX('10'), streetZ(57) - 3.5], [avenueX('8'), streetZ(57) - 3.5]]) },
+  { beat: 7, name: 'a later route corner at the first corner\'s spot, turning the other way (not judged on the first pass)', layouts: BOTH, criterion: 'turns completed', criterionPasses: true, expect: 'VERIFIED', apply: (tr) => { const first = tr.route[1]; extendRoute(tr, (f) => Math.abs(f.x - avenueX('8')) < 1 && f.z < streetZ(42) - 200, [[avenueX('9'), first.z + 2], [first.x, first.z + 2], [first.x, first.z - 300]]); } },
   { beat: 7, name: 'a corner cut over the pavement, the trace ending 40 m past it', criterion: 'on the road throughout', apply: (tr) => {
     const c = [avenueX('8'), streetZ(57) - 3.5];
     shiftWhere(tr, (f) => Math.hypot(f.x - c[0], f.z - c[1]) < 25, 11, 11);
@@ -311,6 +318,14 @@ const BREAKS = [
 
 function shiftWhere(tr, test, dx, dz) {
   for (const f of tr.frames) if (test(f)) { f.x += dx; f.z += dz; }
+}
+
+// The route extended with `points` at the first frame passing `when` (a path event with the whole route, as the AI
+// logs one when swim-show.js extendRoute adds a leg)
+function extendRoute(tr, when, points) {
+  const path = tr.events.find((e) => e.kind === 'path');
+  const at = tr.frames.find(when);
+  tr.events.push({ kind: 'path', t: at.t, points: [...path.points.map((p) => [...p]), ...points] });
 }
 
 // The handoff show's ticks between the takeover and I, and after I
