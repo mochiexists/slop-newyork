@@ -1203,15 +1203,17 @@ class SwimShow {
   reroute(car) {
     this.reroutes = (this.reroutes ?? 0) + 1;
     const roamer = new RoamRoute(ROAM_SEED + REROUTE_SEED_STEP * this.reroutes).startFrom(car.position.x, car.position.z, car.heading);
-    const route = [{ x: car.position.x, z: car.position.z }];
+    // (its own words for the route: the eval harness's broken-handback build patches roam()'s line, which must be the
+    // only one, tools/swim-eval/lib/runner.mjs)
+    const way = [{ x: car.position.x, z: car.position.z }];
     for (let i = 0; i < ROUTE_AHEAD; i++) {
       const corner = roamer.next();
       if (!corner) break;
-      route.push(corner);
+      way.push(corner);
     }
-    if (route.length < 2) return false;
+    if (way.length < 2) return false;
     this.roamer = roamer;
-    this.pilot.setPath(route, { corridors: routeCorridors(route) });
+    this.pilot.setPath(way, { corridors: routeCorridors(way) });
     this.clearedCorner = undefined;
     this.traffic.setClearZone(null);
     this.stuck = 0;
