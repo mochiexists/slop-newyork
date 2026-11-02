@@ -34,6 +34,9 @@ test('the show starts on the Times Square plaza, 13 m off 7th Ave, by the game\'
 test('the footprint sees a kerb corner inside the car\'s box (Codex round 1\'s pose at 8th Ave & 42nd St)', () => {
   const map = new SwimMap(fixture);
   assert.ok(map.footprint(-869.2117, 9.9556, 0.95144).includes('pavement'));
+  // (round 2's: the kerb corner pokes in between the outline's points, caught by the corner-in-box test)
+  assert.ok(map.footprint(-869.45432, 9.234603, 0.95144).includes('pavement'));
+  assert.deepEqual([...new Set(map.footprint(-584.8, -200, 0))], ['road']);
 });
 
 test('the Kasa fit finds a circle', () => {

@@ -10,7 +10,7 @@
 //   obstacle   ground footprints traffic keeps clear of on the street (steam stacks, subway stairs: road-network.js's
 //              blockedOnStreet rule), dumped from the page;
 //   lane       road-network.js edges (the traffic lanes), dumped from the page.
-import { ALL_AVENUES, ALL_STREETS, avenueX, blockAt, nearestRoads, streetZ } from '../../../js/city-config.js';
+import { ALL_AVENUES, ALL_STREETS, BLOCKS, avenueX, blockAt, nearestRoads, streetZ } from '../../../js/city-config.js';
 import { GEO } from '../../../js/nyc-geodata.js';
 
 const CELL = 32;
@@ -168,6 +168,18 @@ class SwimMap {
       if (block) continue; // (on a curb island already: pavement covers it)
       this.obstacles.add(r);
     }
+    // Every kerb-side outline with its class, for the footprint's corner test: curb islands, plaza pieces, buildings
+    this.outlines = new Grid();
+    const ringOf = (pts) => pts.map((p) => (Array.isArray(p) ? p : [p.x, p.z]));
+    for (const b of BLOCKS) {
+      if (b.maxX < this.region.minX || b.minX > this.region.maxX || b.maxZ < this.region.minZ || b.minZ > this.region.maxZ) continue;
+      const kind = b.median ? 'median' : b.park > 0.6 ? 'park' : 'pavement';
+      this.outlines.add({ kind, ring: ringOf(b.poly), minX: b.minX, maxX: b.maxX, minZ: b.minZ, maxZ: b.maxZ });
+    }
+    for (const p of this.plazas) this.outlines.add({ kind: 'plaza', ring: ringOf(p.pts), minX: p.minX, maxX: p.maxX, minZ: p.minZ, maxZ: p.maxZ });
+    for (const c of dump.colliders) {
+      if (c.polygon) this.outlines.add({ kind: 'building', ring: c.polygon.outer, minX: c.minX, maxX: c.maxX, minZ: c.minZ, maxZ: c.maxZ });
+    }
     this.lanes = new Grid();
     for (const e of dump.edges) {
       const x1 = e.x0 + e.dx * e.span, z1 = e.z0 + e.dz * e.span;
@@ -229,6 +241,23 @@ class SwimMap {
       // car local x across (to its right as heading turns), z forward: world = rotate by heading (swim-mode.js rearContacts)
       const px = x + cos * ax + sin * az, pz = z - sin * ax + cos * az;
       out.push(this.classify(px, pz));
+    }
+    // ...and any kerb, plaza or building corner inside the box, which can poke in between the outline's points
+    // (Codex round 2: a kerb corner 0.3 m into the box at 8th Ave & 42nd St)
+    const reach = Math.hypot(CAR_HALF_WIDTH, CAR_HALF_LENGTH);
+    const seen = new Set();
+    for (const cx of [x - reach, x + reach]) for (const cz of [z - reach, z + reach]) {
+      for (const o of this.outlines.at(cx, cz)) {
+        if (seen.has(o) || o.maxX < x - reach || o.minX > x + reach || o.maxZ < z - reach || o.minZ > z + reach) continue;
+        seen.add(o);
+        for (const [vx, vz] of o.ring) {
+          const dx = vx - x, dz = vz - z;
+          if (Math.abs(dx * cos - dz * sin) <= CAR_HALF_WIDTH && Math.abs(dx * sin + dz * cos) <= CAR_HALF_LENGTH) {
+            out.push(o.kind);
+            break;
+          }
+        }
+      }
     }
     return out;
   }

@@ -163,7 +163,7 @@ function beatRoll(ctx) {
   const spinTime = roll.filter((f) => f.spin >= T.burnoutSpin).reduce((s, f) => s + f.dt, 0);
   const both = roll.filter((f) => f.k.includes('W') && f.k.includes('S')).length;
   const criteria = [
-    criterion('roll time', fmt(time), time >= T.rollMinTime && time <= T.rollMaxTime, `${T.rollMinTime}-${T.rollMaxTime}`, ' s'),
+    criterion('roll time', `${fmt(time)}${ctx.trace.meta?.launchUncertain ? ' (its end read back uncertainly)' : ''}`, ctx.trace.meta?.launchUncertain ? null : time >= T.rollMinTime && time <= T.rollMaxTime, `${T.rollMinTime}-${T.rollMaxTime}`, ' s'),
     criterion('top speed', fmt(top, 2), top < T.rollMaxMph, `< ${T.rollMaxMph}`, ' mph'),
     criterion('wheelspin ≥ 0.5', fmt(spinTime, 2), spinTime < T.burnoutTime, `< ${T.burnoutTime}`, ' s'),
     criterion('W+S frames', String(both), both === 0, '0')
@@ -178,8 +178,9 @@ function beatRoll(ctx) {
 function beatFloor(ctx) {
   const { trace, launchIndex } = ctx;
   if (ctx.injected) return beatResult(3, 'Floor it', NA, [], 'the scenario starts mid-donut (injected state)');
-  // (a session's launch is read back from the driving: not finding it there says nothing about the show)
-  if (launchIndex < 0 && trace.source === 'session') return beatResult(3, 'Floor it', INCONCLUSIVE, [criterion('launch', 'not found in the driving', null, 'one')], 'no launch read back from the session');
+  // (a session's launch is read back from the driving: not finding it there, or finding it only by the fallback rule,
+  // says nothing sure about the show)
+  if ((launchIndex < 0 || trace.meta?.launchUncertain) && trace.source === 'session') return beatResult(3, 'Floor it', INCONCLUSIVE, [criterion('launch', launchIndex < 0 ? 'not found in the driving' : 'read back uncertainly (a W held on from the roll)', null, 'one')], 'no sure launch read back from the session');
   if (launchIndex < 0) return beatResult(3, 'Floor it', NOT_VERIFIED, [criterion('launch', 'none', false, 'one')], 'it never launched');
   const frames = trace.frames;
   const l = frames[launchIndex];
@@ -256,7 +257,9 @@ function beatDonuts(ctx) {
   const buildings = donut.filter((f) => (f.bHit ?? 0) > 0);
   const time = span(donut);
   const criteria = [
-    criterion('laps round the cop', `${fmt(laps, 3)} ±${fmt(lapResolution, 3)} (one frame)${before ? ` (incl. ${fmt(before, 2)} before the injection)` : ''}${showLaps === null ? '' : `; the show's own count ${fmt(showLaps, 3)}`}${readBack ? ` (way out read back from the driving: up to ${T.sessionLapSlack} too many)` : ''}`, laps + lapResolution >= T.donutLaps + (readBack ? T.sessionLapSlack : 0), `≥ ${T.donutLaps}${readBack ? ` + ${T.sessionLapSlack}` : ''}`),
+    // (a session's count inside its read-back band, 2 to 2.2, can't tell a pass from a fail: INCONCLUSIVE, Codex round 2)
+    criterion('laps round the cop', `${fmt(laps, 3)} ±${fmt(lapResolution, 3)} (one frame)${before ? ` (incl. ${fmt(before, 2)} before the injection)` : ''}${showLaps === null ? '' : `; the show's own count ${fmt(showLaps, 3)}`}${readBack ? ` (way out read back from the driving: up to ${T.sessionLapSlack} too many)` : ''}`,
+      laps + lapResolution < T.donutLaps ? false : readBack && laps < T.donutLaps + T.sessionLapSlack ? null : true, `≥ ${T.donutLaps}${readBack ? ` (a session: ≥ ${T.donutLaps + T.sessionLapSlack} to pass, between: inconclusive)` : ''}`),
     criterion('circle centre off the cop', fmt(offset), offset === null ? null : offset <= T.donutCentre, `≤ ${T.donutCentre}`, ' m'),
     criterion('circle radius', fmt(fit?.r), fit ? fit.r >= T.donutRadiusMin && fit.r <= T.donutRadiusMax : null, `${T.donutRadiusMin}-${T.donutRadiusMax}`, ' m'),
     criterion('off the fitted circle (RMS)', fmt(rms, 2), rms === null ? null : rms <= T.donutFitRms, `≤ ${T.donutFitRms}`, ' m'),

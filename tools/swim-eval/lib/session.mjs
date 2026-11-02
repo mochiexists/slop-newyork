@@ -78,6 +78,7 @@ function toTrace(session, segmentIndex = 0) {
     return out;
   });
   const notes = [];
+  let launchUncertain = false;
   if (show) {
     let launch = -1;
     for (let i = 0; i < frames.length && launch < 0; i++) {
@@ -90,12 +91,13 @@ function toTrace(session, segmentIndex = 0) {
     }
     // (a W held straight on from the roll into the launch has no fresh press: then the launch is the start of the W
     // hold that takes the car past the roll's speed)
+    // (not walked back to the start of that hold, which can be the roll's own first press from rest, Codex round 2:
+    // the boundary is uncertain, and the beats that hang on it say so)
     let rule = 'the first W held unbroken from a rolling start';
     if (launch < 0) {
-      let i = frames.findIndex((f) => f.k.includes('W') && groundSpeed(f) > ROLL_TOP);
-      while (i > 0 && frames[i - 1].k.includes('W')) i--;
-      launch = i;
-      rule = 'the start of the W hold that takes it past the roll\'s speed';
+      launch = frames.findIndex((f) => f.k.includes('W') && groundSpeed(f) > ROLL_TOP);
+      rule = 'uncertain: where a W held on from the roll takes it past the roll\'s speed';
+      launchUncertain = launch >= 0;
     }
     let exit = -1;
     if (launch >= 0) {
@@ -127,7 +129,7 @@ function toTrace(session, segmentIndex = 0) {
   }
   return {
     source: 'session', label: `${session.session} AI segment ${segmentIndex + 1}/${segments.length}`, file: session.path,
-    cop: show ? { ...COP } : null, frames, events: [], meta: { segment: [first, last], show, notes, lapsBefore: 0 }
+    cop: show ? { ...COP } : null, frames, events: [], meta: { segment: [first, last], show, notes, lapsBefore: 0, launchUncertain }
   };
 }
 
