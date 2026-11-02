@@ -59,7 +59,13 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  page.on('console', (m) => { if (m.type() === 'error' && !THIRD_PARTY.test(m.text())) errors.push(m.text().slice(0, 200)); });
+  // (a failed load's text names no URL: its location does, so a radio 404 is told from one of the game's own)
+  page.on('console', (m) => {
+    if (m.type() !== 'error') return;
+    const where = m.location()?.url ?? '';
+    if (THIRD_PARTY.test(m.text()) || THIRD_PARTY.test(where)) return;
+    errors.push(`${m.text().slice(0, 200)}${where ? ` (${where})` : ''}`);
+  });
   await page.addInitScript(clockInit, { profile: '60', clockSeed: 1, seed: 1, seedMath: true });
   await page.route('**/js/main.js', async (route) => {
     const response = await route.fetch();

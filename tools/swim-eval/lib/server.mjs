@@ -2,6 +2,7 @@
 // one has none (the M3 model and engine recordings are never committed, so a worktree lacks them). The game's flight
 // recorder POSTs to /session-log; the runner catches those in the page, so here they are just acknowledged.
 // usage: node tools/swim-eval/lib/server.mjs <port> <repo dir> [assets dir]
+import { execFileSync } from 'node:child_process';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { extname, join, normalize, resolve } from 'node:path';
@@ -12,6 +13,14 @@ const TYPES = {
   '.glb': 'model/gltf-binary', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.mp3': 'audio/mpeg',
   '.ogg': 'audio/ogg', '.m4a': 'audio/mp4', '.wav': 'audio/wav', '.webp': 'image/webp'
 };
+
+function headCommit(root) {
+  try {
+    return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+  } catch {
+    return null;
+  }
+}
 
 function startServer(port, repo, assets = null) {
   const root = resolve(repo);
@@ -25,6 +34,14 @@ function startServer(port, repo, assets = null) {
       return;
     }
     const path = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+    // The flight recorder names its build from .git/HEAD; in a worktree .git is a file pointing elsewhere, so the
+    // commit is answered directly (session-recorder.js buildId takes a bare 40-hex HEAD)
+    if (path === '/.git/HEAD') {
+      const commit = headCommit(root);
+      res.writeHead(commit ? 200 : 404, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
+      res.end(commit ? `${commit}\n` : undefined);
+      return;
+    }
     let file = normalize(join(root, path));
     if (!file.startsWith(root)) {
       res.writeHead(403);
