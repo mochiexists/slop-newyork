@@ -309,9 +309,9 @@ class DonutDriver {
   // Out of the drift on the way out `exit` (planExit's), or the best it can find now (the show's time limit: the show
   // goes on wherever the car is)
   powerOut(exit = null) {
+    // (each way out carries the side the slide was out on when it was played, `side`, that its counter-steer is against)
     this.exit = exit ?? this.planExit(this._car, this._driver, this._frame).best;
     this.exit.time = 0;
-    this.exitSide = Math.sign(slideAngle(this._car)) || 1; // the side the slide is out on, that it counter-steers
     this.setPhase('powerOut');
   }
 
@@ -405,7 +405,7 @@ class DonutDriver {
       cost += (heading / (10 * RAD)) ** 2 * 20 + across * across * 4 + (Math.max(0, Math.abs(slip) - 10 * RAD) / (10 * RAD)) ** 2 * 20
         + (slip < -o.exitManji ? 400 : 0) - ground * 4;
       // (a clean way out over any other, however cheap)
-      if (!best || (clean && !best.clean) || (clean === best.clean && cost < best.cost)) best = { cost, clean, counter, gas, unwind, ground };
+      if (!best || (clean && !best.clean) || (clean === best.clean && cost < best.cost)) best = { cost, clean, counter, gas, unwind, ground, side };
     }
     return { best, clean: best.clean };
   }
@@ -553,7 +553,7 @@ class DonutDriver {
       }
       if (exit.time < exit.unwind) {
         keys.forward = exit.gas;
-        want = exit.counter * this.exitSide;
+        want = exit.counter * exit.side;
       } else {
         keys.forward = 1;
         want = this.laneSteer(car);
