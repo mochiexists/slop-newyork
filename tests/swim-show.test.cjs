@@ -227,7 +227,8 @@ test('the donuts hold the circle on a looser or steerier car (closed loop on the
 
 test('a way out played again mid-unwind counter-steers the slide as it is then, not as it was (Codex 2026-11-03)', () => {
   // (the slide has swung to the other side, a right one, since the way out began: the replan's counter-steer is left)
-  const autopilot = loadModule(read('js/drift-autopilot.js'), { imports: { './drift-physics.js': physics } });
+  const corner = loadModule(read('js/drift-corner.js'), { imports: { './swim-recovery.js': loadModule(read('js/swim-recovery.js')) } });
+  const autopilot = loadModule(read('js/drift-autopilot.js'), { imports: { './drift-physics.js': physics, './drift-corner.js': corner } });
   const hands = new autopilot.Hands();
   const driver = new physics.KeyboardDriver();
   const donut = new show.DonutDriver(show.COP_SPOT, show.DRIFT_RADIUS, null, {}, hands);
