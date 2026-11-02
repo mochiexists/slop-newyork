@@ -6,6 +6,10 @@
 import { BLOCKS } from '../../../js/city-config.js';
 import { THRESHOLDS as T, beatOfFrame } from './check.mjs';
 import { MPH } from './geometry.mjs';
+import { CAR_HALF_LENGTH, CAR_HALF_WIDTH } from './map.mjs';
+
+const CLOSE_UP = 18; // m either side of a failure's close-up map
+const MAX_CLOSE_UPS = 12;
 
 const BEATS = [
   { id: 1, name: 'Start on the road' }, { id: 2, name: 'Slow roll' }, { id: 3, name: 'Floor it' },
@@ -81,7 +85,7 @@ function verdictBadge(verdict) {
 // ---------------------------------------------------------------------------------------------------------------------
 // The top-down map: the roads are the surface; blocks (pavement), plazas, parks and buildings drawn over it from the
 // game's own data, the car's path on top coloured by beat, the cop, the corners and the failure points
-function mapSvg({ trace, result, map, bounds, title, width = 640 }) {
+function mapSvg({ trace, result, map, bounds, title, width = 640, car = null }) {
   const { minX, maxX, minZ, maxZ } = bounds;
   const scale = width / (maxX - minX);
   const height = Math.round((maxZ - minZ) * scale);
@@ -135,17 +139,30 @@ function mapSvg({ trace, result, map, bounds, title, width = 640 }) {
     if (c.x < minX || c.x > maxX || c.z < minZ || c.z > maxZ) continue;
     parts.push(`<circle class="corner" cx="${X(c.x)}" cy="${Z(c.z)}" r="${Math.max(4, T.cornerReach * scale)}"/>`);
   }
-  result.failures.forEach((fail, i) => {
-    const f = nearestFrame(trace, fail.t);
-    if (!f || f.x < minX || f.x > maxX || f.z < minZ || f.z > maxZ) return;
-    parts.push(`<g class="fail"><circle cx="${X(f.x)}" cy="${Z(f.z)}" r="7"/><text x="${X(f.x)}" y="${+Z(f.z) + 4}" text-anchor="middle">${i + 1}</text></g>`);
-  });
+  // The car's box at one frame (a failure's close-up): the swim car's 0.97 × 2.52 m half extents at its heading
+  if (car) {
+    const s = Math.sin(car.h), c = Math.cos(car.h);
+    const corners = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([lx, lz]) => {
+      const ax = lx * CAR_HALF_WIDTH, az = lz * CAR_HALF_LENGTH;
+      return { x: car.x + c * ax + s * az, z: car.z - s * ax + c * az };
+    });
+    const nose = { x: car.x + s * CAR_HALF_LENGTH, z: car.z + c * CAR_HALF_LENGTH };
+    parts.push(`${poly(corners, 'carbox')}<line class="nose" x1="${X(car.x)}" y1="${Z(car.z)}" x2="${X(nose.x)}" y2="${Z(nose.z)}"/>`);
+  }
+  if (!car) {
+    result.failures.forEach((fail, i) => {
+      const f = nearestFrame(trace, fail.t);
+      if (!f || f.x < minX || f.x > maxX || f.z < minZ || f.z > maxZ) return;
+      parts.push(`<g class="fail"><circle cx="${X(f.x)}" cy="${Z(f.z)}" r="7"/><text x="${X(f.x)}" y="${+Z(f.z) + 4}" text-anchor="middle">${i + 1}</text></g>`);
+    });
+  }
   return `<figure class="card" style="margin:0"><div class="sub" style="margin-bottom:6px">${esc(title)}</div>
 <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(title)}" style="width:100%;height:auto;background:var(--road);border-radius:6px">
 <style>.pavement{fill:var(--pavement)}.park{fill:var(--park)}.plaza{fill:var(--plaza)}.building{fill:var(--building)}
 .path{fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.cop{fill:var(--ink)}.start{fill:var(--surface-1);stroke:var(--ink);stroke-width:2}
 .corner{fill:none;stroke:var(--muted);stroke-dasharray:3 3}.lbl{font-size:11px;fill:var(--ink);paint-order:stroke;stroke:var(--surface-1);stroke-width:3px}
-.fail circle{fill:var(--critical);stroke:var(--surface-1);stroke-width:2}.fail text{font-size:10px;fill:#fff;font-weight:700}</style>
+.fail circle{fill:var(--critical);stroke:var(--surface-1);stroke-width:2}.fail text{font-size:10px;fill:#fff;font-weight:700}
+.carbox{fill:none;stroke:var(--critical);stroke-width:2}.nose{stroke:var(--critical);stroke-width:2}</style>
 ${parts.join('\n')}</svg></figure>`;
 }
 
@@ -223,6 +240,14 @@ function runPage({ result, trace, map, run, failureShots }) {
   const opening = mapSvg({ trace, result, map, bounds: pathBounds([], 55, Infinity, result.cop ?? trace.frames[0]), title: 'The opening, Times Square (±55 m round the cop)' });
   const whole = mapSvg({ trace, result, map, bounds: pathBounds(trace.frames, 40, 3200), title: 'The whole run' });
   const failures = result.failures.map((f, i) => `<tr><td class="num">${i + 1}</td><td class="num">${fmt(f.t, 2)} s</td><td>beat ${f.beat}</td><td>${esc(f.label)}</td></tr>`).join('');
+  // Each failure seen from above: the car's box at that frame on the game's own kerbs, plaza and buildings (the
+  // show's camera is often the driver's seat, which can't show where the wheels are)
+  const closeUps = result.failures.slice(0, MAX_CLOSE_UPS).map((fail, i) => {
+    const f = nearestFrame(trace, fail.t);
+    if (!f) return '';
+    const bounds = { minX: f.x - CLOSE_UP, maxX: f.x + CLOSE_UP, minZ: f.z - CLOSE_UP * 0.75, maxZ: f.z + CLOSE_UP * 0.75 };
+    return mapSvg({ trace, result, map, bounds, title: `${i + 1}. t ${fmt(f.t, 2)} s · beat ${fail.beat} · ${fail.label} · under the car: ${[...new Set(f.foot ?? [])].join(' + ')}`, width: 420, car: f });
+  }).join('');
   const shots = [
     ...(run?.shots ?? []).map((s) => ({ file: `shots/${s.file}`, caption: `${s.label} · t ${fmt(s.t, 2)} s${s.kind === 'incident' ? ' (contact)' : ''}`, fail: s.kind === 'incident' })),
     ...failureShots.map((s) => ({ file: s.file, caption: `failure ${s.n}: ${s.label} · t ${fmt(s.t, 2)} s (from the video)`, fail: true }))
@@ -235,7 +260,9 @@ function runPage({ result, trace, map, run, failureShots }) {
 ${(trace.meta?.notes ?? []).map((n) => `<div class="sub">${esc(n)}</div>`).join('')}
 <h2>The beats</h2><div class="card">${beatTable(result)}</div>
 <h2>Where it drove</h2>${legend()}<div class="maps">${opening}${whole}</div>
-${failures ? `<h2>Failure points</h2><div class="card"><table><thead><tr><th>#</th><th>t</th><th>Beat</th><th>What</th></tr></thead><tbody>${failures}</tbody></table></div>` : ''}
+${failures ? `<h2>Failure points</h2><div class="card"><table><thead><tr><th>#</th><th>t</th><th>Beat</th><th>What</th></tr></thead><tbody>${failures}</tbody></table></div>
+<div class="sub">Each from above (±${CLOSE_UP} m), the car's box in red at that frame, its nose the short line:</div>
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:10px">${closeUps}</div>` : ''}
 <h2>Speed and drift angle</h2>
 ${lineChart({ trace, result, value: (f) => f.g * MPH, label: 'Speed over the ground', unit: 'mph', thresholds: [{ value: T.rollMaxMph, label: '12 mph (roll)' }, { value: T.exitMph, label: '50 mph (way out)' }, { value: T.swimMph, label: '70 mph (swim)' }] })}
 ${lineChart({ trace, result, value: (f) => Math.abs(f.slip) * 180 / Math.PI, label: 'Drift angle', unit: '°', thresholds: [{ value: 30, label: '30° (donut min)' }, { value: 50, label: '50° (donut max)' }] })}

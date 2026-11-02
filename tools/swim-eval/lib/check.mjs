@@ -202,13 +202,16 @@ function beatDonuts(ctx) {
   const cop = trace.cop ?? COP;
   let sweep = 0;
   let last = null;
-  for (const f of donut) {
+  // (swept from where the car was as it launched: the frame before the first donut frame, as the donut driver counts)
+  const startIndex = trace.frames.indexOf(donut[0]);
+  for (const f of startIndex > 0 ? [trace.frames[startIndex - 1], ...donut] : donut) {
     const a = Math.atan2(f.x - cop.x, f.z - cop.z);
     if (last !== null) sweep += wrapAngle(a - last);
     last = a;
   }
   const before = trace.meta?.lapsBefore ?? 0;
   const laps = Math.abs(sweep) / (2 * Math.PI) + before;
+  const showLaps = donut[donut.length - 1].laps ?? null; // (the donut driver's own counter, a run trace logs it)
   const sliding = donut.filter((f) => Math.abs(f.slip) > T.slidingSlip);
   const fit = kasaFit(sliding.map((f) => [f.x, f.z]));
   const offset = fit ? Math.hypot(fit.cx - cop.x, fit.cz - cop.z) : null;
@@ -219,7 +222,7 @@ function beatDonuts(ctx) {
   const buildings = donut.filter((f) => (f.bHit ?? 0) > 0);
   const time = span(donut);
   const criteria = [
-    criterion('laps round the cop', `${fmt(laps, 2)}${before ? ` (incl. ${fmt(before, 2)} before the injection)` : ''}`, laps >= T.donutLaps, `≥ ${T.donutLaps}`),
+    criterion('laps round the cop', `${fmt(laps, 3)}${before ? ` (incl. ${fmt(before, 2)} before the injection)` : ''}${showLaps === null ? '' : `; the show's own count ${fmt(showLaps, 3)}`}`, laps >= T.donutLaps, `≥ ${T.donutLaps}`),
     criterion('circle centre off the cop', fmt(offset), offset === null ? null : offset <= T.donutCentre, `≤ ${T.donutCentre}`, ' m'),
     criterion('circle radius', fmt(fit?.r), fit ? fit.r >= T.donutRadiusMin && fit.r <= T.donutRadiusMax : null, `${T.donutRadiusMin}-${T.donutRadiusMax}`, ' m'),
     criterion('median drift angle', fmt(slip === null ? null : deg(slip), 0), slip === null ? null : slip >= T.donutSlipMin && slip <= T.donutSlipMax, `${Math.round(deg(T.donutSlipMin))}-${Math.round(deg(T.donutSlipMax))}`, '°'),
@@ -378,12 +381,16 @@ function beatCorners(ctx) {
   return beatResult(7, 'Corners drifted, on the road', verdictOf(criteria), criteria, summaryOf(criteria), { failures, corners: driven });
 }
 
-// 8. Endless roam: stopped < 10% of the time, never stuck
+// 8. Endless roam: stopped < 10% of the time, never stuck. Judged over all the AI's driving after the donuts (the
+//    scripted run is the roam's first legs, as the car drives them: on 89419cc it never got past 8th Ave in 165 s,
+//    queued at red lights for half a minute, which a roam-only window would never have seen); the roam proper, past
+//    the run's last corner, is shown on its own.
 function beatRoam(ctx) {
-  const { roam } = ctx;
+  const roam = ctx.run.concat(ctx.roam);
   const time = span(roam);
+  const proper = span(ctx.roam);
   if (time < T.roamMinTime) {
-    return beatResult(8, 'Endless roam', INCONCLUSIVE, [criterion('roam time', fmt(time), null, `≥ ${T.roamMinTime}`, ' s')], `only ${fmt(time)} s of roam (needs ${T.roamMinTime})`);
+    return beatResult(8, 'Endless roam', INCONCLUSIVE, [criterion('driving after the donuts', fmt(time), null, `≥ ${T.roamMinTime}`, ' s')], `only ${fmt(time)} s of driving after the donuts (needs ${T.roamMinTime})`);
   }
   const stopped = roam.filter((f) => f.g < T.stoppedSpeed).reduce((s, f) => s + f.dt, 0);
   // Stuck: any stuckWindow over which the car got less than stuckDistance from where it was
@@ -402,7 +409,7 @@ function beatRoam(ctx) {
   const reversing = roam.filter((f) => f.rev).reduce((s, f) => s + f.dt, 0);
   const off = ctx.trace.frames[ctx.trace.frames.length - 1].phase === 'off';
   const criteria = [
-    criterion('roam time', fmt(time), true, `≥ ${T.roamMinTime}`, ' s'),
+    criterion('driving after the donuts', `${fmt(time)} s (past the run, the roam proper: ${fmt(proper)} s)`, true, `≥ ${T.roamMinTime} s`),
     criterion('stopped', `${fmt((stopped / time) * 100, 0)}% (${fmt(stopped)} s)`, stopped / time < T.stoppedShare, `< ${T.stoppedShare * 100}%`),
     criterion('stuck (10 s inside 5 m)', stuck ? `at t ${fmt(stuck.t)} (${fmt(stuck.x, 0)}, ${fmt(stuck.z, 0)})` : 'never', !stuck, 'never'),
     criterion('the AI still driving at the end', off ? 'no: the show gave the car back' : 'yes', !off, 'yes'),
