@@ -640,6 +640,7 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
     focusX = x;
     focusZ = z;
     hasView = view;
+    // (Swimming in Slop: the swimming car clears the crowd ahead of it as the taxi does)
     pedRange = player.active && (activeMode === 'car' || activeMode === 'swim' || activeMode === 'cyclist') && player.entity.position.y > -1
       ? Math.sqrt(player.vx * player.vx + player.vz * player.vz) * PED_LOOKAHEAD + player.halfL + 6 : 0;
     if (reseeding) {
@@ -683,6 +684,7 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
     }
   }
 
+  // (Swimming in Slop: update()'s drawing half, see step())
   function draw(dt) {
     pedCrowd.begin();
     for (let i = 0; i < NUM_PEDS; i++) {
