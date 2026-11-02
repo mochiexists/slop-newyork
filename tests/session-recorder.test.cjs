@@ -129,7 +129,7 @@ test('on the swim clock each row carries its tick and the player\'s own keys, an
   assert.equal(start.car.drift.slipAngle, 0.2, 'unrounded');
   assert.deepEqual(start.car.chassis, { pitch: 0.01, roll: -0.02, heave: 0.03 });
   assert.ok('steer' in start.driver);
-  assert.deepEqual(start.cruiser, { state: 'parked', retired: false, x: 9, z: 8, heading: 1 });
+  assert.deepEqual(start.cruiser, { state: 'parked', retired: false, x: 9, z: 8, heading: 1, speed: 0, vx: 0, vz: 0, angularVel: 0 });
   assert.deepEqual(chunk.events, [[1, { name: 'manual', tick: 41, seq: 2 }]], 'the event comes before the frame after it');
   assert.equal(start.seq, 1, 'notes are numbered in the order they were made');
   // the download has them too, indexed in the whole session

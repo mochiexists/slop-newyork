@@ -146,8 +146,10 @@ class SessionRecorder {
    */
   run(run, car, driver, cruiser = null, show = null) {
     const { tick, seed, x, z, reason, elapsed } = run;
-    const cop = cruiser ? { state: cruiser.state, retired: Boolean(cruiser.retired), x: cruiser.car.position.x,
-      z: cruiser.car.position.z, heading: cruiser.car.heading } : null;
+    // (a cop parked after a chase may still be creeping: its motion is what a collision with it reads)
+    const c = cruiser?.car;
+    const cop = cruiser ? { state: cruiser.state, retired: Boolean(cruiser.retired), x: c.position.x, z: c.position.z,
+      heading: c.heading, speed: c.speed ?? 0, vx: c.vx ?? 0, vz: c.vz ?? 0, angularVel: c.angularVel ?? 0 } : null;
     const ai = show ? { phase: show.phase, playerManual: Boolean(show.playerManual) } : null;
     this.note('runs', { tick, seed, x, z, reason, elapsed, car: snapshotCar(car), driver: snapshotDriver(driver), cruiser: cop, show: ai });
   }

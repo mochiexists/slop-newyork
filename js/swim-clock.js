@@ -147,6 +147,8 @@ class SwimClock {
     this.curr = {};
     this.saved = {};
     this.drawn = false;
+    this.drawnAt = { x: 0, z: 0, heading: 0 }; // where drawFrame() put the car
+
     this.pendingRun = null;
     this.run = null; // the run being driven: { seed, x, z, reason, tick }
     this.beforeTick = null; // (tick) → called before each tick: a replay presses its keys here (tools/swim-replay)
@@ -180,8 +182,10 @@ class SwimClock {
    * them) and puts the car's drawn pose on it for the rest of the frame. Returns the city's elapsed seconds.
    */
   advance(dt, elapsed, mode) {
-    // (a frame that threw before endFrame() left the drawn pose on the car: the sim state back first)
-    this.endFrame();
+    // (a frame that threw before endFrame() left the drawn pose on the car: the sim state back first, unless something
+    // has moved the car since, a teleport, which then starts its run)
+    if (this.drawn && !moved(this.controllers.entities.swim, this.drawnAt)) this.endFrame();
+    this.drawn = false;
     this.active = mode === 'swim';
     if (!this.active) {
       this.clock.leftover = 0;
@@ -240,6 +244,9 @@ class SwimClock {
   drawFrame(car) {
     capturePose(car, this.saved);
     drawPose(car, this.prev, this.curr, this.clock.alpha);
+    this.drawnAt.x = car.position.x;
+    this.drawnAt.z = car.position.z;
+    this.drawnAt.heading = car.heading;
     this.drawn = true;
   }
 

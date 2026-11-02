@@ -205,6 +205,14 @@ test('a frame that throws before endFrame() costs the run nothing: the next fram
   assert.equal(clock.run.reason, 'start');
   clock.endFrame();
   assert.ok(car.position.z >= sim, 'the car went on from its sim state');
+  // a frame that threw, then a teleport before the next: the teleport stands, and starts its run
+  elapsed = clock.advance(clock.tick * 1.5, elapsed, 'swim');
+  car.position.x = 100;
+  elapsed = clock.advance(0.0001, elapsed, 'swim');
+  assert.equal(car.position.x, 100);
+  assert.equal(clock.run.reason, 'teleport');
+  assert.equal(reseeds.length, 2);
+  clock.endFrame();
 });
 
 function keysDown(controllers, keys) {

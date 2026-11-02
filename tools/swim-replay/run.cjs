@@ -139,13 +139,16 @@ async function pageReplay(plan) {
     }
     if (cm.swimDriver) Object.assign(cm.swimDriver, start.driver);
   };
+  // A show run is started with P, unless the show was already stopped again when its run began (P, then I or P
+  // within the frame): that one is a player's run at the show's spot, played as any other
+  const asShow = start.reason === 'show' && (start.show?.phase ?? 'roll') !== 'off';
   const onRun = clock.onRun;
   clock.onRun = (run, car) => {
-    if (run.reason === (start.reason === 'show' ? 'show' : 'replay')) {
+    if (run.reason === (asShow ? 'show' : 'replay')) {
       replay.armed = true;
       // A show run: P put the car at the show's spot as it did then; what P doesn't reset (the engine's revs, the
       // gearbox the show hands back) comes from the recording, and the clock draws from there
-      if (start.reason === 'show' && start.car) {
+      if (asShow && start.car) {
         restoreCar();
         director.show.playerManual = Boolean(start.show?.playerManual);
         capturePose(car, clock.prev);
@@ -174,7 +177,7 @@ async function pageReplay(plan) {
     cm.keys.right = bits & 8 ? 1 : 0;
     cm.keys.up = bits & 16 ? 1 : 0;
   };
-  if (start.reason === 'show') return 'P';
+  if (asShow) return 'P';
   if (!start.car) return 'script'; // (the key list's own start: pageScriptStart)
   // The car, its driver and the cop as the run found them; the run itself (the city laid out) at the next frame
   restoreCar();
@@ -182,6 +185,8 @@ async function pageReplay(plan) {
   if (cop && cop.state !== 'hidden') {
     director.cruiser.park(cop.x, cop.z, cop.heading);
     director.cruiser.retired = cop.retired;
+    const { speed = 0, vx = 0, vz = 0, angularVel = 0 } = cop;
+    Object.assign(director.cruiser.car, { speed, vx, vz, angularVel });
   } else {
     director.cruiser.hide();
   }
