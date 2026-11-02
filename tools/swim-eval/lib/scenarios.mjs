@@ -81,8 +81,21 @@ function baselineSuite() {
   return list;
 }
 
+// Deliberately broken builds (patched in the page, lib/runner.mjs), to see the live checks fail: not in the baseline
+function brokenBuilds() {
+  return [
+    scenario('broken-roll-and-radius', {
+      duration: 30,
+      patches: [
+        { file: 'js/swim-show.js', from: 'const DRIFT_RADIUS = 11;', to: 'const DRIFT_RADIUS = 16; // (swim-eval: broken on purpose)' },
+        { file: 'js/swim-show.js', from: 'rollSpeed: 5,', to: 'rollSpeed: 8, // (swim-eval: broken on purpose)' }
+      ]
+    })
+  ];
+}
+
 function findScenario(name) {
-  const known = baselineSuite().find((s) => s.name === name);
+  const known = [...baselineSuite(), ...brokenBuilds()].find((s) => s.name === name);
   if (known) return known;
   // fresh-s<seed>-<profile>[-w<warmup>], made up on the spot
   const match = /^fresh-s(\d+)-(\w+?)(?:-w(\d+))?$/.exec(name);

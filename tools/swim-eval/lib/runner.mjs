@@ -102,6 +102,19 @@ async function runScenario(scenario, { outDir, port, repo, mapDir }) {
     hooks = rewritten.applied;
     await route.fulfill({ response, body: rewritten.body });
   });
+  // A scratch-patched build (scenario.patches: [{ file: 'js/x.js', from, to }]): text replaced as the page fetches the
+  // file, to see a check fail on a deliberately broken game. Nothing in the repo changes; each must match once.
+  for (const [file, patches] of Object.entries(Object.groupBy(scenario.patches ?? [], (p) => p.file))) {
+    await page.route(`**/${file}`, async (route) => {
+      const response = await route.fetch();
+      let body = await response.text();
+      for (const { from, to } of patches) {
+        if (body.split(from).length !== 2) throw new Error(`patch of ${file}: "${from}" must match exactly once`);
+        body = body.replace(from, to);
+      }
+      await route.fulfill({ response, body });
+    });
+  }
   // The game's flight recorder: its chunks, kept with the run (scored offline as a cross-check)
   await page.route('**/session-log', async (route) => {
     appendFileSync(join(runDir, 'session.jsonl'), `${route.request().postData()}\n`);

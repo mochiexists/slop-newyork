@@ -202,16 +202,20 @@ function beatDonuts(ctx) {
   const cop = trace.cop ?? COP;
   let sweep = 0;
   let last = null;
-  // (swept from where the car was as it launched: the frame before the first donut frame, as the donut driver counts)
+  // (swept from where the car was as it launched, the frame before the first donut frame, to the frame it starts
+  // powering out on: the donut driver counts the same stretch, and decides on that last frame that it has its laps)
   const startIndex = trace.frames.indexOf(donut[0]);
-  for (const f of startIndex > 0 ? [trace.frames[startIndex - 1], ...donut] : donut) {
+  const endIndex = trace.frames.indexOf(donut[donut.length - 1]);
+  const swept = trace.frames.slice(Math.max(0, startIndex - 1), Math.min(trace.frames.length, endIndex + 2));
+  for (const f of swept) {
     const a = Math.atan2(f.x - cop.x, f.z - cop.z);
     if (last !== null) sweep += wrapAngle(a - last);
     last = a;
   }
   const before = trace.meta?.lapsBefore ?? 0;
   const laps = Math.abs(sweep) / (2 * Math.PI) + before;
-  const showLaps = donut[donut.length - 1].laps ?? null; // (the donut driver's own counter, a run trace logs it)
+  // (the donut driver's own counter at the same frame: a run trace logs it)
+  const showLaps = swept[swept.length - 1].laps ?? donut[donut.length - 1].laps ?? null;
   const sliding = donut.filter((f) => Math.abs(f.slip) > T.slidingSlip);
   const fit = kasaFit(sliding.map((f) => [f.x, f.z]));
   const offset = fit ? Math.hypot(fit.cx - cop.x, fit.cz - cop.z) : null;

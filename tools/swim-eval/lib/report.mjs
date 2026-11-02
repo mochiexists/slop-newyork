@@ -236,7 +236,7 @@ function legend() {
 }
 
 function runPage({ result, trace, map, run, failureShots }) {
-  const header = run ? `${esc(run.scenario.name)} · build ${esc(run.sha)} · clock ${esc(run.scenario.profile)} · traffic seed ${run.scenario.trafficSeed} · seed ${run.scenario.seed}${run.scenario.warmup ? ` · ${run.scenario.warmup} s warm-up` : ''}${run.scenario.inject ? ` · injected: ${esc(run.scenario.inject.label)}` : ''}` : esc(result.label);
+  const header = run ? `${esc(run.scenario.name)} · build ${esc(run.sha)} · clock ${esc(run.scenario.profile)} · traffic seed ${run.scenario.trafficSeed} · seed ${run.scenario.seed}${run.scenario.warmup ? ` · ${run.scenario.warmup} s warm-up` : ''}${run.scenario.inject ? ` · injected: ${esc(run.scenario.inject.label)}` : ''}${run.scenario.patches?.length ? ` · <b>patched build (broken on purpose): ${run.scenario.patches.map((p) => `${esc(p.file)}: ${esc(p.from)} → ${esc(p.to.split(' //')[0])}`).join('; ')}</b>` : ''}` : esc(result.label);
   const opening = mapSvg({ trace, result, map, bounds: pathBounds([], 55, Infinity, result.cop ?? trace.frames[0]), title: 'The opening, Times Square (±55 m round the cop)' });
   const whole = mapSvg({ trace, result, map, bounds: pathBounds(trace.frames, 40, 3200), title: 'The whole run' });
   const failures = result.failures.map((f, i) => `<tr><td class="num">${i + 1}</td><td class="num">${fmt(f.t, 2)} s</td><td>beat ${f.beat}</td><td>${esc(f.label)}</td></tr>`).join('');
