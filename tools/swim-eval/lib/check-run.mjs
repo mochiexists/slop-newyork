@@ -1,7 +1,7 @@
 // Check one run's folder (runner.mjs wrote it): the verdict per beat (verdict.json), a still from the video at every
 // failure moment (failures/), the run's report page (report.html). Also scores a trace or session file on its own.
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { checkTrace } from './check.mjs';
 import { SwimMap } from './map.mjs';
@@ -9,6 +9,7 @@ import { runPage } from './report.mjs';
 import { readSession, toTrace } from './session.mjs';
 
 const MAX_FAILURE_STILLS = 12;
+const LAST_FRAME_SEEK = 0.2; // s before the video's end
 
 function loadMap(file) {
   return new SwimMap(JSON.parse(readFileSync(file, 'utf8')));
@@ -37,12 +38,19 @@ function failureStills(runDir, run, trace, result) {
     if (!frame?.wall) return;
     const at = Math.max(0, (frame.wall - run.videoStartWall) / 1000);
     const file = `failures/${String(i + 1).padStart(2, '0')}-beat${fail.beat}.jpg`;
-    try {
-      execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-ss', at.toFixed(2), '-i', video, '-frames:v', '1', '-pix_fmt', 'yuvj420p', '-q:v', '3', join(runDir, file)], { stdio: 'pipe' });
-      stills.push({ file, n: i + 1, label: fail.label, t: fail.t });
-    } catch {
-      // (a moment past the video's end: the table still lists it)
-    }
+    // (written now: a still left by an earlier check of this run doesn't count)
+    const grab = (seek) => {
+      const before = Date.now() - 1000;
+      try {
+        execFileSync('ffmpeg', ['-y', '-loglevel', 'error', ...seek, '-i', video, '-frames:v', '1', '-pix_fmt', 'yuvj420p', '-q:v', '3', join(runDir, file)], { stdio: 'pipe' });
+      } catch {
+        // (no frame there: the table still lists the failure)
+      }
+      return existsSync(join(runDir, file)) && statSync(join(runDir, file)).mtimeMs >= before;
+    };
+    // (a moment at the run's very end can fall past the video's last frame, where ffmpeg writes nothing: then the last
+    // frame stands in)
+    if (grab(['-ss', at.toFixed(2)]) || grab(['-sseof', String(-LAST_FRAME_SEEK)])) stills.push({ file, n: i + 1, label: fail.label, t: fail.t });
   });
   return stills;
 }
