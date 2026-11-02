@@ -249,24 +249,34 @@ async function installProbe(cfg) {
   let lastPath = null;
   let lastPathLength = 0;
 
-  // One record per step of the sim: on a fixed-clock build (the director has step(), called by swim-clock.js once per
-  // 1/120 s tick, the car in its sim state) after each step; before (89419cc), after each frame's update(). Recording
-  // in update() on a fixed-clock build would log the car's drawn pose, between two ticks, and the frame's dt.
-  const fixedClock = typeof d.step === 'function';
+  // One record per step of the sim, after the whole step, its time counted from the step's start (so an event inside
+  // it, a phase the AI changes as it presses its keys, carries the step's own time). On a fixed-clock build (2771a69
+  // on: controllers.swimClock steps the car, the director and then the traffic once per 1/120 s tick, SwimClock.step)
+  // around each tick: the traffic's step can still move the car and resolve a contact (Codex round 3); in update() the
+  // car would be its drawn pose, between two ticks. Before it (89419cc), around each frame: the time from the start of
+  // the controllers' update (where the AI presses its keys), the record after the frame's traffic update.
+  const swimClock = cm.swimClock;
+  const fixedClock = Boolean(swimClock && typeof swimClock.step === 'function');
   trace.fixedClock = fixedClock;
   if (fixedClock) {
-    const step = d.step.bind(d);
-    d.step = (dt) => {
+    const tick = swimClock.step.bind(swimClock);
+    swimClock.step = (c, dt) => {
       if (trace.recording) trace.simT += dt;
-      step(dt);
+      tick(c, dt);
       record(dt);
     };
   } else {
-    const update = d.update.bind(d);
-    d.update = (dt, camera) => {
+    const controllersUpdate = cm.update.bind(cm);
+    cm.update = (dt, ...rest) => {
       if (trace.recording) trace.simT += dt;
-      update(dt, camera);
-      record(dt);
+      trace.frameDt = dt;
+      return controllersUpdate(dt, ...rest);
+    };
+    const trafficUpdate = d.traffic.update.bind(d.traffic);
+    d.traffic.update = (dt, ...rest) => {
+      const result = trafficUpdate(dt, ...rest);
+      record(trace.frameDt ?? dt);
+      return result;
     };
   }
   function record(dt) {

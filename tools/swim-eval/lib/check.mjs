@@ -118,6 +118,25 @@ function annotate(trace, map) {
   }
 }
 
+// Contacts with traffic between t0 and t1: the boxes overlapping at a record (any speed), or the game's own impact
+// report (over 0.5 m/s), which also sees a contact the traffic resolved within the same step before the record could
+// (Codex round 3). One contact per touch: an impact within CONTACT_MERGE s of another contact is the same one.
+const CONTACT_MERGE = 0.5; // s
+function trafficContacts(trace, t0, t1) {
+  const all = trace.events.filter((e) => (e.kind === 'contact-traffic' || e.kind === 'impact-traffic') && e.t >= t0 && e.t <= t1)
+    .sort((a, b) => a.t - b.t);
+  const contacts = [];
+  for (const e of all) {
+    const last = contacts[contacts.length - 1];
+    if (last && e.t - last.lastT <= CONTACT_MERGE) {
+      last.lastT = e.t;
+      continue;
+    }
+    contacts.push({ ...e, mph: e.mph ?? Math.round((e.speed ?? 0) * MPH), lastT: e.t });
+  }
+  return contacts;
+}
+
 function offRoadSummary(frames) {
   const counts = {};
   // (frames per thing under the car: a frame over plaza and pavement both counts once for each)
@@ -323,7 +342,8 @@ function beatExit(ctx) {
   const way = frames.slice(exitIndex, frames.indexOf(at) + 1);
   const wayOff = way.filter((f) => f.off);
   const session = trace.source === 'session';
-  const hits = way.filter((f) => (f.copHit ?? 0) > 0 || (f.bHit ?? 0) > 0 || (f.tHit ?? 0) > 0);
+  const hits = way.filter((f) => (f.copHit ?? 0) > 0 || (f.bHit ?? 0) > 0)
+    .concat(way.length ? trafficContacts(trace, way[0].t, way[way.length - 1].t) : []);
   criteria.push(
     criterion('frames on kerb/pavement/plaza', `${wayOff.length}/${way.length}${wayOff.length ? ` (${offRoadSummary(wayOff)})` : ''}`, wayOff.length === 0, '0'),
     criterion('contacts (cop, building, traffic)', session ? 'not logged' : `${hits.length} frames`, session ? null : hits.length === 0, '0')
@@ -346,7 +366,7 @@ function beatSwim(ctx) {
   const inRun = (e) => e.t >= t0 && e.t <= t1;
   const splits = trace.events.filter((e) => e.kind === 'split' && inRun(e));
   const closes = trace.events.filter((e) => e.kind === 'close' && inRun(e));
-  const traffic = trace.events.filter((e) => e.kind === 'contact-traffic' && inRun(e));
+  const traffic = trafficContacts(trace, t0, t1);
   const buildings = run.filter((f) => (f.bHit ?? 0) > 0);
   const cop = run.filter((f) => (f.copHit ?? 0) > 0);
   const session = trace.source === 'session';
@@ -416,8 +436,9 @@ function beatCorners(ctx) {
     if (!near.length || Math.min(...near.map((f) => Math.hypot(f.x - c.x, f.z - c.z))) > T.cornerReach) continue;
     const slip = Math.max(...near.map((f) => Math.abs(f.slip)));
     const off = near.filter((f) => f.off);
-    const hits = near.filter((f) => (f.bHit ?? 0) > 0 || (f.tHit ?? 0) > 0);
-    driven.push({ ...c, slip, off: off.length, frames: near.length, hits: hits.length, t: near[0].t, offWhat: offRoadSummary(off), firstOff: off[0]?.t });
+    const hits = near.filter((f) => (f.bHit ?? 0) > 0);
+    const touches = trafficContacts(trace, near[0].t, near[near.length - 1].t).filter((e) => Math.hypot(e.x - c.x, e.z - c.z) < T.cornerWindow);
+    driven.push({ ...c, slip, off: off.length, frames: near.length, hits: hits.length + touches.length, t: near[0].t, offWhat: offRoadSummary(off), firstOff: off[0]?.t });
   }
   if (!driven.length) return beatResult(7, 'Corners drifted, on the road', INCONCLUSIVE, [criterion('corners driven', '0', null, '≥ 1')], 'no corner reached');
   const undrifted = driven.filter((c) => c.slip < T.cornerSlip);
@@ -506,7 +527,7 @@ function checkTrace(trace, map) {
   const contacts = {
     cop: trace.frames.filter((f) => (f.copHit ?? 0) > 0).length,
     building: trace.frames.filter((f) => (f.bHit ?? 0) > 0).length,
-    traffic: trace.events.filter((e) => e.kind === 'contact-traffic').length
+    traffic: trafficContacts(trace, -Infinity, Infinity).length
   };
   const duration = span(trace.frames);
   return {

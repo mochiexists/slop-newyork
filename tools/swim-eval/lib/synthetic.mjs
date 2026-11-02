@@ -131,6 +131,8 @@ const BREAKS = [
   { beat: 8, name: 'the run cut before the roam (no roam proper)', expect: 'INCONCLUSIVE', apply: (tr) => { tr.frames = tr.frames.filter((f) => f.t <= 75); } },
   { beat: 5, name: 'slow way out (40% speed)', apply: (tr) => { const e = tr.frames.findIndex((f) => f.dp === 'powerOut'); for (const f of tr.frames.slice(e, e + 300)) f.v *= 0.4, f.vx *= 0.4, f.vz *= 0.4; } },
   { beat: 6, name: 'hits traffic on 7th Ave', apply: (tr) => { const f = tr.frames.find((q) => q.phase === 'escape' && q.v > 25); tr.events.push({ kind: 'contact-traffic', t: f.t, x: f.x, z: f.z, mph: 60, phase: 'escape' }); } },
+  // (Codex round 3: a contact the traffic resolves inside the tick shows only as the game's own impact report)
+  { beat: 6, name: 'a traffic impact only the game reported', apply: (tr) => { const f = tr.frames.find((q) => q.phase === 'escape' && q.v > 25); tr.events.push({ kind: 'impact-traffic', t: f.t, x: f.x, z: f.z, speed: 3, phase: 'escape' }); } },
   { beat: 6, name: '7th Ave at 60 mph', apply: (tr) => { for (const f of tr.frames.filter((q) => q.phase === 'escape' && q.z < streetZ(42) - 20 && q.z > COP.z)) { const k = Math.min(1, 26.8 / Math.max(1, Math.hypot(f.v, f.vx, f.vz))); f.v *= k; f.vx *= k; f.vz *= k; } } },
   { beat: 6, name: 'no splits', apply: (tr) => { tr.events = tr.events.filter((e) => e.kind !== 'split'); } },
   { beat: 7, name: 'a corner gripped', apply: (tr) => { for (const f of tr.frames) if (Math.hypot(f.x - avenueX('8'), f.z - (streetZ(42) - 3.5)) < 40) f.slip = 0; } },
