@@ -30,6 +30,18 @@ const only = opt('--only')?.split(',');
 const scenarios = baselineSuite().filter((s) => !only || only.includes(s.name));
 mkdirSync(join(out, 'maps'), { recursive: true });
 
+// Stopped means stopped: Playwright closes its browsers on a signal, and without this the workers would go on to the
+// next scenario with new ones (2026-11-03: a killed suite kept running beside its replacement)
+for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => process.exit(128 + (signal === 'SIGTERM' ? 15 : 2)));
+
+// A run is finished when it has its trace and a run.json that records no failure (a run killed while closing its
+// browser can leave the first without the second)
+function finished(dir) {
+  if (!existsSync(join(dir, 'trace.json')) || !existsSync(join(dir, 'run.json'))) return false;
+  const run = JSON.parse(readFileSync(join(dir, 'run.json'), 'utf8'));
+  return !run.failure && run.frames > 0;
+}
+
 function describe(s) {
   const parts = [`clock ${s.profile}`, `traffic seed ${s.trafficSeed}`];
   if (s.warmup) parts.push(`${s.warmup} s warm-up`);
@@ -39,7 +51,9 @@ function describe(s) {
 
 if (!flag('--summary-only')) {
   const server = await ensureServer(port, opt('--assets', DEFAULT_ASSETS));
-  const queue = scenarios.filter((s) => flag('--rerun') || !existsSync(join(out, s.name, 'trace.json')));
+  // (the short ones first: a suite cut off by its budget still has every scenario kind in it)
+  const queue = scenarios.filter((s) => flag('--rerun') || !finished(join(out, s.name)));
+  queue.sort((a, b) => a.duration + a.warmup - (b.duration + b.warmup));
   console.log(`${queue.length} of ${scenarios.length} scenarios to run, ${jobs} at a time`);
   const worker = async () => {
     while (queue.length) {
@@ -57,15 +71,20 @@ if (!flag('--summary-only')) {
 const entries = [];
 for (const s of scenarios) {
   const dir = join(out, s.name);
-  if (!existsSync(join(dir, 'trace.json'))) {
+  if (!finished(dir)) {
     console.log(`${s.name}: no trace (${existsSync(join(dir, 'run.json')) ? JSON.parse(readFileSync(join(dir, 'run.json'), 'utf8')).failure?.split('\n')[0] : 'not run'})`);
     continue;
   }
   const result = await checkRunDir(dir);
-  entries.push({ result, href: relative(out, join(dir, 'report.html')), blurb: describe(s) });
-  console.log(`${s.name.padEnd(22)} ${result.beats.map((b) => `${b.id}:${{ VERIFIED: 'V', 'NOT VERIFIED': 'X', INCONCLUSIVE: '?', 'N/A': '-' }[b.verdict]}`).join(' ')}`);
+  // (the wall clock a run cost, so the suite's size stays realistic on the machine it runs on)
+  const run = JSON.parse(readFileSync(join(dir, 'run.json'), 'utf8'));
+  const cost = `${Math.round(run.wallSeconds / 60)} min wall for ${run.frames} frames`;
+  entries.push({ result, href: relative(out, join(dir, 'report.html')), blurb: `${describe(s)} · ${cost}`, wallSeconds: run.wallSeconds, frames: run.frames });
+  console.log(`${s.name.padEnd(22)} ${result.beats.map((b) => `${b.id}:${{ VERIFIED: 'V', 'NOT VERIFIED': 'X', INCONCLUSIVE: '?', 'N/A': '-' }[b.verdict]}`).join(' ')}  (${cost})`);
 }
+const wall = entries.reduce((sum, e) => sum + (e.wallSeconds ?? 0), 0);
 const title = opt('--title', 'Swim show eval: summary');
-writeFileSync(join(out, 'summary.html'), summaryPage({ entries, title, note: `${out} · ${new Date().toLocaleString()}` }));
-writeFileSync(join(out, 'summary.json'), JSON.stringify(entries.map((e) => ({ label: e.result.label, beats: e.result.beats.map((b) => ({ id: b.id, verdict: b.verdict, summary: b.summary })) })), null, 1));
+writeFileSync(join(out, 'summary.html'), summaryPage({ entries, title, note: `${out} · ${new Date().toLocaleString()} · ${Math.round(wall / 60)} min of browser wall clock over ${entries.length} runs (${jobs} at a time)` }));
+writeFileSync(join(out, 'summary.json'), JSON.stringify(entries.map((e) => ({ label: e.result.label, wallSeconds: e.wallSeconds, frames: e.frames, beats: e.result.beats.map((b) => ({ id: b.id, verdict: b.verdict, summary: b.summary })) })), null, 1));
+console.log(`${Math.round(wall / 60)} min of browser wall clock over ${entries.length} runs`);
 console.log(`summary: ${join(out, 'summary.html')}`);

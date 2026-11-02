@@ -43,6 +43,8 @@ async function ensureServer(port, assets) {
 }
 
 async function main() {
+  // (Playwright closes the browser on a signal; the run stops with it rather than carrying on without one)
+  for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => process.exit(128 + (signal === 'SIGTERM' ? 15 : 2)));
   const args = parseArgs(process.argv.slice(2));
   const scenario = findScenario(args.positional[0] ?? '');
   if (!scenario || !args.out) {

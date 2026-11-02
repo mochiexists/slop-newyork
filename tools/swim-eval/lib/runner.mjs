@@ -3,7 +3,7 @@
 // what was injected, the build, the page's errors), video.webm (kept, never deleted), shots/ (a screenshot at every beat
 // change and every contact), session.jsonl (the game's own flight recorder, as it POSTed it).
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { midtownRegion } from './map.mjs';
@@ -42,9 +42,14 @@ function rewriteMain(body) {
   return { body, applied };
 }
 
+// The build: the last commit that changed the game (js/, css/, index.html), so a commit that only adds tooling
+// doesn't read as a new build; "+dirty" when the game's files have uncommitted changes (the run is of the working tree)
 function gitSha(repo) {
   try {
-    return execFileSync('git', ['-C', repo, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf8' }).trim();
+    const game = ['--', 'js', 'css', 'index.html'];
+    const sha = execFileSync('git', ['-C', repo, 'log', '-1', '--format=%h', ...game], { encoding: 'utf8' }).trim();
+    const dirty = execFileSync('git', ['-C', repo, 'status', '--porcelain', ...game], { encoding: 'utf8' }).trim();
+    return dirty ? `${sha}+dirty` : sha;
   } catch {
     return 'unknown';
   }
@@ -204,14 +209,16 @@ async function runScenario(scenario, { outDir, port, repo, mapDir }) {
     run.failure = String(error?.stack ?? error);
     log(runDir, `FAILED: ${run.failure}`);
   } finally {
+    // (this page's own recording: a rerun into the same folder must not pick up an earlier, interrupted one's)
+    run.videoRaw = await page.video()?.path().catch(() => null);
     await page.close().catch(() => {});
     await context.close().catch(() => {});
     await browser.close().catch(() => {});
   }
-  // The video, kept with the run under a stable name
-  const raw = existsSync(videoDir) ? readdirSync(videoDir).filter((f) => f.endsWith('.webm')) : [];
-  if (raw.length) {
-    renameSync(join(videoDir, raw[0]), join(runDir, 'video.webm'));
+  // The video, kept with the run under a stable name (an earlier video.webm is kept too, renamed by its time)
+  if (run.videoRaw && existsSync(run.videoRaw)) {
+    if (existsSync(join(runDir, 'video.webm'))) renameSync(join(runDir, 'video.webm'), join(runDir, `video-earlier-${Date.now()}.webm`));
+    renameSync(run.videoRaw, join(runDir, 'video.webm'));
     run.video = 'video.webm';
   }
   run.finished = new Date().toISOString();
