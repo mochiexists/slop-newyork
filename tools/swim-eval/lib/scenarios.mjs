@@ -8,6 +8,8 @@
 //   warmup       s of driving before P (swim mode, the Squeeze start, W with the wheel swung side to side every second)
 //   inject       a start state written at the P frame (musa's launch and the bad launches round it)
 //   duration     s of show to run after P
+//   inputs       keys a player presses mid-show ([{ t: s since P, key, action: 'down' | 'up' | 'press' }]): a driving key
+//                to take the wheel, I to hand it back (beat 9)
 import { COP, DRIFT_RADIUS, wrapAngle } from './geometry.mjs';
 import { musaLaunchState } from './session.mjs';
 
@@ -15,6 +17,11 @@ const RAD = Math.PI / 180;
 const FULL_SHOW = 165; // s: roll, donuts, the run down 7th Ave, 42nd St, up 8th Ave, 57th St, then a minute of roam
 const LAUNCH_SHOW = 45; // s: the donuts from the injected launch, the way out and the start of the run
 const PROFILES = ['120', '60', '30', 'mix', 'musa'];
+
+// A player taking the wheel mid-show and handing it back with I: in the donuts (D against the AI's slide), and on the
+// run (W held, flooring it). Each 3-5 s off the keys or driving before I, then the AI's roam from there.
+const TAKEOVER_DONUTS = [{ t: 10, key: 'KeyD', action: 'down' }, { t: 11.5, key: 'KeyD', action: 'up' }, { t: 14, key: 'KeyI', action: 'press' }];
+const TAKEOVER_RUN = [{ t: 40, key: 'KeyW', action: 'down' }, { t: 42, key: 'KeyW', action: 'up' }, { t: 45, key: 'KeyI', action: 'press' }];
 
 // The car turned about its own centre by `turn`, its velocity over the ground kept (so the slip angle grows by it)
 function turned(state, turn) {
@@ -131,6 +138,9 @@ function deterministicSuite() {
     list.push(scenario(`${name}-30`, { profile: '30', trafficSeed: 1, seed: 21, inject, duration: LAUNCH_SHOW }));
   }
   list.push(scenario('launch-musa-musa', { profile: 'musa', trafficSeed: 1, seed: 21, inject: family['launch-musa'], duration: LAUNCH_SHOW }));
+  // (2026-11-03: the takeover and the hand-back, beat 9)
+  list.push(scenario('takeover-donuts-30', { profile: '30', trafficSeed: 1, seed: 31, inputs: TAKEOVER_DONUTS, duration: 40 }));
+  list.push(scenario('takeover-run-30', { profile: '30', trafficSeed: 2, seed: 32, inputs: TAKEOVER_RUN, duration: 70 }));
   return list;
 }
 
@@ -143,6 +153,19 @@ function brokenBuilds() {
         { file: 'js/swim-show.js', from: 'const DRIFT_RADIUS = 11;', to: 'const DRIFT_RADIUS = 16; // (swim-eval: broken on purpose)' },
         { file: 'js/swim-show.js', from: 'rollSpeed: 5,', to: 'rollSpeed: 8, // (swim-eval: broken on purpose)' }
       ]
+    }),
+    // (2026-11-03: the bird never raised; a driving key that doesn't stop the show; I's roam starting 40 m away)
+    scenario('broken-bird', {
+      profile: '30', duration: 30,
+      patches: [{ file: 'js/swim-show.js', from: 'car.showBird = !exiting && laps > BIRD_FROM_LAP && laps < BIRD_TO_LAP;', to: 'car.showBird = false; // (swim-eval: broken on purpose)' }]
+    }),
+    scenario('broken-takeover', {
+      profile: '30', seed: 31, inputs: TAKEOVER_DONUTS, duration: 25,
+      patches: [{ file: 'js/swim-show.js', from: 'if (keys.forward || keys.backward || keys.left || keys.right || keys.handbrake) {', to: 'if (false) { // (swim-eval: broken on purpose)' }]
+    }),
+    scenario('broken-handback', {
+      profile: '30', seed: 31, inputs: TAKEOVER_DONUTS, duration: 30,
+      patches: [{ file: 'js/swim-show.js', from: 'const route = [{ x: car.position.x, z: car.position.z }];', to: 'const route = [{ x: car.position.x + 40, z: car.position.z }]; // (swim-eval: broken on purpose)' }]
     })
   ];
 }
@@ -158,4 +181,4 @@ function findScenario(name) {
   return null;
 }
 
-export { FULL_SHOW, LAUNCH_SHOW, PROFILES, baselineSuite, deterministicSuite, findScenario, launchFamily, placeLaunch, scenario, turned, wrapAngle };
+export { TAKEOVER_DONUTS, TAKEOVER_RUN, brokenBuilds, FULL_SHOW, LAUNCH_SHOW, PROFILES, baselineSuite, deterministicSuite, findScenario, launchFamily, placeLaunch, scenario, turned, wrapAngle };

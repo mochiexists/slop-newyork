@@ -10,8 +10,8 @@ import { avenueX, streetZ } from '../js/city-config.js';
 import { COP, SHOW_SPOT, kasaFit } from '../tools/swim-eval/lib/geometry.mjs';
 import { CARRIAGEWAY_SLACK, SwimMap } from '../tools/swim-eval/lib/map.mjs';
 import { idealTrace } from '../tools/swim-eval/lib/synthetic.mjs';
-import { MAIN_HOOKS, rewriteMain } from '../tools/swim-eval/lib/runner.mjs';
-import { launchFamily, placeLaunch, turned } from '../tools/swim-eval/lib/scenarios.mjs';
+import { GAME_HOOKS, MAIN_HOOKS, rewriteFile, rewriteMain } from '../tools/swim-eval/lib/runner.mjs';
+import { brokenBuilds, launchFamily, placeLaunch, turned } from '../tools/swim-eval/lib/scenarios.mjs';
 import { toTrace } from '../tools/swim-eval/lib/session.mjs';
 import { selftest } from '../tools/swim-eval/selftest.mjs';
 
@@ -132,4 +132,18 @@ test('main.js still has every line the eval runner hooks, once', () => {
   const { body, applied } = rewriteMain(main);
   assert.equal(applied.length, MAIN_HOOKS.length);
   assert.ok(body.includes('globalThis.__swim = new SwimDirector'));
+});
+
+test('traffic.js and swim-show.js still have the contact lines the probe hooks, once', () => {
+  for (const file of ['js/traffic.js', 'js/swim-show.js']) {
+    const { body, applied } = rewriteFile(file, readFileSync(new URL(`../${file}`, import.meta.url), 'utf8'));
+    assert.equal(applied.length, GAME_HOOKS[file].length, file);
+    assert.ok(/globalThis\.__eval(Touch|CopTouch)\?\.\(/.test(body), file);
+  }
+  // (and each broken build's patch still matches the game once, on top of the hooks)
+  for (const s of brokenBuilds()) {
+    for (const [file, patches] of Object.entries(Object.groupBy(s.patches, (p) => p.file))) {
+      assert.doesNotThrow(() => rewriteFile(file, readFileSync(new URL(`../${file}`, import.meta.url), 'utf8'), patches), `${s.name}: ${file}`);
+    }
+  }
 });

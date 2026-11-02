@@ -8,6 +8,7 @@
 // its cop and its run comes from the trace (the page's own COP_SPOT and ESCAPE_ROUTE), else from geometry.mjs.
 import { COP, DRIFT_RADIUS, ESCAPE_ROUTE, MPH, boxClearance, groundSpeed, kasaFit, travelHeading, wrapAngle } from './geometry.mjs';
 import { CARRIAGEWAY_SLACK } from './map.mjs';
+import { SIGNAL_TIMING, signalPhase } from '../../../js/city-config.js';
 
 const RAD = Math.PI / 180;
 const VERIFIED = 'VERIFIED';
@@ -41,6 +42,9 @@ const T = {
   donutFitRms: 1.5, // 4: m RMS off the fitted circle at most: a circle, not an ellipse (good runs 0.4-0.8, musa's clock 1.5)
   donutNear: 7, // 4: m, the 10th percentile of the distance to the cop at least ("~8-12 m out")
   donutFar: 13, // 4: m, the 90th percentile at most
+  birdUp: 0.9, // 4: the driver's hand this far up (m5-cockpit.js birdAmount, 0-1) is the bird out of the window...
+  birdTime: 1, // 4: ...shown, the arms drawn, this many s of the donuts at least (2026-11-03, Codex #11; the show holds
+  // it from 1.15 to 1.85 laps, ~6 s)
   donutGiveUp: 35, // 5: s of donuts with no way out that is stuck in them (swim-show.js gives up at 30)
   exitMph: 50, // 5: mph reached...
   exitTime: 3.5, // 5: ...within this many s of powering out ("~3 s")
@@ -68,7 +72,15 @@ const T = {
   stoppedSpeed: 1, // 8: m/s under which the car is stopped
   stoppedShare: 0.1, // 8: share of the roam stopped at most
   stuckWindow: 10, // 8: s over which...
-  stuckDistance: 5, // 8: ...the car moving less than this many m is stuck
+  stuckDistance: 5, // 8: ...the car moving less than this many m is stuck, unless it is waiting at a red light:
+  queueDischarge: 10, // 8: s into its green that a car may still stand (the queue ahead getting going); standing longer,
+  // or with no signal clock logged, or not along an avenue or a street, it is stuck (2026-11-03, Codex: a red light's
+  // wait was called stuck; the < 10 % stopped gate still bounds every wait)
+  axisAlign: 30 * RAD, // 8: heading this close to an avenue's or a street's line reads as on it
+  handbackStart: 0.5, // 9: m between the car and the first point of the route the AI takes on with at I (logged to 0.1 m)
+  handbackJump: 0.05, // 9: m the car may move across the I press beyond what its speed carries it (no teleport)
+  handbackWindow: 10, // 9: s after I over which...
+  handbackDistance: 20, // 9: ...the AI drives the car on this many m at least, never giving it back
   sessionCopContact: 0.02, // m of box clearance a session (no contact log) counts as touching the cop
   sessionLapSlack: 0.2 // laps a session's read-back way out may over-count (measured on a run's own recording: 0.18)
 };
@@ -144,12 +156,14 @@ function annotate(trace, map) {
   }
 }
 
-// Contacts with traffic between t0 and t1: the boxes overlapping at a record (any speed), or the game's own impact
-// report (over 0.5 m/s), which also sees a contact the traffic resolved within the same step before the record could
-// (Codex round 3). One contact per touch: an impact within CONTACT_MERGE s of another contact is the same one.
+// Contacts with traffic between t0 and t1: every contact traffic.js accepted, logged before it pushed the cars apart
+// and whatever the speed (touch-traffic, the probe's hook: Codex 2026-11-03 #10, a grazing sideswipe escaped both of
+// the others), the boxes overlapping at a record (any speed), or the game's own impact report (over 0.5 m/s). One
+// contact per touch: one within CONTACT_MERGE s of another is the same one.
 const CONTACT_MERGE = 0.5; // s
+const TRAFFIC_CONTACT = new Set(['touch-traffic', 'contact-traffic', 'impact-traffic']);
 function trafficContacts(trace, t0, t1) {
-  const all = trace.events.filter((e) => (e.kind === 'contact-traffic' || e.kind === 'impact-traffic') && e.t >= t0 && e.t <= t1)
+  const all = trace.events.filter((e) => TRAFFIC_CONTACT.has(e.kind) && e.t >= t0 && e.t <= t1)
     .sort((a, b) => a.t - b.t);
   const contacts = [];
   for (const e of all) {
@@ -320,10 +334,13 @@ function beatDonuts(ctx) {
     criterion('cop contacts', `${copHits.length} frames (closest ${fmt(minGap, 2)} m)`, copHits.length === 0, '0'),
     criterion('frames on kerb/pavement/plaza', `${off.length}/${donut.length}${off.length ? ` (${offRoadSummary(off)})` : ''}`, off.length === 0, '0'),
     criterion('building pushes', String(buildings.length), trace.source === 'session' ? null : buildings.length === 0, '0'),
-    criterion('frames over street furniture (steam stack)', `${donut.filter((f) => f.furniture).length}/${donut.length}`, true, 'measured')
+    criterion('frames over street furniture (steam stack)', `${donut.filter((f) => f.furniture).length}/${donut.length}`, true, 'measured'),
+    birdCriterion(donut)
   ];
-  // (a session has no building log: that criterion is unknown there, not failed)
-  if (trace.source === 'session') criteria.splice(criteria.findIndex((c) => c.name === 'building pushes'), 1);
+  // (a session has no building log nor the cockpit's: those criteria are unknown there, not failed)
+  if (trace.source === 'session') {
+    for (const name of ['building pushes', BIRD]) criteria.splice(criteria.findIndex((c) => c.name === name), 1);
+  }
   const failures = [];
   if (copHits.length) failures.push({ t: copHits[0].t, label: 'touches the cop', beat: 4 });
   if (off.length) failures.push({ t: off[0].t, label: `donut over the ${off[0].foot.find((c) => KERB.has(c))}`, beat: 4 });
@@ -334,6 +351,16 @@ function beatDonuts(ctx) {
   return beatResult(4, 'Donuts round the cop', verdictOf(criteria), criteria, summaryOf(criteria), {
     failures, fit, laps, time, sliding: sliding.length
   });
+}
+
+// The bird over the donuts: the s the hand is up and the arms are drawn (a trace from before the probe logged the
+// cockpit can't say: unknown)
+const BIRD = 'the bird shown (hand up, arms drawn)';
+function birdCriterion(donut) {
+  if (!donut.some((f) => f.bird !== undefined && f.bird !== null)) return criterion(BIRD, 'not logged', null, `≥ ${T.birdTime}`, ' s');
+  const time = donut.filter((f) => f.bird >= T.birdUp && f.birdSeen).reduce((sum, f) => sum + f.dt, 0);
+  const peak = Math.max(...donut.map((f) => f.bird ?? 0));
+  return criterion(BIRD, `${fmt(time, 2)}${time ? '' : ` (highest ${fmt(peak, 2)})`}`, time >= T.birdTime, `≥ ${T.birdTime}`, ' s');
 }
 
 // 5. Drift out onto 7th Ave; 50 mph within ~3 s
@@ -633,19 +660,12 @@ function beatRoam(ctx) {
     return beatResult(8, 'Endless roam', INCONCLUSIVE, [criterion('driving after the donuts', fmt(time), null, `≥ ${T.roamMinTime}`, ' s')], `only ${fmt(time)} s of driving after the donuts (needs ${T.roamMinTime})`);
   }
   const stopped = roam.filter((f) => f.g < T.stoppedSpeed).reduce((s, f) => s + f.dt, 0);
-  // Stuck: any stuckWindow over which the car got less than stuckDistance from where it was
-  let stuck = null;
-  let j = 0;
-  for (let i = 0; i < roam.length; i++) {
-    while (j < roam.length && roam[j].t - roam[i].t < T.stuckWindow) j++;
-    if (j >= roam.length) break;
-    let far = 0;
-    for (let k = i; k <= j; k++) far = Math.max(far, Math.hypot(roam[k].x - roam[i].x, roam[k].z - roam[i].z));
-    if (far < T.stuckDistance) {
-      stuck = roam[i];
-      break;
-    }
-  }
+  // Stuck: a stuckWindow over which the car got less than stuckDistance from where it was, told apart from a wait at a
+  // red light (a diagnosis: the stopped share is the gate on waiting)
+  const spells = stuckSpells(roam);
+  const deadlocks = spells.filter((q) => q.kind === 'deadlock');
+  const waits = spells.filter((q) => q.kind === 'red light');
+  const stuck = deadlocks[0] ?? null;
   const reversing = roam.filter((f) => f.rev).reduce((s, f) => s + f.dt, 0);
   const off = ctx.trace.frames[ctx.trace.frames.length - 1].phase === 'off';
   // (and the roam proper on its own: good driving earlier must not dilute stopping in it, and the beat isn't
@@ -656,13 +676,117 @@ function beatRoam(ctx) {
     criterion('the roam proper (past the run\'s last corner)', fmt(proper), proper >= T.roamMinTime ? true : null, `≥ ${T.roamMinTime}`, ' s'),
     criterion('stopped, all after the donuts', `${fmt((stopped / time) * 100, 0)}% (${fmt(stopped)} s)`, stopped / time < T.stoppedShare, `< ${T.stoppedShare * 100}%`),
     criterion('stopped, the roam proper', proper > 0 ? `${fmt((properStopped / proper) * 100, 0)}%` : 'no roam', proper > 0 ? properStopped / proper < T.stoppedShare : null, `< ${T.stoppedShare * 100}%`),
-    criterion('stuck (10 s inside 5 m)', stuck ? `at t ${fmt(stuck.t)} (${fmt(stuck.x, 0)}, ${fmt(stuck.z, 0)})` : 'never', !stuck, 'never'),
+    criterion('stuck, not at a red light (10 s inside 5 m)', stuck ? `${deadlocks.length}×, first at t ${fmt(stuck.at.t)} (${fmt(stuck.at.x, 0)}, ${fmt(stuck.at.z, 0)}): ${stuck.why}` : 'never', !stuck, 'never'),
+    criterion('waiting at a red light (10 s inside 5 m)', waits.length ? `${waits.length}× (${fmt(waits.reduce((sum, q) => sum + q.time, 0))} s; longest ${fmt(Math.max(...waits.map((q) => q.time)))} s)` : 'none', true, 'measured'),
     criterion('the AI still driving at the end', off ? 'no: the show gave the car back' : 'yes', !off, 'yes'),
     criterion('backing out', `${fmt(reversing)} s`, true, 'measured')
   ];
   const failures = [];
-  if (stuck) failures.push({ t: stuck.t + T.stuckWindow / 2, label: 'stuck', beat: 8 });
+  for (const q of deadlocks.slice(0, 3)) failures.push({ t: q.at.t + T.stuckWindow / 2, label: `stuck (${q.why})`, beat: 8 });
   return beatResult(8, 'Endless roam', verdictOf(criteria), criteria, summaryOf(criteria), { failures, time, stoppedShare: stopped / time });
+}
+
+// Every stuck spell of the roam: a stuckWindow inside stuckDistance, grown to the whole stop (the frames within
+// stuckDistance of where it began), each diagnosed
+function stuckSpells(roam) {
+  const spells = [];
+  const near = (a, b) => Math.hypot(a.x - b.x, a.z - b.z) < T.stuckDistance;
+  let j = 0;
+  for (let i = 0; i < roam.length; i++) {
+    while (j < roam.length && roam[j].t - roam[i].t < T.stuckWindow) j++;
+    if (j >= roam.length) break;
+    let inside = true;
+    for (let k = i; k <= j && inside; k++) inside = near(roam[k], roam[i]);
+    if (!inside) continue;
+    let a = i, b = j;
+    while (a > 0 && near(roam[a - 1], roam[i])) a--;
+    while (b < roam.length - 1 && near(roam[b + 1], roam[i])) b++;
+    const stop = roam.slice(a, b + 1);
+    spells.push({ at: roam[i], time: span(stop), ...diagnoseStop(stop) });
+    i = b;
+    j = Math.max(j, b);
+  }
+  return spells;
+}
+
+// A stop is a wait at a red light if the car stood along an avenue or a street and its light was red or amber the
+// whole time, but for the first queueDischarge s of a green (the queue ahead moving off); anything else is stuck
+function diagnoseStop(stop) {
+  if (stop.some((f) => f.sig === undefined || f.sig === null)) return { kind: 'deadlock', why: 'no signal clock logged to tell a red light' };
+  const h = stop[Math.floor(stop.length / 2)].h;
+  const alongAvenue = Math.abs(Math.cos(h)) >= Math.cos(T.axisAlign);
+  const alongStreet = Math.abs(Math.sin(h)) >= Math.cos(T.axisAlign);
+  if (!alongAvenue && !alongStreet) return { kind: 'deadlock', why: 'standing across the grid, not at a light' };
+  const greenFrom = alongAvenue ? 0 : SIGNAL_TIMING.avenueRed; // s into the cycle its green starts
+  let worst = 0;
+  for (const f of stop) {
+    if (signalPhase(f.sig, alongAvenue) !== 'green') continue;
+    const intoGreen = ((((f.sig - greenFrom) % SIGNAL_TIMING.cycle) + SIGNAL_TIMING.cycle) % SIGNAL_TIMING.cycle);
+    worst = Math.max(worst, intoGreen);
+  }
+  const axis = alongAvenue ? 'an avenue' : 'a street';
+  if (worst > T.queueDischarge) return { kind: 'deadlock', why: `standing ${fmt(worst, 0)} s into its green on ${axis}` };
+  return { kind: 'red light', why: `waiting at ${axis}'s red light` };
+}
+
+// 9. Any driving key takes over; I hands back (2026-11-03, Codex #11). Judged where the scenario presses them (the
+//    trace's input events, logged the moment each lands, between two ticks): the first tick after a driving key must
+//    be the player's (the show off, the car getting exactly the player's keys), and every tick after it until I; the
+//    first after I must be the AI's, on a route from where the car is, with no jump, and the AI must drive on.
+const DRIVING_KEYS = { KeyW: 'W', ArrowUp: 'W', KeyS: 'S', ArrowDown: 'S', KeyA: 'A', ArrowLeft: 'A', KeyD: 'D', ArrowRight: 'D', Space: 'H', KeyE: 'H' };
+function beatHandoff(ctx) {
+  const { trace } = ctx;
+  const inputs = trace.events.filter((e) => e.kind === 'input' && e.action !== 'up');
+  const take = inputs.find((e) => DRIVING_KEYS[e.key]);
+  const back = inputs.find((e) => e.key === 'KeyI' && (!take || e.t > take.t));
+  if (!take && !back) return beatResult(9, 'Takeover and hand-back', NA, [], 'no key pressed mid-show in this scenario');
+  const frames = trace.frames;
+  const criteria = [];
+  const failures = [];
+  const keysOf = (f) => `car "${f.k}", player "${f.pk ?? '?'}"`;
+  if (take) {
+    const i = frames.findIndex((f) => f.t > take.t);
+    if (i < 0) {
+      criteria.push(criterion('the player\'s key wins at once', 'the trace ends first', null, 'the first tick after it'));
+    } else {
+      const first = frames[i];
+      const until = back ? back.t : Infinity;
+      const after = frames.slice(i).filter((f) => f.t <= until);
+      const wins = first.phase === 'off' && !first.pilot && first.k === first.pk && first.pk.includes(DRIVING_KEYS[take.key]);
+      criteria.push(criterion(`the player's key (${take.key}) wins at once`, `the first tick after it: show ${first.phase}, ${keysOf(first)}`, wins, 'show off, the car gets the player\'s keys'));
+      const driving = after.filter((f) => f.phase !== 'off' || f.pilot || f.k !== f.pk);
+      criteria.push(criterion(`the AI lets go (ticks it still drove, to ${back ? 'I' : 'the end'})`, `${driving.length}/${after.length}`, driving.length === 0, '0'));
+      if (!wins) failures.push({ t: first.t, label: `${take.key} didn't take the wheel (${keysOf(first)})`, beat: 9 });
+      if (driving.length) failures.push({ t: driving[0].t, label: `the AI drove after the takeover (${keysOf(driving[0])})`, beat: 9 });
+    }
+  }
+  if (back) {
+    const i = frames.findIndex((f) => f.t > back.t);
+    const before = i > 0 ? frames[i - 1] : null;
+    if (i < 0 || !before) {
+      criteria.push(criterion('I: the AI takes the wheel at once', 'the trace ends first', null, 'roam'));
+    } else {
+      const first = frames[i];
+      criteria.push(criterion('I: the AI takes the wheel at once', `the first tick after it: show ${first.phase}`, first.phase === 'roam' && !!first.pilot, 'roam'));
+      const path = trace.events.find((e) => e.kind === 'path' && e.t >= back.t);
+      const start = path?.points?.[0];
+      const startOff = start ? Math.hypot(start[0] - before.x, start[1] - before.z) : null;
+      criteria.push(criterion('I: its route starts where the car is', startOff === null ? 'no new route' : fmt(startOff, 2), startOff !== null && startOff <= T.handbackStart, `≤ ${T.handbackStart}`, startOff === null ? '' : ' m'));
+      const step = Math.hypot(first.x - before.x, first.z - before.z);
+      const allowed = before.g * first.dt + T.handbackJump;
+      criteria.push(criterion('I: no jump across it', fmt(step, 2), step <= allowed, `≤ ${fmt(allowed, 2)} (its speed's worth)`, ' m'));
+      const window = frames.slice(i).filter((f) => f.t - back.t <= T.handbackWindow);
+      const ended = frames[frames.length - 1].t - back.t < T.handbackWindow;
+      const covered = window.reduce((sum, f, k) => (k ? sum + Math.hypot(f.x - window[k - 1].x, f.z - window[k - 1].z) : sum), 0);
+      const gaveBack = window.find((f) => f.phase === 'off' || !f.pilot);
+      let drivesOn = covered >= T.handbackDistance && !gaveBack;
+      if (ended && drivesOn === false && !gaveBack) drivesOn = null;
+      criteria.push(criterion(`I: the AI drives on (${T.handbackWindow} s)`, `${fmt(covered, 0)} m${gaveBack ? `, gave the car back at t ${fmt(gaveBack.t)}` : ''}${ended ? ' (the trace ends first)' : ''}`, drivesOn, `≥ ${T.handbackDistance} m, still driving`));
+      if (first.phase !== 'roam' || !first.pilot || startOff === null || startOff > T.handbackStart || step > allowed) failures.push({ t: first.t, label: 'I: no clean hand-back', beat: 9 });
+      if (drivesOn === false) failures.push({ t: (gaveBack ?? window[window.length - 1]).t, label: `I: the AI drove ${fmt(covered, 0)} m`, beat: 9 });
+    }
+  }
+  return beatResult(9, 'Takeover and hand-back', verdictOf(criteria), criteria, summaryOf(criteria), { failures });
 }
 
 // The beat windows of a trace: its roll, launch, donuts, way out, the scripted run and the roam after it
@@ -689,7 +813,20 @@ function windows(trace) {
 function checkTrace(trace, map) {
   annotate(trace, map);
   const ctx = { trace, map, ...windows(trace) };
-  const beats = [beatStart, beatRoll, beatFloor, beatDonuts, beatExit, beatSwim, beatCorners, beatRoam].map((beat) => beat(ctx));
+  const beats = [beatStart, beatRoll, beatFloor, beatDonuts, beatExit, beatSwim, beatCorners, beatRoam, beatHandoff].map((beat) => beat(ctx));
+  // A scenario where the player takes the wheel cuts the show short: a beat it hadn't finished by then is not the
+  // show's to pass or fail (beat 9 judges the takeover itself)
+  const take = trace.events.find((e) => e.kind === 'input' && e.action !== 'up' && DRIVING_KEYS[e.key]);
+  if (take) {
+    const launch = ctx.launchIndex >= 0 ? trace.frames[ctx.launchIndex].t : Infinity;
+    const exit = ctx.exitIndex >= 0 ? trace.frames[ctx.exitIndex].t : Infinity;
+    const done = { 1: 0, 2: launch, 3: launch + T.floorGainWindow, 4: exit, 5: ctx.wayEnd ?? Infinity, 6: Infinity, 7: Infinity, 8: Infinity };
+    for (const b of beats) {
+      if (b.id in done && done[b.id] >= take.t && b.verdict !== NA) {
+        Object.assign(b, { verdict: NA, criteria: [], summary: `cut short: the player took the wheel at t ${fmt(take.t)} (${take.key})`, failures: [] });
+      }
+    }
+  }
   const failures = beats.flatMap((b) => b.failures ?? []).sort((a, b) => a.t - b.t);
   const contacts = {
     cop: trace.frames.filter((f) => (f.copHit ?? 0) > 0).length,

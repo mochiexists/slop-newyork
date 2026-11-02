@@ -9,7 +9,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { clockInit, installProbe } from './lib/page.mjs';
-import { rewriteMain } from './lib/runner.mjs';
+import { GAME_HOOKS, rewriteFile, rewriteMain } from './lib/runner.mjs';
 import { REPO, ensureServer, serverUp } from './run.mjs';
 
 const require = createRequire(import.meta.url);
@@ -42,11 +42,13 @@ check('the M3 assets (model, sounds)', existsSync(join(REPO, 'assets/models/m3.g
 const sha = execFileSync('git', ['-C', REPO, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf8' }).trim();
 const dirty = execFileSync('git', ['-C', REPO, 'status', '--porcelain', '--', 'js', 'index.html', 'css'], { encoding: 'utf8' }).trim();
 check('build', true, `${sha}${dirty ? ' + uncommitted changes in js/ (the run is of the working tree, not the commit)' : ''}`);
-try {
-  rewriteMain(readFileSync(join(REPO, 'js/main.js'), 'utf8'));
-  check('main.js hook lines (each once)', true);
-} catch (error) {
-  check('main.js hook lines (each once)', false, error.message);
+for (const file of Object.keys(GAME_HOOKS)) {
+  try {
+    rewriteFile(file, readFileSync(join(REPO, file), 'utf8'));
+    check(`${file} hook lines (each once)`, true);
+  } catch (error) {
+    check(`${file} hook lines (each once)`, false, error.message);
+  }
 }
 const before = await serverUp(port);
 check(`port ${port}`, true, before ? 'a server already answers (used as is: make sure it serves this repo)' : 'free: the doctor starts one and stops it');
