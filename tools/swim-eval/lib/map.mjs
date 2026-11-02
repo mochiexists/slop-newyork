@@ -19,6 +19,10 @@ const CAR_HALF_WIDTH = 0.97;
 const CAR_HALF_LENGTH = 2.52;
 const OBSTACLE_MAX_SIDE = 50; // m: road-network.js blockedOnStreet ignores bigger footprints on the street (park bounds)
 const FOOTPRINT_STEP = 0.4; // m between the points sampled round the car's box
+// m past a street's half-width (city-config.js) that is still that street's asphalt, for telling which street the car
+// is on (onStreet): every road point within 7 m of 7th Ave's line, 47th to 33rd St, by the 2771a69 map; 214 of the
+// 84 384 sampled are missed, all 7.5-9 m out in Times Square, where a car's footprint is over the kerb anyway
+const CARRIAGEWAY_SLACK = 4;
 
 // The car-local points of the footprint (x across, z forward): the centre line, then the outline. The first is the
 // centre, which classify(x, z) of the car is.
@@ -231,6 +235,16 @@ class SwimMap {
     return near.length ? { name: near[0].road.name, dist: near[0].dist, width: near[0].road.w, dir: near[0].road.dir } : null;
   }
 
+  // On the street named `name` at (x, z), whichever road is nearest: in an intersection box the cross street (or
+  // Broadway) can be nearer than the avenue the car is driving down. Within its half-width of its centreline, plus
+  // `slack` m: city-config.js's widths run narrower than the asphalt kerb to kerb in places (7th Ave at 45th-43rd St:
+  // 12-15 m wide by the data, ~18 m between the kerbs), so a check that only needs to know which street the car is on
+  // (and checks the kerbs with the footprint) passes CARRIAGEWAY_SLACK. { dist, width } or null.
+  onStreet(x, z, name, slack = 0) {
+    const hit = nearestRoads(x, z, 25).find((r) => r.road.name === name && r.dist <= r.road.w / 2 + slack);
+    return hit ? { dist: hit.dist, width: hit.road.w } : null;
+  }
+
   // The car's footprint at (x, z) heading h: what each point of its outline (every FOOTPRINT_STEP m round the box) and
   // its centre line is on. (Nine points, corners and mid-sides, let a kerb corner poke into the box unseen: Codex
   // round 1 found a pose at 8th Ave & 42nd St.)
@@ -263,4 +277,4 @@ class SwimMap {
   }
 }
 
-export { CAR_HALF_LENGTH, CAR_HALF_WIDTH, SwimMap, allPlazaPieces, midtownRegion, pointInRing };
+export { CAR_HALF_LENGTH, CAR_HALF_WIDTH, CARRIAGEWAY_SLACK, SwimMap, allPlazaPieces, midtownRegion, pointInRing };

@@ -349,7 +349,9 @@ async function installProbe(cfg) {
     });
     acc.building = acc.buildingDepth = acc.cop = acc.copDepth = acc.traffic = acc.trafficSpeed = 0;
   }
-  return { ok: true, fixedClock, cop: showModule.COP_SPOT, showSpot: showModule.SHOW_SPOT, radius: showModule.DRIFT_RADIUS };
+  // (the show's own fixed points, which the checker judges by: where the cop parks, where the car starts, the run)
+  const route = (showModule.ESCAPE_ROUTE ?? []).map((q) => ({ x: q.x, z: q.z }));
+  return { ok: true, fixedClock, cop: showModule.COP_SPOT, showSpot: showModule.SHOW_SPOT, radius: showModule.DRIFT_RADIUS, route: route.length ? route : null };
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
