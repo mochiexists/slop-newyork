@@ -56,6 +56,14 @@ driving before P), `launch-musa` (musa's over-rotated launch injected at P) and 
 `launch-slow`, `launch-spun`, `launch-close`, `launch-far`, `launch-musa-120`, `launch-musa-mix`. Any
 `fresh-s<n>-<clock>[-w<warm-up s>]` is made up on the spot. `--duration <s>` shortens a run while you iterate.
 
+Which suite: `--set baseline` (the default) runs every clock on three seeds, for a build where the frame rate changes
+the run (89419cc and before). From 2771a69 the game steps on a fixed 1/120 s clock (`js/swim-clock.js`) and a seed's
+run is the same tick for tick at any frame rate (checked through this harness: 120 Hz and 30 Hz, 3001 ticks, every
+field equal), so use `--set deterministic`: one run per seed on the 30 Hz clock (a quarter of the frames to render),
+eight traffic seeds, each scenario kind once more on a second clock. Spend runs on seeds and scenarios, not repeats.
+On a fixed-clock build the trace has one row per tick (after `director.step`, the car's sim state), not per frame (the
+frame's car is the drawn pose between two ticks).
+
 How it drives: a virtual animation clock (`lib/page.mjs clockInit`) hands the game the scenario's frame times and is
 paused between the runner's steps, so every key press, the P press and every screenshot lands on an exact frame;
 Math.random is seeded at load and again at P; the traffic seed goes through the show's own `traffic.reseed` call.
@@ -80,12 +88,22 @@ run that passes too easily: suspect the observation before the system (is the tr
 the map classify the plaza?). To look at a report page yourself: `node tools/swim-eval/lib/snap-page.mjs <page.html>
 <out.png>` and Read the PNG (shrink with `sips -Z 1800`).
 
+Warm-up: `warm-*` scenarios press I at the Squeeze start (the AI roams through the player's keys), I again after the
+warm-up to take the car back, then P; run.json logs the metres driven. (W with the wheel swung each second, the old
+show-clock.cjs warm-up, pins the car against the kerb in its first 40 m: `warmupMode: 'swing'` keeps it for
+comparison only.)
+
+A run that reaches its end can sit minutes before "done" on a loaded machine: Playwright's video encoder lags and
+closing the page waits for it. Slow, not stuck; don't kill it there.
+
 ## 5. Cleanup
 
-Kill only what you started (note the PIDs; never `pkill` by pattern: other sessions run Chrome too). The runner and
-doctor close their own browsers and servers; a server you started by hand (`node tools/swim-eval/lib/server.mjs
-<port> <repo> <assets>`) you stop by its PID. Evidence stays: never delete videos, traces or shots. Empty
-`video-raw/` folders may stay.
+Kill only what you started (note the PIDs; never `pkill` by pattern: other sessions run Chrome too). `suite.mjs` and
+`run.mjs` exit on SIGTERM (`kill <pid>`) and take their browsers with them; check `pgrep -P <pid>` is empty after.
+(Before that fix, a killed suite's workers carried on with new browsers.) A server you started by hand (`node
+tools/swim-eval/lib/server.mjs <port> <repo> <assets>`) you stop by its PID. Evidence stays: never delete videos,
+traces or shots; a rerun into a folder renames an earlier video to `video-earlier-<ms>.webm`. Empty `video-raw/`
+folders may stay.
 
 ## Reading a verdict
 
