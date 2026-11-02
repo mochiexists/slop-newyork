@@ -222,6 +222,21 @@ test('the donuts hold the circle on a looser or steerier car (closed loop on the
   }
 });
 
+test('a way out played again mid-unwind counter-steers the slide as it is then, not as it was (Codex 2026-11-03)', () => {
+  // (the slide has swung to the other side, a right one, since the way out began: the replan's counter-steer is left)
+  const autopilot = loadModule(read('js/drift-autopilot.js'), { imports: { './drift-physics.js': physics } });
+  const hands = new autopilot.Hands();
+  const driver = new physics.KeyboardDriver();
+  const donut = new show.DonutDriver(show.COP_SPOT, show.DRIFT_RADIUS, null, {}, hands);
+  const car = { ...makeCar({ x: -589.4, z: 9, heading: -0.2 }), speed: 16, vx: 1 };
+  donut.phase = 'powerOut';
+  donut.exit = { counter: -1, gas: 0, unwind: 0.9, time: 0.2, side: 1 };
+  donut.sinceChoice = Infinity;
+  const keys = donut.update(car, 1 / 120, driver, {});
+  assert.equal(donut.exit.side, -1, 'the way out it took knows the slide is a right one');
+  if (donut.exit.time < donut.exit.unwind && donut.exit.counter < 0) assert.equal(keys.left, 1, 'and counter-steers it to the left');
+});
+
 test('out of the last lap it drifts onto 7th Ave and pulls off flat out: 50 mph within 3.5 s', () => {
   // (the way out is one the donut driver played ahead and found on the road: DonutDriver planExit)
   const o = runOpening();
