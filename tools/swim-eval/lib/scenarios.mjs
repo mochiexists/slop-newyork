@@ -150,8 +150,10 @@ function brokenBuilds() {
     scenario('broken-roll-and-radius', {
       duration: 30,
       patches: [
-        { file: 'js/swim-show.js', from: 'const DRIFT_RADIUS = 11;', to: 'const DRIFT_RADIUS = 16; // (swim-eval: broken on purpose)' },
-        { file: 'js/swim-show.js', from: 'rollSpeed: 5,', to: 'rollSpeed: 8, // (swim-eval: broken on purpose)' }
+        // (whatever the show sets them to: 11 m and 5 m/s to e7f9c83, 9 m and 4.5 m/s on worker C's opening; 16 m and
+        // 8 m/s fail beats 4 and 2 on both, by worker C at 42nd St)
+        { file: 'js/swim-show.js', pattern: 'const DRIFT_RADIUS = [\\d.]+;', to: 'const DRIFT_RADIUS = 16; // (swim-eval: broken on purpose)' },
+        { file: 'js/swim-show.js', pattern: 'rollSpeed: [\\d.]+,', to: 'rollSpeed: 8, // (swim-eval: broken on purpose)' }
       ]
     }),
     // (2026-11-03: the bird never raised; a driving key that doesn't stop the show; I's roam starting 40 m away)
