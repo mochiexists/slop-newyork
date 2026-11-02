@@ -263,6 +263,15 @@ const BREAKS = [
   { beat: 7, name: 'the route turns where the car drives straight on', criterion: 'turns completed', apply: (tr) => { const p = tr.events.find((e) => e.kind === 'path'); p.points.splice(2, 0, [avenueX('7'), streetZ(44)], [avenueX('7') + 60, streetZ(44)], [avenueX('7'), streetZ(44) + 1]); } },
   // (Codex round 1: a corner never come within 25 m of was left out of the beat, not failed)
   { beat: 7, name: 'a corner never come within 25 m of', layouts: BOTH, criterion: 'corners missed (never within 25 m, the route beyond them driven)', apply: (tr) => { const c = tr.events.find((e) => e.kind === 'path').points[3]; tr.frames = tr.frames.filter((f) => Math.hypot(f.x - c[0], f.z - c[1]) >= 26); } },
+  // (Codex round 2: ...and the trace ending on the leg after it, short of the next corner)
+  { beat: 7, name: 'a corner never come within 25 m of, the trace ending 100 m on', layouts: BOTH, criterion: 'corners missed (never within 25 m, the route beyond them driven)', apply: (tr) => {
+    const pts = tr.events.find((e) => e.kind === 'path').points;
+    const c = pts[3], next = pts[4];
+    const out = Math.atan2(next[0] - c[0], next[1] - c[1]);
+    tr.frames = tr.frames.filter((f) => Math.hypot(f.x - c[0], f.z - c[1]) >= 26);
+    const end = tr.frames.findIndex((f) => (f.x - c[0]) * Math.sin(out) + (f.z - c[1]) * Math.cos(out) > 100 && Math.hypot(f.x - c[0], f.z - c[1]) < 110);
+    tr.frames = tr.frames.slice(0, end);
+  } },
   { beat: 7, name: 'a corner cut over the pavement', apply: (tr) => shiftWhere(tr, (f) => Math.hypot(f.x - avenueX('8'), f.z - (streetZ(57) - 3.5)) < 25, 11, 11) },
   // (2026-11-03: a wait at a red light is not stuck, standing on a green is; both still count as stopped)
   { beat: 8, name: 'stuck 15 s on a green light', criterion: STUCK, apply: (tr) => stall(tr, 15, 'green') },
@@ -273,6 +282,10 @@ const BREAKS = [
   { beat: 9, base: 'handoff', layouts: BOTH, name: 'the AI keeps driving through the player\'s key', criterion: 'the player\'s key (KeyD) wins at once', apply: (tr) => takeoverFrames(tr, (f) => Object.assign(f, { phase: 'escape', pilot: 1, k: 'W' })) },
   // (Codex round 1: a takeover wiped a contact from before it)
   { beat: 6, base: 'handoff', name: 'a traffic contact before the takeover', criterion: 'traffic contacts', apply: (tr) => { const take = tr.events.find((e) => e.kind === 'input').t; const f = tr.frames.filter((q) => q.t < take - 1).pop(); tr.events.push({ kind: 'touch-traffic', t: f.t, x: f.x, z: f.z, depth: 0.05, closing: 2, mph: 60, phase: 'escape' }); } },
+  // (Codex round 2: a cop contact before the takeover, and the positive control: a run held under 70 mph until the
+  // takeover cut it short is no failure of the show's)
+  { beat: 6, base: 'handoff', name: 'a cop contact before the takeover', criterion: 'cop contacts (frames)', apply: (tr) => { const take = tr.events.find((e) => e.kind === 'input').t; tr.frames.filter((q) => q.t < take - 1).pop().copHit = 1; } },
+  { beat: 6, base: 'handoff', name: 'the run under 70 mph until the takeover (cut short, not failed)', expect: 'N/A', apply: (tr) => { for (const f of tr.frames) { const g = Math.hypot(Math.sin(f.h) * f.v + f.vx, Math.cos(f.h) * f.v + f.vz); if (g > 26.8) { const k = 26.8 / g; f.v *= k; f.vx *= k; f.vz *= k; } } } },
   { beat: 9, base: 'handoff', name: 'the player\'s key lost for one tick', criterion: 'the player\'s key (KeyD) wins at once', apply: (tr) => takeoverFrames(tr, (f, i) => { if (i === 0) Object.assign(f, { phase: 'escape', pilot: 1, k: 'W' }); }) },
   { beat: 9, base: 'handoff', name: 'the AI grabs the wheel back before I', criterion: 'the AI lets go (ticks it still drove, to I)', apply: (tr) => takeoverFrames(tr, (f, i, all) => { if (i === Math.floor(all.length * 0.8)) Object.assign(f, { pilot: 1, k: 'W' }); }) },
   { beat: 9, base: 'handoff', name: 'I does nothing', criterion: 'I: the AI takes the wheel at once', apply: (tr) => { for (const f of handbackFrames(tr)) Object.assign(f, { phase: 'off', pilot: 0, k: '' }); tr.events = tr.events.filter((e) => !(e.kind === 'path' && e.t > handbackAt(tr))); } },

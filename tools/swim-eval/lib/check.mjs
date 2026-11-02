@@ -475,6 +475,7 @@ function beatSwim(ctx) {
   const failures = [];
   for (const e of traffic.slice(0, 6)) failures.push({ t: e.t, label: `hits traffic at ${e.mph} mph`, beat: 6 });
   if (buildings.length) failures.push({ t: buildings[0].t, label: 'hits a building', beat: 6 });
+  if (cop.length) failures.push({ t: cop[0].t, label: 'touches the cop', beat: 6 });
   const { frames: stretch, reachedCorner } = seventhAveStretch(ctx, run);
   if (!stretch.length) {
     // (the corner came before the way out had ended: no 7th Ave left to swim; or the trace ended first)
@@ -507,7 +508,8 @@ function beatSwim(ctx) {
   if (astray.length) failures.push({ t: astray[0].t, label: `7th Ave stretch ${on7th(astray[0].x, astray[0].z) ? `over the ${astray[0].foot.find((c) => KERB.has(c))}` : 'off 7th Ave'}`, beat: 6 });
   if (held.time < T.swimHold) {
     const fastest = stretch.reduce((m, f) => (f.g > m.g ? f : m), stretch[0]);
-    failures.push({ t: fastest.t, label: `7th Ave top ${fmt(mph(fastest.g), 0)} mph, held ${fmt(held.time, 2)} s`, beat: 6 });
+    // (a shortfall over the whole stretch, not a moment's event: a takeover that cuts the stretch short doesn't keep it)
+    failures.push({ t: fastest.t, label: `7th Ave top ${fmt(mph(fastest.g), 0)} mph, held ${fmt(held.time, 2)} s`, beat: 6, overall: true });
   }
   return beatResult(6, 'Swim 7th Ave > 70 mph', verdictOf(criteria), criteria, summaryOf(criteria), {
     failures, counts: { splits: splits.length, closes: closes.length, traffic: traffic.length }, run: [t0, t1], stretch: [s0, s1], held: held.time
@@ -518,9 +520,12 @@ function beatSwim(ctx) {
 function cornersOf(ctx) {
   const { trace, after } = ctx;
   const seen = new Map();
-  for (const e of trace.events) {
-    if (e.kind !== 'path' || e.t < after - 0.5) continue;
+  const paths = trace.events.filter((e) => e.kind === 'path').sort((a, b) => a.t - b.t);
+  paths.forEach((e, n) => {
+    if (e.t < after - 0.5) return;
     const pts = e.points;
+    // (while this path was the AI's: until the next one replaced it)
+    const until = n + 1 < paths.length ? paths[n + 1].t : Infinity;
     for (let i = 1; i < pts.length - 1; i++) {
       const [ax, az] = pts[i - 1], [bx, bz] = pts[i], [cx, cz] = pts[i + 1];
       const turn = wrapAngle(Math.atan2(cx - bx, cz - bz) - Math.atan2(bx - ax, bz - az));
@@ -528,13 +533,31 @@ function cornersOf(ctx) {
       const inH = Math.atan2(bx - ax, bz - az), outH = Math.atan2(cx - bx, cz - bz);
       if (Math.abs(turn) < T.cornerTurn) continue;
       if (!seen.has(key)) seen.set(key, { x: bx, z: bz, turn, inH, outH, beyond: [] });
-      // (the route past it, as each path had it from when it was set: reaching any of that without the corner is
-      // driving past the corner, Codex round 1)
-      seen.get(key).beyond.push({ t: e.t, points: pts.slice(i + 1) });
+      // (the route past it, as each path had it from when it was set, sampled along its legs from cornerWindow past
+      // the corner: driving any of that without the corner is driving past the corner, Codex rounds 1 and 2)
+      seen.get(key).beyond.push({ t: e.t, until, points: routeBeyond([bx, bz], pts.slice(i + 1)) });
     }
-  }
+  });
   if (seen.size || trace.source !== 'session') return [...seen.values()];
   return turnsOf(ctx.run.concat(ctx.roam));
+}
+
+// Points every BEYOND_STEP m along the legs from `corner` through `rest`, from cornerWindow m past the corner on
+const BEYOND_STEP = 5; // m
+function routeBeyond(corner, rest) {
+  const out = [];
+  let along = 0;
+  let from = corner;
+  for (const to of rest) {
+    const length = Math.hypot(to[0] - from[0], to[1] - from[1]);
+    for (let d = 0; d < length; d += BEYOND_STEP) {
+      if (along + d >= T.cornerWindow) out.push([from[0] + ((to[0] - from[0]) * d) / length, from[1] + ((to[1] - from[1]) * d) / length]);
+    }
+    along += length;
+    from = to;
+  }
+  if (along >= T.cornerWindow) out.push(from);
+  return out;
 }
 
 // Turns read off the car's direction of travel over 60 m of road (a session, which has no route): where each is, and
@@ -629,7 +652,7 @@ function beatCorners(ctx) {
     if (!pass) {
       // A corner never come within cornerReach of, though the car went on to the route beyond it: missed (cut wide
       // or skipped), not "not reached"
-      const past = (c.beyond ?? []).some((b) => frames.some((f) => f.t >= b.t && b.points.some(([x, z]) => Math.hypot(f.x - x, f.z - z) < T.cornerReach)));
+      const past = (c.beyond ?? []).some((b) => frames.some((f) => f.t >= b.t && f.t < b.until && b.points.some(([x, z]) => Math.hypot(f.x - x, f.z - z) < T.cornerReach)));
       if (past) missed.push(c);
       continue;
     }
@@ -877,7 +900,7 @@ function checkTrace(trace, map) {
     for (const b of beats) {
       if (!(b.id in done) || done[b.id] < take.t || b.verdict === NA) continue;
       // (but what went wrong before the takeover stands: Codex round 1, a contact before it was wiped)
-      const before = (b.failures ?? []).filter((f) => f.t < take.t);
+      const before = (b.failures ?? []).filter((f) => f.t < take.t && !f.overall);
       if (before.length) {
         Object.assign(b, { verdict: NOT_VERIFIED, failures: before, summary: `cut short by the player at t ${fmt(take.t)}, after failing: ${before.map((f) => f.label).join('; ')}` });
       } else {
