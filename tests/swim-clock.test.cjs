@@ -189,6 +189,24 @@ test('a teleport between frames starts a new run there instead of drawing the ca
   assert.equal(clock.active, false);
 });
 
+test('a frame that throws before endFrame() costs the run nothing: the next frame puts the sim state back first', () => {
+  const world = makeWorld();
+  const { car, controllers, reseeds } = world;
+  const clock = controllers.swimClock;
+  keysDown(controllers, { forward: true });
+  let elapsed = clock.advance(0.5, 0, 'swim');
+  clock.endFrame();
+  elapsed = clock.advance(clock.tick * 1.5 - clock.clock.leftover, elapsed, 'swim');
+  const sim = clock.saved.z;
+  assert.notEqual(car.position.z, sim, 'drawn between ticks');
+  // (no endFrame: the frame threw)
+  elapsed = clock.advance(0.0001, elapsed, 'swim');
+  assert.equal(reseeds.length, 1, 'not taken for a teleport');
+  assert.equal(clock.run.reason, 'start');
+  clock.endFrame();
+  assert.ok(car.position.z >= sim, 'the car went on from its sim state');
+});
+
 function keysDown(controllers, keys) {
   Object.assign(controllers.keys, keys);
 }

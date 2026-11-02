@@ -21,7 +21,7 @@ function setUpSwimCar({ controllerManager, cameraSystem, audioSystem, swimDirect
   // The swimming car's flight recorder: to the dev server's /session-log, and a file on L (session-recorder.js); it
   // notes where each of the clock's runs starts
   const recorder = installSessionRecorder({ controllerManager, cameraSystem, isTypingInField, onSaved: () => swimDirector.score.flash('SESSION SAVED', 'banked') });
-  clock.onRun = (run, car) => recorder.run(run, car, controllerManager.swimDriver, swimDirector.cruiser);
+  clock.onRun = (run, car) => recorder.run(run, car, controllerManager.swimDriver, swimDirector.cruiser, swimDirector.show);
   // Full build: the real M3 Competition model replaces the procedural car when assets/models/m3.glb is there
   loadSwimCarModel(controllerManager.entities.swim, m5Cockpit).catch((error) => console.warn('M3 model not loaded:', error));
   // The swimming car's engine sound, M3 or the GTA mod's M5: the button on the Careless Whisper card and K

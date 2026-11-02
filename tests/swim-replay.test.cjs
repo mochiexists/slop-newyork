@@ -76,3 +76,28 @@ test('the trajectory check passes a run against itself and fails one a hair off,
   assert.equal(read.sameClock, false);
   assert.ok(read.maxPosition < 1e-12, 'a straight line interpolates exactly');
 });
+
+test('an event pressed before a run started is in its snapshot and not played again; a run begun mid-show is refused', () => {
+  const recorder = new recorderModule.SessionRecorder({ now: () => 0, post: () => {} });
+  const car = { position: { x: 0, y: 0, z: 0 }, heading: 0, speed: 0, vx: 0, vz: 0, angularVel: 0, manual: true, drift: {} };
+  recorder.event('manual', 0); // T, then the run starts at the next frame with the gearbox already manual
+  recorder.run({ tick: 0, seed: 2, x: 0, z: 0, reason: 'start', elapsed: 0 }, car, null, null, { phase: 'off' });
+  recorder.frame(car, {}, 1 / 120, null, false, 0, 0);
+  recorder.event('shiftUp', 1);
+  recorder.frame(car, {}, 1 / 120, null, false, 0, 1);
+  recorder.run({ tick: 2, seed: 3, x: 50, z: 0, reason: 'teleport', elapsed: 0 }, car, null,
+    { state: 'chasing', car: { position: { x: 0, z: 0 }, heading: 0 } }, { phase: 'escape' });
+  recorder.frame(car, {}, 1 / 120, null, false, 0, 2);
+  const dir = mkdtempSync(join(__dirname, '.tmp-replay-'));
+  try {
+    const file = join(dir, 'all.json');
+    writeFileSync(file, recorder.snapshot());
+    const session = readSession(file);
+    const plan = replayPlan(session, 0);
+    assert.deepEqual(plan.events, [[1, 'shiftUp']], 'T was before the run: in its snapshot');
+    assert.equal(plan.start.car.manual, true);
+    assert.throws(() => replayPlan(session, 1), /not replayable/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

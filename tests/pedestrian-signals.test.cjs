@@ -97,3 +97,34 @@ test('pedestrians already crossing continue when WALK ends', () => {
   advance(0.2);
   assert.ok(people.every((p) => p.t > 3 && !p.waiting));
 });
+
+test('a reseed clears the crowd without a random draw: the run\'s seeded sequence never hangs on who was talking', () => {
+  let draws = 0;
+  const random = { ...Object.fromEntries(Object.getOwnPropertyNames(Math).map((k) => [k, Math[k]])), random: () => { draws++; return 0.5; } };
+  const { createPedestrianSystem } = loadModule(readFileSync(join(__dirname, '../js/pedestrian-system.js'), 'utf8'), {
+    imports: {
+      './city-config.js': { blockAt: () => null },
+      './pedestrian-routes.js': { createPedestrianRoutes: () => ({ next: () => null }) },
+      './swim-traffic.js': { trafficMath: random },
+      './pedestrians.js': {
+        PersonRig: class { update() {} },
+        PersonCrowd: class { meshes = []; begin() {} add() {} end() {} },
+        PEDESTRIAN_DIVE_DURATION: 2.5
+      }
+    }
+  });
+  const system = createPedestrianSystem({ nodes: [] }, {
+    player: { active: false }, nearEdges: [], nearSignals: [], mayCross: () => false, walkOn: () => false,
+    visible: () => false, nearView: () => false
+  });
+  const [a, b] = system.peds;
+  a.conversation = b.conversation = { a, b, remaining: 5 };
+  Object.assign(a, { placed: true });
+  Object.assign(b, { placed: true });
+  system.reseed();
+  system.step(1 / 120, 10, 0, 0, false, true, 'swim');
+  assert.equal(draws, 0, 'ending the old conversation drew nothing from the run\'s random');
+  assert.equal(a.conversation, null);
+  assert.equal(b.conversation, null);
+  assert.ok(system.peds.every((p) => !p.placed), 'nowhere to stand here: everyone off until placed afresh');
+});

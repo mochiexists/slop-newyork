@@ -647,8 +647,10 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
       jump = true;
       pedCursor = 0;
       nextMeeting = 0;
+      // (conversations end without endConversation(), whose random draws would hang the run on how many there were;
+      // spawnPed gives everyone a fresh social time)
       for (const p of peds) {
-        if (p.conversation) endConversation(p.conversation);
+        p.conversation = null;
         p.placed = false;
       }
       gatherCurbs();

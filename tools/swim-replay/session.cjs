@@ -27,6 +27,12 @@ function replayPlan(session, which = null) {
   const number = which ?? session.runs.length - 1;
   const run = session.runs[number];
   if (!run) throw new Error(`${session.name}: no run ${number} (${session.runs.length} runs)`);
+  // A run that began with the AI or the cop already on the move (a teleport mid-show) starts from their memory, which
+  // the recording doesn't keep: it can't be played again
+  const moving = ['chasing', 'stopping'].includes(run.cruiser?.state);
+  if (run.reason !== 'show' && ((run.show && run.show.phase !== 'off') || moving)) {
+    throw new Error(`${session.name}: run ${number} (${run.reason}) started with the ${moving ? 'cop chasing' : `AI show in its ${run.show.phase}`}: not replayable`);
+  }
   const end = session.runs[number + 1]?.index ?? session.frames.length;
   const keys = [];
   const recorded = [];
@@ -39,7 +45,9 @@ function replayPlan(session, which = null) {
       (f.forward ? 1 : 0) | (f.backward ? 2 : 0) | (f.left ? 4 : 0) | (f.right ? 8 : 0) | (f.handbrake ? 16 : 0)]);
     keys.push(f.player);
   }
-  const events = session.events.filter((e) => e.index >= run.index && e.index < run.index + keys.length)
+  // (an event noted before the run started, at the same frame, is already in the run's snapshot of the car)
+  const events = session.events.filter((e) => e.index >= run.index && e.index < run.index + keys.length
+    && !(e.index === run.index && e.seq !== undefined && run.seq !== undefined && e.seq < run.seq))
     .map((e) => [e.index - run.index, e.name]);
   return { session: session.name, build: session.build, number, runs: session.runs.length, start: run, keys, events, recorded };
 }

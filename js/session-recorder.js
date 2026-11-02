@@ -132,21 +132,24 @@ class SessionRecorder {
     this.lastSpeed = 0;
   }
 
-  // A note that comes before the next frame
+  // A note that comes before the next frame. `seq` orders notes before the same frame: an event pressed before a run
+  // starts is already in the run's snapshot, one after it is not.
   note(kind, value) {
+    value.seq = this.notes = (this.notes ?? 0) + 1;
     this.pendingNotes[kind].push([this.pending.length, value]);
     this.allNotes[kind].push([this.dropped + this.all.length, value]);
   }
 
   /**
-   * A run starts (swim-clock.js): `run` { tick, seed, x, z, reason, elapsed }, then the car, its keyboard driver and
-   * the cop as they are before its first tick.
+   * A run starts (swim-clock.js): `run` { tick, seed, x, z, reason, elapsed }, then the car, its keyboard driver, the
+   * cop and the AI show (its phase, and the gearbox it hands a player back) as they are before its first tick.
    */
-  run(run, car, driver, cruiser = null) {
+  run(run, car, driver, cruiser = null, show = null) {
     const { tick, seed, x, z, reason, elapsed } = run;
     const cop = cruiser ? { state: cruiser.state, retired: Boolean(cruiser.retired), x: cruiser.car.position.x,
       z: cruiser.car.position.z, heading: cruiser.car.heading } : null;
-    this.note('runs', { tick, seed, x, z, reason, elapsed, car: snapshotCar(car), driver: snapshotDriver(driver), cruiser: cop });
+    const ai = show ? { phase: show.phase, playerManual: Boolean(show.playerManual) } : null;
+    this.note('runs', { tick, seed, x, z, reason, elapsed, car: snapshotCar(car), driver: snapshotDriver(driver), cruiser: cop, show: ai });
   }
 
   /** A key that changed the car outside the physics (T, Z, X, I, P), before the next tick: { name, tick } */

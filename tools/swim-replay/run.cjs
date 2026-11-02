@@ -123,11 +123,36 @@ async function pageReplay(plan) {
   const start = plan.start;
   const events = new Map();
   for (const [n, name] of plan.events) events.set(n, [...(events.get(n) ?? []), name]);
+  const { capturePose } = await import('/js/swim-clock.js');
   const replay = globalThis.__replay = { armed: false, first: null, done: false };
+  // The car and its driver exactly as the run found them (unrounded)
+  const restoreCar = () => {
+    const car = cm.entities.swim;
+    const { position, drift, chassis, ...numbers } = start.car;
+    Object.assign(car, numbers);
+    car.position.set(position.x, position.y, position.z);
+    Object.assign(car.drift, drift);
+    if (chassis && car.chassisPivot) {
+      car.chassisPivot.rotation.x = chassis.pitch;
+      car.chassisPivot.rotation.z = chassis.roll;
+      car.chassisPivot.position.y = chassis.heave;
+    }
+    if (cm.swimDriver) Object.assign(cm.swimDriver, start.driver);
+  };
   const onRun = clock.onRun;
   clock.onRun = (run, car) => {
+    if (run.reason === (start.reason === 'show' ? 'show' : 'replay')) {
+      replay.armed = true;
+      // A show run: P put the car at the show's spot as it did then; what P doesn't reset (the engine's revs, the
+      // gearbox the show hands back) comes from the recording, and the clock draws from there
+      if (start.reason === 'show' && start.car) {
+        restoreCar();
+        director.show.playerManual = Boolean(start.show?.playerManual);
+        capturePose(car, clock.prev);
+        capturePose(car, clock.curr);
+      }
+    }
     onRun?.(run, car);
-    if (run.reason === (start.reason === 'show' ? 'show' : 'replay')) replay.armed = true;
   };
   const startRun = clock.startRun.bind(clock);
   clock.startRun = (options) => startRun({ ...options, elapsed: start.elapsed });
@@ -152,17 +177,7 @@ async function pageReplay(plan) {
   if (start.reason === 'show') return 'P';
   if (!start.car) return 'script'; // (the key list's own start: pageScriptStart)
   // The car, its driver and the cop as the run found them; the run itself (the city laid out) at the next frame
-  const car = cm.entities.swim;
-  const { position, drift, chassis, ...numbers } = start.car;
-  Object.assign(car, numbers);
-  car.position.set(position.x, position.y, position.z);
-  Object.assign(car.drift, drift);
-  if (chassis && car.chassisPivot) {
-    car.chassisPivot.rotation.x = chassis.pitch;
-    car.chassisPivot.rotation.z = chassis.roll;
-    car.chassisPivot.position.y = chassis.heave;
-  }
-  if (cm.swimDriver) Object.assign(cm.swimDriver, start.driver);
+  restoreCar();
   const cop = start.cruiser;
   if (cop && cop.state !== 'hidden') {
     director.cruiser.park(cop.x, cop.z, cop.heading);

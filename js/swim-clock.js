@@ -180,6 +180,8 @@ class SwimClock {
    * them) and puts the car's drawn pose on it for the rest of the frame. Returns the city's elapsed seconds.
    */
   advance(dt, elapsed, mode) {
+    // (a frame that threw before endFrame() left the drawn pose on the car: the sim state back first)
+    this.endFrame();
     this.active = mode === 'swim';
     if (!this.active) {
       this.clock.leftover = 0;
