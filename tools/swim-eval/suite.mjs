@@ -30,7 +30,9 @@ const only = opt('--only')?.split(',');
 // --set baseline (89419cc's: every clock, the frame rate changed the run) | deterministic (a fixed-clock build: one run
 // per seed, more seeds)
 const set = opt('--set', 'baseline');
-const scenarios = (set === 'deterministic' ? deterministicSuite() : baselineSuite()).filter((s) => !only || only.includes(s.name));
+// (--only picks what to run; the summary is always the whole set's finished runs, so rerunning a few keeps the rest)
+const suite = set === 'deterministic' ? deterministicSuite() : baselineSuite();
+const scenarios = suite.filter((s) => !only || only.includes(s.name));
 mkdirSync(join(out, 'maps'), { recursive: true });
 
 // Stopped means stopped: Playwright closes its browsers on a signal, and without this the workers would go on to the
@@ -72,7 +74,7 @@ if (!flag('--summary-only')) {
 }
 
 const entries = [];
-for (const s of scenarios) {
+for (const s of suite) {
   const dir = join(out, s.name);
   if (!finished(dir)) {
     console.log(`${s.name}: no trace (${existsSync(join(dir, 'run.json')) ? JSON.parse(readFileSync(join(dir, 'run.json'), 'utf8')).failure?.split('\n')[0] : 'not run'})`);
