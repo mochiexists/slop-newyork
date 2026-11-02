@@ -82,6 +82,7 @@ const ROUTE_AHEAD = 3; // corners the route is kept ahead of the car, so the pla
 const ROAM_SEED = 7; // the roam's choices, the same every show (a hand-back roams differently each time)
 const STUCK_TIME = 2; // s standing still before the AI backs out
 const HOLD_BACK = 15; // m the cop keeps behind the car it chases
+const COP_HOLD_DECEL = 6; // m/s² it reckons it can brake at on its keys, holding back from a car it is closing on
 const LEAVE_DISTANCE = 60; // m the car is away before a cop that gave up leaves
 const CORNER_CLEAR_DISTANCE = 110; // m out from a drift corner that the show starts holding its traffic
 const CORNER_CLEAR_RADIUS = 26;
@@ -601,7 +602,13 @@ class PoliceCruiser {
       const keys = this.pilot.drive(c, dt, obstacles, this.driver);
       let brake = 0;
       if (this.state === 'stopping') brake = 0.5;
-      else if (gap < HOLD_BACK && c.speed > Math.abs(quarry.speed) - 2) brake = Math.min(1, (HOLD_BACK - gap) / HOLD_BACK + 0.2);
+      else if (quarry && gap < Infinity) {
+        // (and further back the faster it closes: inside 15 m alone, it came up on a car stopped after a knock at 32 m/s
+        // and ran into it, worker C 2026-11-03)
+        const closing = Math.max(0, c.speed - Math.abs(quarry.speed));
+        const holdBack = HOLD_BACK + closing * closing / (2 * COP_HOLD_DECEL);
+        if (gap < holdBack && c.speed > Math.abs(quarry.speed) - 2) brake = Math.min(1, (holdBack - gap) / holdBack + 0.2);
+      }
       if (brake > 0) {
         this.holdBrake += brake;
         keys.forward = 0;
