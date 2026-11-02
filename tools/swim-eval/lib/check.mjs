@@ -8,7 +8,7 @@
 // its cop and its run comes from the trace (the page's own COP_SPOT and ESCAPE_ROUTE), else from geometry.mjs.
 import { COP, DRIFT_RADIUS, ESCAPE_ROUTE, MPH, boxClearance, groundSpeed, kasaFit, travelHeading, wrapAngle } from './geometry.mjs';
 import { CARRIAGEWAY_SLACK } from './map.mjs';
-import { SIGNAL_TIMING, signalPhase } from '../../../js/city-config.js';
+import { ALL_AVENUES, ALL_STREETS, SIGNAL_TIMING, signalPhase } from '../../../js/city-config.js';
 
 const RAD = Math.PI / 180;
 const VERIFIED = 'VERIFIED';
@@ -77,6 +77,9 @@ const T = {
   // or with no signal clock logged, or not along an avenue or a street, it is stuck (2026-11-03, Codex: a red light's
   // wait was called stuck; the < 10 % stopped gate still bounds every wait)
   axisAlign: 30 * RAD, // 8: heading this close to an avenue's or a street's line reads as on it
+  stopLineReach: 20, // 8: m short of the next crossing ahead that a car waits at its light...
+  queueShare: 0.5, // 8: ...or this share of the stop in a queue the AI's planner sees (drift-autopilot.js queued)
+  // (Codex round 1: a stall mid-block during a red was called a wait)
   handbackStart: 0.5, // 9: m between the car and the first point of the route the AI takes on with at I (logged to 0.1 m)
   handbackJump: 0.05, // 9: m the car may move across the I press beyond what its speed carries it (no teleport)
   handbackWindow: 10, // 9: s after I over which...
@@ -419,15 +422,22 @@ function beatExit(ctx) {
   return beatResult(5, 'Drift out onto 7th Ave', verdictOf(criteria), criteria, summaryOf(criteria), { failures, at: { x: e.x, z: e.z, t: e.t } });
 }
 
-// The run's 7th Ave stretch: from where the way out ends (beat 5) to the route's first corner (the frames before the
-// car comes within cornerReach of it). Fixed by the route, not by where the car is, so a detour off 7th Ave is in it
-// and counts against it (Codex #8: a window of "frames on 7th Ave" let a detour over the plaza drop out of the beat).
-function seventhAveStretch(ctx) {
-  const { run, firstCorner } = ctx;
-  const reach = run.findIndex((f) => Math.hypot(f.x - firstCorner.x, f.z - firstCorner.z) < T.cornerReach);
-  const upToCorner = reach >= 0 ? run.slice(0, reach) : run;
-  const from = ctx.wayEnd ?? -Infinity;
-  return { frames: upToCorner.filter((f) => f.t > from), reachedCorner: reach >= 0 };
+// The frames beat 6 judges: from the frame after the way out ends (beat 5's last) to the end of the run, whatever the
+// show's phase (Codex round 1: a way out reaching 50 mph before the show's escape phase left the frames between in
+// neither beat)
+function swimFrames(ctx) {
+  const end = ctx.run.length ? ctx.run[ctx.run.length - 1].t : -Infinity;
+  const from = ctx.wayEnd ?? (ctx.run.length ? ctx.run[0].t - ctx.run[0].dt : Infinity);
+  return ctx.trace.frames.filter((f) => f.t > from && f.t <= end);
+}
+
+// The run's 7th Ave stretch: those frames up to the route's first corner (before the car comes within cornerReach of
+// it). Fixed by the route, not by where the car is, so a detour off 7th Ave is in it and counts against it (Codex #8:
+// a window of "frames on 7th Ave" let a detour over the plaza drop out of the beat).
+function seventhAveStretch(ctx, frames) {
+  const { firstCorner } = ctx;
+  const reach = frames.findIndex((f) => Math.hypot(f.x - firstCorner.x, f.z - firstCorner.z) < T.cornerReach);
+  return { frames: reach >= 0 ? frames.slice(0, reach) : frames, reachedCorner: reach >= 0 };
 }
 
 // The longest unbroken spell of frames meeting `test`: its s and its first frame
@@ -449,10 +459,11 @@ function longestSpell(frames, test) {
 // 6. Swim on 7th Ave above 70 mph with splits and close calls, no contacts. Speed, passes and the kerb are all judged
 //    on one window, the 7th Ave stretch (Codex #8: splits scored on 8th Ave and a run detouring over the plaza passed)
 function beatSwim(ctx) {
-  const { trace, run, map } = ctx;
-  if (!run.length) return beatResult(6, 'Swim 7th Ave > 70 mph', INCONCLUSIVE, [criterion('run frames', '0', null, '> 0')], 'not reached');
+  const { trace, map } = ctx;
+  const run = swimFrames(ctx);
+  if (!ctx.run.length || !run.length) return beatResult(6, 'Swim 7th Ave > 70 mph', INCONCLUSIVE, [criterion('run frames', '0', null, '> 0')], 'not reached');
   const session = trace.source === 'session';
-  const t0 = run[0].t, t1 = run[run.length - 1].t;
+  const t0 = run[0].t - run[0].dt, t1 = run[run.length - 1].t;
   const traffic = trafficContacts(trace, t0, t1);
   const buildings = run.filter((f) => (f.bHit ?? 0) > 0);
   const cop = run.filter((f) => (f.copHit ?? 0) > 0);
@@ -464,7 +475,7 @@ function beatSwim(ctx) {
   const failures = [];
   for (const e of traffic.slice(0, 6)) failures.push({ t: e.t, label: `hits traffic at ${e.mph} mph`, beat: 6 });
   if (buildings.length) failures.push({ t: buildings[0].t, label: 'hits a building', beat: 6 });
-  const { frames: stretch, reachedCorner } = seventhAveStretch(ctx);
+  const { frames: stretch, reachedCorner } = seventhAveStretch(ctx, run);
   if (!stretch.length) {
     // (the corner came before the way out had ended: no 7th Ave left to swim; or the trace ended first)
     const criteria = [criterion('the 7th Ave stretch', reachedCorner ? 'none: the first corner came before the way out ended' : 'not reached', reachedCorner ? false : null, 'the way out to the first corner'), ...contactCriteria];
@@ -515,7 +526,11 @@ function cornersOf(ctx) {
       const turn = wrapAngle(Math.atan2(cx - bx, cz - bz) - Math.atan2(bx - ax, bz - az));
       const key = `${Math.round(bx)},${Math.round(bz)}`;
       const inH = Math.atan2(bx - ax, bz - az), outH = Math.atan2(cx - bx, cz - bz);
-      if (Math.abs(turn) >= T.cornerTurn && !seen.has(key)) seen.set(key, { x: bx, z: bz, turn, inH, outH });
+      if (Math.abs(turn) < T.cornerTurn) continue;
+      if (!seen.has(key)) seen.set(key, { x: bx, z: bz, turn, inH, outH, beyond: [] });
+      // (the route past it, as each path had it from when it was set: reaching any of that without the corner is
+      // driving past the corner, Codex round 1)
+      seen.get(key).beyond.push({ t: e.t, points: pts.slice(i + 1) });
     }
   }
   if (seen.size || trace.source !== 'session') return [...seen.values()];
@@ -607,10 +622,17 @@ function beatCorners(ctx) {
   if (!frames.length) return beatResult(7, 'Corners drifted, on the road', INCONCLUSIVE, [criterion('run frames', '0', null, '> 0')], 'not reached');
   const corners = cornersOf(ctx);
   const driven = [];
+  const missed = [];
   let unfinished = 0;
   for (const c of corners) {
     const pass = cornerPass(frames, c);
-    if (!pass) continue;
+    if (!pass) {
+      // A corner never come within cornerReach of, though the car went on to the route beyond it: missed (cut wide
+      // or skipped), not "not reached"
+      const past = (c.beyond ?? []).some((b) => frames.some((f) => f.t >= b.t && b.points.some(([x, z]) => Math.hypot(f.x - x, f.z - z) < T.cornerReach)));
+      if (past) missed.push(c);
+      continue;
+    }
     // (the trace ending inside the corner's window: not driven yet, so not judged)
     if (!pass.left) {
       unfinished++;
@@ -623,7 +645,11 @@ function beatCorners(ctx) {
     const touches = trafficContacts(trace, near[0].t, near[near.length - 1].t).filter((e) => Math.hypot(e.x - c.x, e.z - c.z) < T.cornerWindow);
     driven.push({ ...c, ...drift, slip: drift.peak, off: off.length, frames: near.length, hits: hits.length + touches.length, t: near[0].t, offWhat: offRoadSummary(off), firstOff: off[0]?.t });
   }
-  if (!driven.length) return beatResult(7, 'Corners drifted, on the road', INCONCLUSIVE, [criterion('corners driven', unfinished ? `0 (${unfinished} the trace ends in)` : '0', null, '≥ 1')], 'no corner driven');
+  const missedCriterion = criterion(`corners missed (never within ${T.cornerReach} m, the route beyond them driven)`, missed.length ? `${missed.length}: ${missed.map((c) => `(${fmt(c.x, 0)}, ${fmt(c.z, 0)})`).join(', ')}` : '0', missed.length === 0, '0');
+  if (!driven.length) {
+    const criteria = [criterion('corners driven', unfinished ? `0 (${unfinished} the trace ends in)` : '0', null, '≥ 1'), missedCriterion];
+    return beatResult(7, 'Corners drifted, on the road', verdictOf(criteria), criteria, 'no corner driven');
+  }
   const incomplete = driven.filter((c) => !c.completed);
   const undrifted = driven.filter((c) => !c.drifted);
   const offRoad = driven.filter((c) => c.off > 0);
@@ -632,6 +658,7 @@ function beatCorners(ctx) {
   const thinnest = driven.reduce((m, c) => (c.share < m.share ? c : m), driven[0]);
   const criteria = [
     criterion('corners driven', `${driven.length}${unfinished ? ` (and ${unfinished} the trace ends in)` : ''}`, true, '≥ 1'),
+    missedCriterion,
     criterion('turns completed', `${driven.length - incomplete.length}/${driven.length}`, incomplete.length === 0, 'all'),
     criterion(`drifted (one unbroken spell ≥ ${Math.round(deg(T.cornerSlip))}°, ≥ ${T.cornerDriftTime} s, ≥ ${T.cornerDriftShare * 100}% of the turn)`,
       `${driven.length - undrifted.length}/${driven.length} (shortest spell ${fmt(shortest.spell, 2)} s; least of the turn ${fmt(thinnest.share * 100, 0)}%)`, undrifted.length === 0, 'all'),
@@ -640,6 +667,10 @@ function beatCorners(ctx) {
   ];
   const failures = [];
   const at = (c) => `corner (${fmt(c.x, 0)}, ${fmt(c.z, 0)})`;
+  for (const c of missed.slice(0, 3)) {
+    const nearest = frames.reduce((m, f) => (Math.hypot(f.x - c.x, f.z - c.z) < Math.hypot(m.x - c.x, m.z - c.z) ? f : m), frames[0]);
+    failures.push({ t: nearest.t, label: `${at(c)} missed (closest ${fmt(Math.hypot(nearest.x - c.x, nearest.z - c.z), 0)} m)`, beat: 7 });
+  }
   for (const c of offRoad.slice(0, 4)) failures.push({ t: c.firstOff, label: `${at(c)} over the ${c.offWhat.split(' ')[0]}`, beat: 7 });
   for (const c of undrifted.slice(0, 3)) {
     const how = c.completed ? `gripped (spell ${fmt(c.spell, 2)} s, ${fmt(c.share * 100, 0)}% of the turn, peak ${fmt(deg(c.peak), 0)}°)` : 'turn not completed';
@@ -726,6 +757,11 @@ function diagnoseStop(stop) {
   }
   const axis = alongAvenue ? 'an avenue' : 'a street';
   if (worst > T.queueDischarge) return { kind: 'deadlock', why: `standing ${fmt(worst, 0)} s into its green on ${axis}` };
+  // ...and at the light: near the next crossing ahead, or in a queue for it
+  const f = stop[Math.floor(stop.length / 2)];
+  const toCrossing = crossingAhead(f.x, f.z, h, alongAvenue);
+  const queued = stop.filter((q) => q.queued).length / stop.length;
+  if (toCrossing > T.stopLineReach && queued < T.queueShare) return { kind: 'deadlock', why: `standing ${fmt(toCrossing, 0)} m short of the next crossing, not in a queue, on ${axis}` };
   return { kind: 'red light', why: `waiting at ${axis}'s red light` };
 }
 
@@ -789,6 +825,23 @@ function beatHandoff(ctx) {
   return beatResult(9, 'Takeover and hand-back', verdictOf(criteria), criteria, summaryOf(criteria), { failures });
 }
 
+// m from (x, z) heading h to the near edge of the next cross street ahead (along an avenue) or the next avenue (along
+// a street); 0 inside one
+function crossingAhead(x, z, h, alongAvenue) {
+  const dir = Math.sign(alongAvenue ? Math.cos(h) : Math.sin(h)) || 1;
+  // (a road without a width in the city data counts as a line)
+  const lines = (alongAvenue ? ALL_STREETS.map((q) => [q.z, q.width]) : ALL_AVENUES.map((q) => [q.x, q.width]))
+    .filter(([c]) => Number.isFinite(c)).map(([c, width]) => [c, Number.isFinite(width) ? width : 0]);
+  const at = alongAvenue ? z : x;
+  let best = Infinity;
+  for (const [c, width] of lines) {
+    const ahead = dir * (c - at);
+    if (ahead < -width / 2) continue;
+    best = Math.min(best, Math.max(0, ahead - width / 2));
+  }
+  return best;
+}
+
 // The beat windows of a trace: its roll, launch, donuts, way out, the scripted run and the roam after it
 function windows(trace) {
   const frames = trace.frames;
@@ -822,7 +875,12 @@ function checkTrace(trace, map) {
     const exit = ctx.exitIndex >= 0 ? trace.frames[ctx.exitIndex].t : Infinity;
     const done = { 1: 0, 2: launch, 3: launch + T.floorGainWindow, 4: exit, 5: ctx.wayEnd ?? Infinity, 6: Infinity, 7: Infinity, 8: Infinity };
     for (const b of beats) {
-      if (b.id in done && done[b.id] >= take.t && b.verdict !== NA) {
+      if (!(b.id in done) || done[b.id] < take.t || b.verdict === NA) continue;
+      // (but what went wrong before the takeover stands: Codex round 1, a contact before it was wiped)
+      const before = (b.failures ?? []).filter((f) => f.t < take.t);
+      if (before.length) {
+        Object.assign(b, { verdict: NOT_VERIFIED, failures: before, summary: `cut short by the player at t ${fmt(take.t)}, after failing: ${before.map((f) => f.label).join('; ')}` });
+      } else {
         Object.assign(b, { verdict: NA, criteria: [], summary: `cut short: the player took the wheel at t ${fmt(take.t)} (${take.key})`, failures: [] });
       }
     }
