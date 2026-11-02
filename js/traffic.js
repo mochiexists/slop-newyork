@@ -436,7 +436,11 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
   const show = createShowTraffic({ vehicles, cars, edges, player, place, locate, buildOccupancy, lookahead: LOOKAHEAD,
     spawnNear: (v, rMin, protectView) => spawnVehicle(v, rMin, NEAR_RADIUS, protectView),
     inView: (v) => nearView(v.x, v.z, v.half + 4, VEHICLE_SPAWN_DISTANCE), focus: () => [focusX, focusZ],
-    jumpTo(x, z) { focusX = lastFocusX = x; focusZ = lastFocusZ = z; nearX = Infinity; refreshNear(); } });
+    jumpTo(x, z) {
+      focusX = lastFocusX = x; focusZ = lastFocusZ = z; nearX = Infinity; refreshNear();
+      vehicleCursor = 0;
+      pedestrianSystem.reseed();
+    } });
   const nearEdges = [];
   const nearSignals = [];
   const pedestrianSystem = createPedestrianSystem(network, {
@@ -1891,6 +1895,13 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
   let vehicleCursor = 0;
 
   function update(dt, elapsed, focusPos = null, playerEntity = null, activeMode = 'car', camera = null) {
+    step(dt, elapsed, focusPos, playerEntity, activeMode, camera);
+    draw(dt, camera);
+  }
+
+  // Swimming in Slop: step() moves the traffic and draw() shows it, so the swim clock (swim-clock.js) can step it tick
+  // by tick and draw it once a frame; update() is the two
+  function step(dt, elapsed, focusPos = null, playerEntity = null, activeMode = 'car', camera = null) {
     clock = elapsed;
     avePhase = signalPhase(elapsed, true);
     stPhase = signalPhase(elapsed, false);
@@ -1934,14 +1945,6 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
       spawnVehicle(v, jump ? 0 : 100, NEAR_RADIUS, !jump);
     }
     buildOccupancy();
-    for (const m of bodyMeshes) m.count = 0;
-    dirtyWheelStyles = false;
-    litVehicleCount = 0;
-    wheelCars = 0;
-    visibleCars = 0;
-    policeDrawn.sedan = 0;
-    policeDrawn.suv = 0;
-    visibleBuses = 0;
     for (let i = 0; i < vehicles.length; i++) {
       const v = vehicles[i];
       if (!v.edge) continue;
@@ -1959,6 +1962,28 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
       for (const v of vehicles) if (v.edge) collideWithPlayer(v);
     }
     collideTraffic();
+
+    // 2. Pedestrians
+    pedestrianSystem.step(dt, elapsed, focusX, focusZ, jump, hasView, activeMode);
+
+    // 3. Collision sparks, including the player's own impacts against buildings
+    if (playerEntity && playerEntity.lastCollisionSpark) {
+      const bs = playerEntity.lastCollisionSpark;
+      spawnCollisionSparks(bs.x, bs.y, bs.z, bs.nx, bs.nz, bs.speed);
+      playerEntity.lastCollisionSpark = null;
+    }
+  }
+
+  function draw(dt, camera = null) {
+    updateView(camera);
+    for (const m of bodyMeshes) m.count = 0;
+    dirtyWheelStyles = false;
+    litVehicleCount = 0;
+    wheelCars = 0;
+    visibleCars = 0;
+    policeDrawn.sedan = 0;
+    policeDrawn.suv = 0;
+    visibleBuses = 0;
     for (const v of vehicles) {
       if (!v.edge) continue;
       if (v.bus) renderBus(v);
@@ -2010,22 +2035,16 @@ function createTrafficSystem(scene, sidewalks, obstacles, signalIntersections) {
     syncInst(busShadowInst, visibleBuses);
     if (visibleBuses > 0) flagRange(busStates, visibleBuses);
     updateTrafficLights();
-
-    // 2. Pedestrians
-    pedestrianSystem.update(dt, elapsed, focusX, focusZ, jump, hasView, activeMode);
-
-    // 3. Collision sparks, including the player's own impacts against buildings
-    if (playerEntity && playerEntity.lastCollisionSpark) {
-      const bs = playerEntity.lastCollisionSpark;
-      spawnCollisionSparks(bs.x, bs.y, bs.z, bs.nx, bs.nz, bs.speed);
-      playerEntity.lastCollisionSpark = null;
-    }
+    pedestrianSystem.draw(dt);
     updateSparks(dt);
   }
 
   return {
     group,
     update,
+    step, // (Swimming in Slop: the swim clock's ticks, view the camera they protect, draw once a frame)
+    draw,
+    view: updateView,
     setCollisionListener,
     ...show.api, // (Swimming in Slop: setClearZone, reseed, stageRoute, releaseStaged)
     cars,

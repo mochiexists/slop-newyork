@@ -11,6 +11,7 @@ function crossing() {
     imports: {
       './city-config.js': { blockAt: () => null },
       './pedestrian-routes.js': { createPedestrianRoutes: () => ({ next: () => null }) },
+      './swim-traffic.js': { trafficMath: Math },
       './pedestrians.js': {
         PersonRig: class { update() {} },
         PersonCrowd: class { meshes = []; begin() {} add() {} end() {} },

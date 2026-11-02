@@ -1,6 +1,8 @@
 import { blockAt } from './city-config.js';
 import { createPedestrianRoutes } from './pedestrian-routes.js';
 import { PersonCrowd, PersonRig, PEDESTRIAN_DIVE_DURATION } from './pedestrians.js';
+// Swimming in Slop: `Math` here is traffic.js's, whose random() the swim clock's runs seed (swim-traffic.js)
+import { trafficMath as Math } from './swim-traffic.js';
 
 // Local pedestrian population: connected walks, curb queues, conversations and player avoidance.
 // Traffic supplies crossing permissions and view checks; this system owns the crowd and its animation.
@@ -88,7 +90,7 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
   }
 
   const KERB = 1.6; // how far along a crosswalk track pedestrians wait to cross (the curb is 2 m along)
-  const pedRoutes = createPedestrianRoutes(network, blockAt);
+  const pedRoutes = createPedestrianRoutes(network, blockAt, () => Math.random()); // (Swimming in Slop: seeded)
   const track = { ax: 0, az: 0, ux: 0, uz: 1, len: 1, node: null, side: 0, line: 0, route: null };
 
   function sidewalkTrack(e) {
@@ -621,12 +623,36 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
   }
 
   function update(dt, elapsed, x, z, jump, view, activeMode) {
+    step(dt, elapsed, x, z, jump, view, activeMode);
+    draw(dt);
+  }
+
+  // Swimming in Slop: everyone placed afresh round the focus at the next step(), on traffic.js's random (seeded by
+  // the swim clock's run, swim-traffic.js), so a run's crowd is the same whatever walked before it
+  let reseeding = false;
+  function reseed() {
+    reseeding = true;
+  }
+
+  // Swimming in Slop: step() walks the crowd and draw() poses it, as traffic.js's step() and draw()
+  function step(dt, elapsed, x, z, jump, view, activeMode) {
     clock = elapsed;
     focusX = x;
     focusZ = z;
     hasView = view;
     pedRange = player.active && (activeMode === 'car' || activeMode === 'swim' || activeMode === 'cyclist') && player.entity.position.y > -1
       ? Math.sqrt(player.vx * player.vx + player.vz * player.vz) * PED_LOOKAHEAD + player.halfL + 6 : 0;
+    if (reseeding) {
+      reseeding = false;
+      jump = true;
+      pedCursor = 0;
+      nextMeeting = 0;
+      for (const p of peds) {
+        if (p.conversation) endConversation(p.conversation);
+        p.placed = false;
+      }
+      gatherCurbs();
+    }
 
     for (const n of walkedNodes) n.walkers.length = 0;
     walkedNodes.length = 0;
@@ -649,17 +675,22 @@ function createPedestrianSystem(network, { player, nearEdges, nearSignals, mayCr
     }
     meet(dt);
     gatherCurbs();
+    for (let i = 0; i < NUM_PEDS; i++) {
+      const p = peds[i];
+      if (p.placed) walk(p, dt);
+    }
+  }
+
+  function draw(dt) {
     pedCrowd.begin();
     for (let i = 0; i < NUM_PEDS; i++) {
       const p = peds[i];
-      if (!p.placed) continue;
-      walk(p, dt);
-      renderPed(p, dt);
+      if (p.placed) renderPed(p, dt);
     }
     pedCrowd.end();
   }
 
-  return { peds, meshes: pedCrowd.meshes, update };
+  return { peds, meshes: pedCrowd.meshes, update, step, draw, reseed };
 }
 
 export { createPedestrianSystem };

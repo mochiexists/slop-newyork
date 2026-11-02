@@ -1,6 +1,8 @@
 // Lazily connected sidewalk tracks; junctions stay on the same curb island. Crosswalk tracks are separate,
 // and pedestrian-system.js checks traffic permissions before entering them.
-function createPedestrianRoutes({ walkable, onSidewalk }, blockAt) {
+// (Swimming in Slop: `random`, the source of a walker's choice of way on: pedestrian-system.js hands it the swim
+// clock's seeded one, swim-traffic.js)
+function createPedestrianRoutes({ walkable, onSidewalk }, blockAt, random = Math.random) {
   const sidewalks = new Map(), crossings = new Map(), junctions = new Map(), connections = new WeakMap();
   const point = (track, end) => ({ x: track.ax + track.ux * track.len * end, z: track.az + track.uz * track.len * end });
   const segment = (a, b, extra = {}) => {
@@ -201,7 +203,7 @@ function createPedestrianRoutes({ walkable, onSidewalk }, blockAt) {
       const last = path[path.length - 1], target = last.track;
       const ux = target.ux * last.dir, uz = target.uz * last.dir;
       const back = ux * track.ux * dir + uz * track.uz * dir < -0.8;
-      const score = (ux * gx + uz * gz) / distance + Math.random() * 0.7 - (back ? 2 : 0);
+      const score = (ux * gx + uz * gz) / distance + random() * 0.7 - (back ? 2 : 0);
       if (score > bestScore) { best = path; bestScore = score; }
     }
     return best;
