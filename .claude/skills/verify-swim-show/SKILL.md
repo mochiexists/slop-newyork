@@ -48,7 +48,7 @@ node tools/swim-eval/suite.mjs --out <dir> --port <port> --jobs 2
 node tools/swim-eval/check.mjs <session.jsonl> --map <dir>/maps/map-<sha>.json --out <dir>
 # re-check a run folder without re-running (after a checker change)
 node tools/swim-eval/check.mjs <dir>/<scenario>
-# every check seen failing: the synthetic ideal show and a handoff show, each at both layouts, and 60 break cases
+# every check seen failing: the synthetic ideal show and a handoff show, each at both layouts, and 73 break cases
 node tools/swim-eval/selftest.mjs --map tools/swim-eval/test/map-fixture.json
 ```
 
