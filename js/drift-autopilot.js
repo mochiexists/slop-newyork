@@ -810,7 +810,10 @@ class DriftAutopilot {
               if (gapAlong < 0 && gapAcross < 0) {
                 // (inside the margins; flown on until it would really touch: a squeeze, or a hit)
                 if (hitAt === Infinity) hitAt = t;
-                const real = ob.inside ? gapAcross : Math.abs(across) - ob.across - ownAcross;
+                // (a car already inside the margins touches only by getting closer than it is: its reach is the gap
+                // there is now, less a hair. Read as 0.1 m of real air, every plan beside a car stopped 0.15 m away
+                // touched at once, and the AI stood there for 88 s: fresh-s4-30 on 9f70d21)
+                const real = ob.inside ? gapAcross + o.squeezeMargin : Math.abs(across) - ob.across - ownAcross;
                 const touchAlong = Math.abs(ahead) - (ob.inside ? ob.length : ob.extentAlong + ownAlong);
                 if (touchAlong < 0 && real < o.squeezeMargin) {
                   touchAt = t;
