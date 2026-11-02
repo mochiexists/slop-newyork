@@ -149,32 +149,52 @@ async function runScenario(scenario, { outDir, port, repo, mapDir }) {
     await ensureMap(page, mapFile);
     run.mapFile = mapFile;
 
-    // The warm-up: into swim mode at the Squeeze start, W down, the wheel swung side to side each second
+    // The warm-up: into swim mode at the Squeeze start (7th Ave & 47th St), then a drive round Midtown before P, the
+    // way musa drives before pressing it: I (the AI drives on from where the car is, through the same keys a player
+    // has), I again to take the car back, a second off the keys, P. (The old warm-up, W with the wheel swung side to
+    // side each second as show-clock.cjs did, steered into the kerb wall in its first metres and sat there with W held
+    // for the rest: 37 m in 60 s.) warmupMode 'swing' keeps it, for comparison.
     if (scenario.warmup > 0) {
       await page.keyboard.press('Digit5');
       await page.evaluate((n) => globalThis.__clock.run(n), 30);
       await page.evaluate(() => document.getElementById('swim-start-squeeze')?.click());
       await page.evaluate((n) => globalThis.__clock.run(n), 30);
-      await page.keyboard.down('KeyW');
       let simTime = await page.evaluate(() => globalThis.__clock.simTime);
       const end = simTime + scenario.warmup;
-      let side = 0;
-      while (simTime < end) {
-        const key = side % 2 ? 'KeyA' : 'KeyD';
-        await page.keyboard.down(key);
-        ({ simTime } = await page.evaluate((t) => globalThis.__clock.run(Infinity, t), simTime + WARMUP_SWING));
-        await page.keyboard.up(key);
-        ({ simTime } = await page.evaluate((t) => globalThis.__clock.run(Infinity, t), simTime + WARMUP_SWING));
-        side++;
+      if (scenario.warmupMode === 'swing') {
+        await page.keyboard.down('KeyW');
+        let side = 0;
+        while (simTime < end) {
+          const key = side % 2 ? 'KeyA' : 'KeyD';
+          await page.keyboard.down(key);
+          ({ simTime } = await page.evaluate((t) => globalThis.__clock.run(Infinity, t), simTime + WARMUP_SWING));
+          await page.keyboard.up(key);
+          ({ simTime } = await page.evaluate((t) => globalThis.__clock.run(Infinity, t), simTime + WARMUP_SWING));
+          side++;
+        }
+        await page.keyboard.up('KeyW');
+      } else {
+        await page.keyboard.press('KeyI');
+        // (the distance it drives, a second at a time: a warm-up that went nowhere is no warm-up)
+        const where = () => page.evaluate(() => ({ x: globalThis.__swim.car.position.x, z: globalThis.__swim.car.position.z, phase: globalThis.__swim.show.phase }));
+        let last = await where();
+        run.warmupDistance = 0;
+        run.warmupPhase = last.phase;
+        while (simTime < end) {
+          ({ simTime } = await page.evaluate((t) => globalThis.__clock.run(Infinity, t), Math.min(end, simTime + 1)));
+          const now = await where();
+          run.warmupDistance += Math.hypot(now.x - last.x, now.z - last.z);
+          last = now;
+        }
+        await page.keyboard.press('KeyI');
       }
-      await page.keyboard.up('KeyW');
       ({ simTime } = await page.evaluate((t) => globalThis.__clock.run(Infinity, t), simTime + SETTLE_AFTER_WARMUP));
       run.warmupEnd = await page.evaluate(() => {
         const c = globalThis.__swim.car;
         return { x: c.position.x, z: c.position.z, heading: c.heading, speed: c.speed, mode: globalThis.__evalControllers.activeMode };
       });
       await shoot('warmup-end', { t: 0 });
-      log(runDir, `warm-up ${scenario.warmup} s done at (${run.warmupEnd.x.toFixed(0)}, ${run.warmupEnd.z.toFixed(0)}), ${(run.warmupEnd.speed * 2.237).toFixed(0)} mph`);
+      log(runDir, `warm-up ${scenario.warmup} s (${scenario.warmupMode ?? 'roam'}${run.warmupDistance === undefined ? '' : `, ${run.warmupDistance.toFixed(0)} m driven, AI ${run.warmupPhase}`}) done at (${run.warmupEnd.x.toFixed(0)}, ${run.warmupEnd.z.toFixed(0)}), ${(run.warmupEnd.speed * 2.237).toFixed(0)} mph`);
     }
 
     // P, on a frame of its own: Math.random reseeded and the trace started at the same instant
