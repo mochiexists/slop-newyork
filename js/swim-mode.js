@@ -2,7 +2,7 @@ import * as THREE from 'three/webgpu';
 import { attribute, float, texture, vec3 } from 'three/tsl';
 import { avenueX, streetZ } from './city-config.js';
 import { BODY_SPECS } from './cars.js';
-import { PoliceCruiser, SwimShow, SHOW_SPOT, SHOW_SIGNAL_TIME } from './swim-show.js';
+import { PoliceCruiser, SwimShow, SHOW_SPOT } from './swim-show.js';
 import { HudFlash } from './swim-hud-flash.js';
 import { MusicDuck, MusicFader } from './swim-music-fade.js';
 import { SwimExhaust } from './swim-exhaust.js';
@@ -863,4 +863,4 @@ class SwimDirector {
   }
 }
 
-export { CARELESS_WHISPER, SWIM_STARTS, SQUEEZE_ROUTE, SHOW_SPOT, SHOW_SIGNAL_TIME, CloseCalls, SwimRadio, SwimDirector };
+export { CARELESS_WHISPER, SWIM_STARTS, SQUEEZE_ROUTE, SHOW_SPOT, CloseCalls, SwimRadio, SwimDirector };

@@ -523,7 +523,7 @@ async function initApp() {
 
   // Swimming in Slop: the swim buttons, the Squeeze route on the map and the mode's keys (swim-controls.js)
   bindSwimControls({ controllerManager, swimDirector, m5Cockpit, audioSystem, mapSystem, isTypingInField, selectMode,
-    teleportTo, closePopovers, clock: { get: () => elapsed, set: (t) => { elapsed = t; } } });
+    teleportTo, closePopovers });
 
   if (hudToggleBtn) {
     hudToggleBtn.addEventListener('click', () => {

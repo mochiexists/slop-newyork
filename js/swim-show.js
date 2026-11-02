@@ -654,9 +654,10 @@ class SwimShow {
   // Called with the car already in Times Square (main.js teleports it to SHOW_SPOT first)
   start() {
     this.traffic.setClearZone({ x: COP_SPOT.x, z: COP_SPOT.z, r: SHOW_CLEAR_RADIUS });
-    // The same traffic every time, so the escape threads the same cars: the run the swim clock starts (swim-clock.js)
+    // The same traffic every time, so the escape threads the same cars, and the same lights: the run the swim clock
+    // starts, on the show's point in the signal cycle exactly (swim-clock.js), whatever the city's clock read before
     const clock = this.controllers.swimClock;
-    if (clock) clock.startRun({ seed: SHOW_TRAFFIC_SEED, x: SHOW_SPOT.x, z: SHOW_SPOT.z, reason: 'show' });
+    if (clock) clock.startRun({ seed: SHOW_TRAFFIC_SEED, x: SHOW_SPOT.x, z: SHOW_SPOT.z, reason: 'show', elapsed: SHOW_SIGNAL_TIME });
     else this.traffic.reseed?.(SHOW_TRAFFIC_SEED, SHOW_SPOT.x, SHOW_SPOT.z);
     // The cruiser parks at the centre of the circle the car will drift round, side-on to the car coming down 7th Ave
     this.cruiser.park(COP_SPOT.x, COP_SPOT.z, COP_HEADING);

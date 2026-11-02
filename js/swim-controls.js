@@ -1,6 +1,5 @@
-import { SIGNAL_TIMING } from './city-config.js';
 import { shiftDown, shiftUp, toggleManual } from './drift-physics.js';
-import { SWIM_STARTS, SQUEEZE_ROUTE, SHOW_SPOT, SHOW_SIGNAL_TIME } from './swim-mode.js';
+import { SWIM_STARTS, SQUEEZE_ROUTE, SHOW_SPOT } from './swim-mode.js';
 import { bindSwimEngineToggle } from './swim-engine-toggle.js';
 import { M5Cockpit } from './m5-cockpit.js';
 import { loadSwimCarModel } from './m3-model.js';
@@ -38,8 +37,7 @@ const SWIM_CONTROL_HINTS = [[['W', 'S'], 'Gas / Brake'], [['W', 'S'], 'Both: bur
 const SWIM_TOP_SPEED_MPH = 190;
 
 // `app` is main.js's: controllerManager, swimDirector, m5Cockpit, audioSystem, mapSystem, isTypingInField,
-// selectMode(mode), teleportTo(x, z, heading) → where it landed, closePopovers(), and clock { get, set } (the city's
-// elapsed seconds, which drive its signals).
+// selectMode(mode), teleportTo(x, z, heading) → where it landed, closePopovers().
 function bindSwimControls(app) {
   const { controllerManager, swimDirector, m5Cockpit, audioSystem, mapSystem, selectMode, teleportTo, closePopovers } = app;
 
@@ -57,12 +55,10 @@ function bindSwimControls(app) {
   });
 
   // The AI show: donuts round the cop in Times Square, the escape, then the AI roams on until P or a driving key
+  // (the show's run starts the city's clock on its point in the signal cycle, swim-show.js start)
   function startSwimShow() {
     selectMode('swim');
     teleportTo(SHOW_SPOT.x, SHOW_SPOT.z, SHOW_SPOT.heading);
-    // The city clock jumps on to the show's point in the signal cycle, so its lights repeat along with its traffic
-    const elapsed = app.clock.get();
-    app.clock.set(elapsed + ((((SHOW_SIGNAL_TIME - elapsed) % SIGNAL_TIMING.cycle) + SIGNAL_TIMING.cycle) % SIGNAL_TIMING.cycle));
     swimDirector.startShow();
   }
   document.querySelectorAll('[data-swim-show]').forEach((btn) => {
