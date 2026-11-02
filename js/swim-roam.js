@@ -175,8 +175,16 @@ class RoamRoute {
   startFrom(x, z, heading) {
     const fx = Math.sin(heading), fz = Math.cos(heading);
     this.at = { x, z };
-    if (Math.abs(fz) >= Math.abs(fx)) this.road = { kind: 'avenue', id: nearestAvenue(x), sign: Math.sign(fz) || 1 };
-    else this.road = { kind: 'street', id: nearestStreet(z), sign: Math.sign(fx) || 1 };
+    // (the road the car is on, by where it is; the way it points only where it is on both, at a crossing. Shoved up
+    // against a building on 7th Ave pointing west, it took 40th St, 22 m off, and drove at the building again:
+    // fresh-s5-30, 2026-11-03)
+    const avenue = nearestAvenue(x), street = nearestStreet(z);
+    const offAvenue = Math.abs(x - avenueX(avenue)) - (AVENUE_BY_ID.get(avenue)?.width ?? 0) / 2;
+    const offStreet = Math.abs(z - streetZ(street)) - (STREET_BY_NUMBER.get(street)?.width ?? 0) / 2;
+    let onAvenue = Math.abs(fz) >= Math.abs(fx);
+    if (offAvenue > 0 || offStreet > 0) onAvenue = offAvenue < offStreet;
+    if (onAvenue) this.road = { kind: 'avenue', id: avenue, sign: Math.sign(fz) || 1 };
+    else this.road = { kind: 'street', id: street, sign: Math.sign(fx) || 1 };
     this.relaxed = true;
     return this;
   }

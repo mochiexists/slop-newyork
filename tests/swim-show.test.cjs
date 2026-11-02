@@ -359,6 +359,19 @@ test('the roam only drives roads the right way and stays inside Midtown', () => 
   assert.equal(roam.streetOpen(14, config.avenueX('7'), config.avenueX('6'), true), true, 'while a plain block of 14th St is');
 });
 
+test('a way on from a car shoved sideways against a building takes the road the car is on, not the one it points at', () => {
+  // (fresh-s5-30, 2026-11-03: on 7th Ave's west side between 40th and 39th St, pointing west-north-west into a building;
+  // the reroute took 40th St, 22 m off, and its first leg ran through the building)
+  const at = { x: -597.8, z: 141.8 };
+  for (const seed of [1, 2, 3]) {
+    const first = new roam.RoamRoute(seed).startFrom(at.x, at.z, 300 * Math.PI / 180).next();
+    assert.ok(Math.abs(first.x - config.avenueX('7')) < 8, `its first corner is on 7th Ave (${first.x.toFixed(1)}, ${first.z.toFixed(1)})`);
+  }
+  // ...while a car in the middle of a street, pointing along it, still takes the street
+  const onStreet = new roam.RoamRoute(1).startFrom(config.avenueX('7') - 120, config.streetZ(42), -Math.PI / 2).next();
+  assert.ok(Math.abs(onStreet.z - config.streetZ(42)) < 8, `along 42nd St (${onStreet.x.toFixed(1)}, ${onStreet.z.toFixed(1)})`);
+});
+
 test('I hands the car back to the AI: it roams on from wherever the car is', () => {
   // Rolling south down 7th Ave at 34th St, just taken back from the player
   const car = makeCar({ x: config.avenueX('7'), z: config.streetZ(36), heading: 0 });
