@@ -18,6 +18,22 @@ const CELL = 32;
 const CAR_HALF_WIDTH = 0.97;
 const CAR_HALF_LENGTH = 2.52;
 const OBSTACLE_MAX_SIDE = 50; // m: road-network.js blockedOnStreet ignores bigger footprints on the street (park bounds)
+const FOOTPRINT_STEP = 0.4; // m between the points sampled round the car's box
+
+// The car-local points of the footprint (x across, z forward): the centre line, then the outline. The first is the
+// centre, which classify(x, z) of the car is.
+const FOOTPRINT_POINTS = (() => {
+  const pts = [];
+  const along = (from, to) => {
+    const n = Math.max(1, Math.ceil(Math.hypot(to[0] - from[0], to[1] - from[1]) / FOOTPRINT_STEP));
+    for (let i = 0; i < n; i++) pts.push([from[0] + ((to[0] - from[0]) * i) / n, from[1] + ((to[1] - from[1]) * i) / n]);
+  };
+  const w = CAR_HALF_WIDTH, l = CAR_HALF_LENGTH;
+  along([0, 0], [0, l]);
+  along([0, 0], [0, -l]);
+  for (const [a, b] of [[[-w, -l], [w, -l]], [[w, -l], [w, l]], [[w, l], [-w, l]], [[-w, l], [-w, -l]]]) along(a, b);
+  return pts;
+})();
 
 // Midtown, with room round the roam's box (swim-roam.js: 11th to 1st Ave, 57th to 14th St)
 function midtownRegion() {
@@ -203,12 +219,13 @@ class SwimMap {
     return near.length ? { name: near[0].road.name, dist: near[0].dist, width: near[0].road.w, dir: near[0].road.dir } : null;
   }
 
-  // The car's footprint (centre, corners, mid-sides) at (x, z) heading h: what each point is on
+  // The car's footprint at (x, z) heading h: what each point of its outline (every FOOTPRINT_STEP m round the box) and
+  // its centre line is on. (Nine points, corners and mid-sides, let a kerb corner poke into the box unseen: Codex
+  // round 1 found a pose at 8th Ave & 42nd St.)
   footprint(x, z, h) {
     const sin = Math.sin(h), cos = Math.cos(h);
     const out = [];
-    for (const [lx, lz] of [[0, 0], [-1, -1], [1, -1], [1, 1], [-1, 1], [0, 1], [0, -1], [1, 0], [-1, 0]]) {
-      const ax = lx * CAR_HALF_WIDTH, az = lz * CAR_HALF_LENGTH;
+    for (const [ax, az] of FOOTPRINT_POINTS) {
       // car local x across (to its right as heading turns), z forward: world = rotate by heading (swim-mode.js rearContacts)
       const px = x + cos * ax + sin * az, pz = z - sin * ax + cos * az;
       out.push(this.classify(px, pz));

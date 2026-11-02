@@ -31,6 +31,11 @@ test('the show starts on the Times Square plaza, 13 m off 7th Ave, by the game\'
   assert.ok(map.plazaCheck().matchedFootprints >= 3, 'the plaza pieces match footprints of the page');
 });
 
+test('the footprint sees a kerb corner inside the car\'s box (Codex round 1\'s pose at 8th Ave & 42nd St)', () => {
+  const map = new SwimMap(fixture);
+  assert.ok(map.footprint(-869.2117, 9.9556, 0.95144).includes('pavement'));
+});
+
 test('the Kasa fit finds a circle', () => {
   const pts = Array.from({ length: 50 }, (_, i) => [3 + 10 * Math.sin(i / 8), -4 + 10 * Math.cos(i / 8)]);
   const fit = kasaFit(pts);

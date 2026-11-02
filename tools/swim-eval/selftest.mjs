@@ -22,7 +22,9 @@ function selftest(dump) {
     const beat = result.beats[brk.beat - 1];
     const others = result.beats.filter((b) => b.id !== brk.beat && b.verdict !== 'VERIFIED').map((b) => b.id);
     const why = beat.criteria.filter((c) => c.pass === false).map((c) => `${c.name} ${c.value}${c.unit}`).join('; ');
-    rows.push({ name: brk.name, beat: brk.beat, expected: 'NOT VERIFIED', got: beat.verdict, ok: beat.verdict === 'NOT VERIFIED', why, others });
+    // (a break that takes the beat's evidence away, rather than breaking it, must leave it INCONCLUSIVE: never VERIFIED)
+    const expected = brk.expect ?? 'NOT VERIFIED';
+    rows.push({ name: brk.name, beat: brk.beat, expected, got: beat.verdict, ok: beat.verdict === expected, why, others });
   }
   return { rows, ok: rows.every((r) => r.ok) };
 }

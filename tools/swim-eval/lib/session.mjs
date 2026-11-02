@@ -2,7 +2,7 @@
 // frame the state it started from, with keyboard-driver snapshots every 30 frames. Read here for three things: the
 // offline score of a session (toTrace: the AI's part as a trace the checker reads), musa's frame times (the "musa"
 // clock profile) and musa's over-rotated launch (the injected start state of the launch scenarios).
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { COP, SHOW_SPOT, groundSpeed, wrapAngle } from './geometry.mjs';
 
 const MUSA_SESSION = '/Users/timapple/Documents/mcc/fujira/scratch/2026-11-01/sessions/2026-11-01T15-34-47-424.jsonl';
@@ -17,7 +17,9 @@ const LAUNCH_MIN_SPEED = 3; // m/s: the first long W after the roll is the launc
 const LAUNCH_HOLD = 0.4; // s of W held unbroken that reads as flooring it (the roll's feathered W is shorter)
 const EXIT_DISTANCE = 16; // m from the cop: off the donut circle
 const EXIT_RADIAL = 2; // m/s away from the cop
+const ON_CIRCLE = 12.5; // m from the cop: still on the donut circle (DRIFT_RADIUS 11, and its swing)
 const SLIDE_ANGLE = 20 * Math.PI / 180; // the donut driver's slideAngle: a launch this sideways is the drift
+const ROLL_TOP = 6.2; // m/s: past the roll's crawl (swim-show.js DONUT.rollSpeed 5) with room for its overshoot
 
 function readSession(path) {
   const frames = [];
@@ -86,6 +88,15 @@ function toTrace(session, segmentIndex = 0) {
       while (j + 1 < frames.length && frames[j + 1].k.includes('W')) j++;
       if (frames[j].t - f.t + frames[j].dt >= LAUNCH_HOLD) launch = i;
     }
+    // (a W held straight on from the roll into the launch has no fresh press: then the launch is the start of the W
+    // hold that takes the car past the roll's speed)
+    let rule = 'the first W held unbroken from a rolling start';
+    if (launch < 0) {
+      let i = frames.findIndex((f) => f.k.includes('W') && groundSpeed(f) > ROLL_TOP);
+      while (i > 0 && frames[i - 1].k.includes('W')) i--;
+      launch = i;
+      rule = 'the start of the W hold that takes it past the roll\'s speed';
+    }
     let exit = -1;
     if (launch >= 0) {
       for (let i = launch; i < frames.length; i++) {
@@ -99,6 +110,8 @@ function toTrace(session, segmentIndex = 0) {
           break;
         }
       }
+      // ...and back from there to the last frame still on the circle: where it began powering out
+      while (exit > launch && Math.hypot(frames[exit - 1].x - COP.x, frames[exit - 1].z - COP.z) > ON_CIRCLE) exit--;
     }
     let sliding = false;
     frames.forEach((f, i) => {
@@ -110,7 +123,7 @@ function toTrace(session, segmentIndex = 0) {
         f.phase = 'escape';
       }
     });
-    notes.push(`phases read back from the driving: launch at frame ${launch >= 0 ? frames[launch].f : 'none'}, off the circle at ${exit >= 0 ? frames[exit].f : 'none (the AI part ends first)'}`);
+    notes.push(`phases read back from the driving (uncertain by a few frames; a session doesn't log them): launch at frame ${launch >= 0 ? `${frames[launch].f} (${rule})` : 'none'}, off the circle at ${exit >= 0 ? frames[exit].f : 'none (the AI part ends first)'}`);
   }
   return {
     source: 'session', label: `${session.session} AI segment ${segmentIndex + 1}/${segments.length}`, file: session.path,
@@ -118,8 +131,17 @@ function toTrace(session, segmentIndex = 0) {
   };
 }
 
+// The session's launch state and frame times, extracted into the repo (test/musa-session-extract.json), for a
+// checkout on a machine without musa's session file
+const EXTRACT = new URL('../test/musa-session-extract.json', import.meta.url);
+
+function extract() {
+  return JSON.parse(readFileSync(EXTRACT, 'utf8'));
+}
+
 // musa's frame times on the show (the AI segment's dt column), the "musa" clock profile
 function musaFrameTimes(path = MUSA_SESSION) {
+  if (!existsSync(path)) return extract().frameTimes;
   const session = readSession(path);
   const [first, last] = aiSegments(session.frames)[0];
   return session.frames.slice(first, last + 1).map((f) => f.dt);
@@ -128,6 +150,7 @@ function musaFrameTimes(path = MUSA_SESSION) {
 // The car at musa's over-rotated launch, as the show would have it mid-donut: the car's state, the keyboard driver's
 // snapshot from the same frame, and how far round the cop it had swept since the launch
 function musaLaunchState(path = MUSA_SESSION, frame = MUSA_LAUNCH_FRAME) {
+  if (!existsSync(path) && frame === MUSA_LAUNCH_FRAME) return extract().launchState;
   const session = readSession(path);
   const trace = toTrace(session);
   const f = session.frames[frame];

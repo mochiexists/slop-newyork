@@ -37,7 +37,9 @@ const T = {
   donutRadiusMax: 12,
   donutSlipMin: 30 * RAD, // 4: the median drift angle on the circle
   donutSlipMax: 50 * RAD,
-  slidingSlip: 10 * RAD, // 4: frames this sideways are the circle's, for the fit (donut-score.py used 0.17 rad)
+  donutFitRms: 1.5, // 4: m RMS off the fitted circle at most: a circle, not an ellipse (good runs 0.4-0.8, musa's clock 1.5)
+  donutNear: 7, // 4: m, the 10th percentile of the distance to the cop at least ("~8-12 m out")
+  donutFar: 13, // 4: m, the 90th percentile at most
   donutGiveUp: 35, // 5: s of donuts with no way out that is stuck in them (swim-show.js gives up at 30)
   exitMph: 50, // 5: mph reached...
   exitTime: 3.5, // 5: ...within this many s of powering out ("~3 s")
@@ -54,7 +56,8 @@ const T = {
   stoppedShare: 0.1, // 8: share of the roam stopped at most
   stuckWindow: 10, // 8: s over which...
   stuckDistance: 5, // 8: ...the car moving less than this many m is stuck
-  sessionCopContact: 0.02 // m of box clearance a session (no contact log) counts as touching the cop
+  sessionCopContact: 0.02, // m of box clearance a session (no contact log) counts as touching the cop
+  sessionLapSlack: 0.2 // laps a session's read-back way out may over-count (measured on a run's own recording: 0.18)
 };
 
 const ESCAPE_END = { x: avenueX('9'), z: streetZ(57) - 3.5 }; // swim-show.js ESCAPE_ROUTE's last corner
@@ -117,7 +120,8 @@ function annotate(trace, map) {
 
 function offRoadSummary(frames) {
   const counts = {};
-  for (const f of frames) if (f.off) for (const c of f.foot) if (KERB.has(c)) counts[c] = (counts[c] ?? 0) + 1;
+  // (frames per thing under the car: a frame over plaza and pavement both counts once for each)
+  for (const f of frames) if (f.off) for (const c of new Set(f.foot)) if (KERB.has(c)) counts[c] = (counts[c] ?? 0) + 1;
   return Object.entries(counts).map(([k, n]) => `${k} ${n}`).join(', ');
 }
 
@@ -174,6 +178,8 @@ function beatRoll(ctx) {
 function beatFloor(ctx) {
   const { trace, launchIndex } = ctx;
   if (ctx.injected) return beatResult(3, 'Floor it', NA, [], 'the scenario starts mid-donut (injected state)');
+  // (a session's launch is read back from the driving: not finding it there says nothing about the show)
+  if (launchIndex < 0 && trace.source === 'session') return beatResult(3, 'Floor it', INCONCLUSIVE, [criterion('launch', 'not found in the driving', null, 'one')], 'no launch read back from the session');
   if (launchIndex < 0) return beatResult(3, 'Floor it', NOT_VERIFIED, [criterion('launch', 'none', false, 'one')], 'it never launched');
   const frames = trace.frames;
   const l = frames[launchIndex];
@@ -198,7 +204,10 @@ function beatFloor(ctx) {
 //    touching the cop, kerb or pavement
 function beatDonuts(ctx) {
   const { trace, donut } = ctx;
-  if (!donut.length) return beatResult(4, 'Donuts round the cop', ctx.launchIndex < 0 && !ctx.injected ? NOT_VERIFIED : INCONCLUSIVE, [criterion('donut frames', '0', ctx.launchIndex < 0 ? false : null, '> 0')], 'no donut frames');
+  if (!donut.length) {
+    const never = ctx.launchIndex < 0 && !ctx.injected && trace.source !== 'session';
+    return beatResult(4, 'Donuts round the cop', never ? NOT_VERIFIED : INCONCLUSIVE, [criterion('donut frames', '0', never ? false : null, '> 0')], 'no donut frames');
+  }
   const cop = trace.cop ?? COP;
   let sweep = 0;
   let last = null;
@@ -216,9 +225,19 @@ function beatDonuts(ctx) {
   const laps = Math.abs(sweep) / (2 * Math.PI) + before;
   // (the donut driver's own counter at the same frame: a run trace logs it)
   const showLaps = swept[swept.length - 1].laps ?? donut[donut.length - 1].laps ?? null;
-  const sliding = donut.filter((f) => Math.abs(f.slip) > T.slidingSlip);
+  // (a session doesn't log the show's phases: its way out is read back from where the car leaves the circle, which on
+  // a run's own recording comes up to ~0.2 laps after the donut driver powers out, so a session needs that much more)
+  const readBack = trace.source === 'session';
+  // The circle and the angle over every frame of the drift (from the slide's start to the way out), gripping ones too:
+  // a donut that grips most of the way round is no donut (Codex round 1: filtering to the sideways frames let 90 %
+  // gripping pass), and its fit must be a circle, not just have a centre and a radius (an ellipse has both)
+  const drifting = donut.filter((f) => f.dp !== 'launch' && f.dp !== 'kick');
+  const sliding = drifting.length >= 3 ? drifting : donut;
   const fit = kasaFit(sliding.map((f) => [f.x, f.z]));
   const offset = fit ? Math.hypot(fit.cx - cop.x, fit.cz - cop.z) : null;
+  const rms = fit ? Math.sqrt(sliding.reduce((s, f) => s + (Math.hypot(f.x - fit.cx, f.z - fit.cz) - fit.r) ** 2, 0) / sliding.length) : null;
+  const out = sliding.map((f) => f.dCop).sort((a, b) => a - b);
+  const near = out[Math.floor(0.1 * (out.length - 1))], far = out[Math.floor(0.9 * (out.length - 1))];
   const slip = median(sliding.map((f) => Math.abs(f.slip)));
   const copHits = donut.filter((f) => (f.copHit ?? 0) > 0 || (trace.source === 'session' && f.copGap !== null && f.copGap < T.sessionCopContact));
   const minGap = Math.min(...donut.map((f) => f.copGap ?? Infinity));
@@ -226,9 +245,11 @@ function beatDonuts(ctx) {
   const buildings = donut.filter((f) => (f.bHit ?? 0) > 0);
   const time = span(donut);
   const criteria = [
-    criterion('laps round the cop', `${fmt(laps, 3)}${before ? ` (incl. ${fmt(before, 2)} before the injection)` : ''}${showLaps === null ? '' : `; the show's own count ${fmt(showLaps, 3)}`}`, laps >= T.donutLaps, `≥ ${T.donutLaps}`),
+    criterion('laps round the cop', `${fmt(laps, 3)}${before ? ` (incl. ${fmt(before, 2)} before the injection)` : ''}${showLaps === null ? '' : `; the show's own count ${fmt(showLaps, 3)}`}${readBack ? ` (way out read back from the driving: up to ${T.sessionLapSlack} too many)` : ''}`, laps >= T.donutLaps + (readBack ? T.sessionLapSlack : 0), `≥ ${T.donutLaps}${readBack ? ` + ${T.sessionLapSlack}` : ''}`),
     criterion('circle centre off the cop', fmt(offset), offset === null ? null : offset <= T.donutCentre, `≤ ${T.donutCentre}`, ' m'),
     criterion('circle radius', fmt(fit?.r), fit ? fit.r >= T.donutRadiusMin && fit.r <= T.donutRadiusMax : null, `${T.donutRadiusMin}-${T.donutRadiusMax}`, ' m'),
+    criterion('off the fitted circle (RMS)', fmt(rms, 2), rms === null ? null : rms <= T.donutFitRms, `≤ ${T.donutFitRms}`, ' m'),
+    criterion('distance from the cop, 10th-90th percentile', `${fmt(near)}-${fmt(far)}`, near >= T.donutNear && far <= T.donutFar, `${T.donutNear}-${T.donutFar}`, ' m'),
     criterion('median drift angle', fmt(slip === null ? null : deg(slip), 0), slip === null ? null : slip >= T.donutSlipMin && slip <= T.donutSlipMax, `${Math.round(deg(T.donutSlipMin))}-${Math.round(deg(T.donutSlipMax))}`, '°'),
     criterion('cop contacts', `${copHits.length} frames (closest ${fmt(minGap, 2)} m)`, copHits.length === 0, '0'),
     criterion('frames on kerb/pavement/plaza', `${off.length}/${donut.length}${off.length ? ` (${offRoadSummary(off)})` : ''}`, off.length === 0, '0'),
@@ -236,7 +257,7 @@ function beatDonuts(ctx) {
     criterion('frames over street furniture (steam stack)', `${donut.filter((f) => f.furniture).length}/${donut.length}`, true, 'measured')
   ];
   // (a session has no building log: that criterion is unknown there, not failed)
-  if (trace.source === 'session') criteria.splice(6, 1);
+  if (trace.source === 'session') criteria.splice(criteria.findIndex((c) => c.name === 'building pushes'), 1);
   const failures = [];
   if (copHits.length) failures.push({ t: copHits[0].t, label: 'touches the cop', beat: 4 });
   if (off.length) failures.push({ t: off[0].t, label: `donut over the ${off[0].foot.find((c) => KERB.has(c))}`, beat: 4 });
@@ -274,14 +295,29 @@ function beatExit(ctx) {
   const offSouth = Math.abs(wrapAngle(at.travel - 0));
   const startSlip = Math.max(...frames.slice(exitIndex).filter((f) => f.t - e.t < 0.5).map((f) => Math.abs(f.slip)));
   const criteria = [
-    criterion('time to 50 mph', reached ? fmt(time, 2) : `not within 10 s (top ${fmt(Math.max(...frames.slice(exitIndex).filter((f) => f.t - e.t <= 10).map((f) => mph(f.g))), 0)} mph)`, reached ? time <= T.exitTime : false, `≤ ${T.exitTime}`, reached ? ' s' : ''),
+    // (a session's way out is read back late, ~1.5 s after the powering out begins: timed from it, the beat would pass
+    // too easily, so a session only shows the number)
+    criterion('time to 50 mph', `${reached ? fmt(time, 2) : `not within 10 s (top ${fmt(Math.max(...frames.slice(exitIndex).filter((f) => f.t - e.t <= 10).map((f) => mph(f.g))), 0)} mph)`}${trace.source === 'session' ? ' from where it left the circle (a session doesn\'t log the powering out)' : ''}`,
+      trace.source === 'session' ? null : reached ? time <= T.exitTime : false, `≤ ${T.exitTime}`, reached ? ' s' : ''),
     criterion('street then', street ? street.name : 'none', !!street && street.name === SEVENTH_AVE && at.where === 'road', `${SEVENTH_AVE}, on the road`),
     criterion('travel off southbound', fmt(deg(offSouth), 0), offSouth <= T.exitOnAvenueHeading, `≤ ${Math.round(deg(T.exitOnAvenueHeading))}`, '°'),
     // (a number shown, not a gate: the car powers out of a slide by construction)
     criterion('drift angle powering out', fmt(deg(startSlip), 0), true, 'measured', '°')
   ];
+  // The way out is the donuts' and the run's both and neither (Codex round 1): its own contacts and kerbs, from the
+  // powering out to the 50 mph moment (or the time limit)
+  const way = frames.slice(exitIndex, frames.indexOf(at) + 1);
+  const wayOff = way.filter((f) => f.off);
+  const session = trace.source === 'session';
+  const hits = way.filter((f) => (f.copHit ?? 0) > 0 || (f.bHit ?? 0) > 0 || (f.tHit ?? 0) > 0);
+  criteria.push(
+    criterion('frames on kerb/pavement/plaza', `${wayOff.length}/${way.length}${wayOff.length ? ` (${offRoadSummary(wayOff)})` : ''}`, wayOff.length === 0, '0'),
+    criterion('contacts (cop, building, traffic)', session ? 'not logged' : `${hits.length} frames`, session ? null : hits.length === 0, '0')
+  );
   const failures = [];
   if (!reached || time > T.exitTime) failures.push({ t: e.t + T.exitTime, label: `${fmt(mph(at.g), 0)} mph ${T.exitTime} s after the way out`, beat: 5 });
+  if (wayOff.length) failures.push({ t: wayOff[0].t, label: `way out over the ${wayOff[0].foot.find((c) => KERB.has(c))}`, beat: 5 });
+  if (hits.length) failures.push({ t: hits[0].t, label: 'contact on the way out', beat: 5 });
   return beatResult(5, 'Drift out onto 7th Ave', verdictOf(criteria), criteria, summaryOf(criteria), { failures, at: { x: e.x, z: e.z, t: e.t } });
 }
 
@@ -412,9 +448,14 @@ function beatRoam(ctx) {
   }
   const reversing = roam.filter((f) => f.rev).reduce((s, f) => s + f.dt, 0);
   const off = ctx.trace.frames[ctx.trace.frames.length - 1].phase === 'off';
+  // (and the roam proper on its own: good driving earlier must not dilute stopping in it, and the beat isn't
+  // VERIFIED until the roam has been seen at all, Codex round 1)
+  const properStopped = ctx.roam.filter((f) => f.g < T.stoppedSpeed).reduce((s, f) => s + f.dt, 0);
   const criteria = [
-    criterion('driving after the donuts', `${fmt(time)} s (past the run, the roam proper: ${fmt(proper)} s)`, true, `≥ ${T.roamMinTime} s`),
-    criterion('stopped', `${fmt((stopped / time) * 100, 0)}% (${fmt(stopped)} s)`, stopped / time < T.stoppedShare, `< ${T.stoppedShare * 100}%`),
+    criterion('driving after the donuts', fmt(time), true, `≥ ${T.roamMinTime}`, ' s'),
+    criterion('the roam proper (past the run\'s last corner)', fmt(proper), proper >= T.roamMinTime ? true : null, `≥ ${T.roamMinTime}`, ' s'),
+    criterion('stopped, all after the donuts', `${fmt((stopped / time) * 100, 0)}% (${fmt(stopped)} s)`, stopped / time < T.stoppedShare, `< ${T.stoppedShare * 100}%`),
+    criterion('stopped, the roam proper', proper > 0 ? `${fmt((properStopped / proper) * 100, 0)}%` : 'no roam', proper > 0 ? properStopped / proper < T.stoppedShare : null, `< ${T.stoppedShare * 100}%`),
     criterion('stuck (10 s inside 5 m)', stuck ? `at t ${fmt(stuck.t)} (${fmt(stuck.x, 0)}, ${fmt(stuck.z, 0)})` : 'never', !stuck, 'never'),
     criterion('the AI still driving at the end', off ? 'no: the show gave the car back' : 'yes', !off, 'yes'),
     criterion('backing out', `${fmt(reversing)} s`, true, 'measured')

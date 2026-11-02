@@ -124,6 +124,11 @@ const BREAKS = [
   { beat: 4, name: 'touches the cop', apply: (tr) => { tr.frames.find((f) => f.dp === 'drift').copHit = 1; } },
   { beat: 4, name: 'circle radius 14 m (over the kerb)', apply: (tr) => scaleRadius(tr, 14 / IDEAL_RADIUS) },
   { beat: 4, name: 'drift angle 15°', apply: (tr) => { for (const f of tr.frames.filter((q) => q.dp === 'drift')) f.slip = -15 * RAD; } },
+  // (Codex round 1's false passes, kept as breaks)
+  { beat: 4, name: 'donut gripping 90 % of the way round', apply: (tr) => { const d = tr.frames.filter((q) => q.dp === 'drift'); d.forEach((f, i) => { if (i % 10) f.slip = 0; }); } },
+  { beat: 4, name: 'an ellipse (5.7 × 10.3 m) round the cop', apply: (tr) => { for (const f of tr.frames.filter((q) => q.phase === 'donuts' && q.dp !== 'powerOut')) { f.x = COP.x + 1 + (f.x - COP.x - 1) * (5.7 / IDEAL_RADIUS); f.z = COP.z + (f.z - COP.z) * (10.3 / IDEAL_RADIUS); } } },
+  { beat: 5, name: 'contacts while powering out', apply: (tr) => { for (const f of tr.frames.filter((q) => q.dp === 'powerOut')) f.bHit = 1; } },
+  { beat: 8, name: 'the run cut before the roam (no roam proper)', expect: 'INCONCLUSIVE', apply: (tr) => { tr.frames = tr.frames.filter((f) => f.t <= 75); } },
   { beat: 5, name: 'slow way out (40% speed)', apply: (tr) => { const e = tr.frames.findIndex((f) => f.dp === 'powerOut'); for (const f of tr.frames.slice(e, e + 300)) f.v *= 0.4, f.vx *= 0.4, f.vz *= 0.4; } },
   { beat: 6, name: 'hits traffic on 7th Ave', apply: (tr) => { const f = tr.frames.find((q) => q.phase === 'escape' && q.v > 25); tr.events.push({ kind: 'contact-traffic', t: f.t, x: f.x, z: f.z, mph: 60, phase: 'escape' }); } },
   { beat: 6, name: '7th Ave at 60 mph', apply: (tr) => { for (const f of tr.frames.filter((q) => q.phase === 'escape' && q.z < streetZ(42) - 20 && q.z > COP.z)) { const k = Math.min(1, 26.8 / Math.max(1, Math.hypot(f.v, f.vx, f.vz))); f.v *= k; f.vx *= k; f.vz *= k; } } },
