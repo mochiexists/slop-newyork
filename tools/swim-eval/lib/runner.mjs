@@ -6,8 +6,9 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
-import { midtownRegion } from './map.mjs';
+import { SwimMap, midtownRegion } from './map.mjs';
 import { clockInit, dumpMap, injectState, installProbe, readTrace } from './page.mjs';
+import { placeLaunch } from './scenarios.mjs';
 import { musaFrameTimes } from './session.mjs';
 
 const require = createRequire(import.meta.url);
@@ -146,8 +147,14 @@ async function runScenario(scenario, { outDir, port, repo, mapDir }) {
     const probe = await page.evaluate(installProbe, probeCfg);
     run.probe = probe;
     const mapFile = join(mapDir, `map-${sha}.json`);
-    await ensureMap(page, mapFile);
+    const dump = await ensureMap(page, mapFile);
     run.mapFile = mapFile;
+    // (an injected launch, placed round this build's cop and radius, off the kerb)
+    const inject = scenario.inject ? placeLaunch(scenario.inject, { cop: probe.cop, radius: probe.radius }, new SwimMap(dump)) : null;
+    if (inject) {
+      run.injectPlaced = inject.placed;
+      log(runDir, `launch placed round the build's cop (${probe.cop.x}, ${probe.cop.z}), ${inject.placed.distance.toFixed(1)} m out${inject.placed.clamped ? `, moved ${inject.placed.clamped} m toward it off the kerb` : ''}${inject.placed.overKerb ? ', STILL over the kerb' : ''}`);
+    }
 
     // The warm-up: into swim mode at the Squeeze start (7th Ave & 47th St), then a drive round Midtown before P, the
     // way musa drives before pressing it: I (the AI drives on from where the car is, through the same keys a player
@@ -207,8 +214,8 @@ async function runScenario(scenario, { outDir, port, repo, mapDir }) {
     }, scenario.seed);
     await page.keyboard.press('KeyP');
     run.pFrame = pAt.frame;
-    if (scenario.inject) {
-      run.injected = await page.evaluate(injectState, scenario.inject);
+    if (inject) {
+      run.injected = await page.evaluate(injectState, inject);
       log(runDir, `injected ${scenario.inject.label}: ${JSON.stringify(run.injected)}`);
     }
     // (the P shot after the first frame of the show has rendered: until then the canvas holds the frame before P)

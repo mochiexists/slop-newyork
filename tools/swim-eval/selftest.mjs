@@ -7,18 +7,22 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { checkTrace } from './lib/check.mjs';
 import { SwimMap } from './lib/map.mjs';
-import { BREAKS, brokenTrace, idealTrace } from './lib/synthetic.mjs';
+import { BREAKS, LAYOUTS, brokenTrace, idealTrace } from './lib/synthetic.mjs';
 
 const FIXTURE_REACH = 40; // m round the synthetic path that the fixture keeps of the map
 
 function selftest(dump) {
   const map = new SwimMap(dump);
   const rows = [];
-  const ideal = checkTrace(idealTrace(), map);
-  const idealPass = ideal.beats.every((b) => b.verdict === 'VERIFIED');
-  rows.push({ name: 'ideal show (no break)', beat: '-', expected: 'all VERIFIED', got: ideal.beats.map((b) => `${b.id}:${b.verdict === 'VERIFIED' ? 'V' : b.verdict}`).join(' '), ok: idealPass, why: '' });
-  for (const brk of BREAKS) {
-    const result = checkTrace(brokenTrace(brk), map);
+  // (each layout of the show: the checker reads the cop and the route from the trace, so both must score alike)
+  for (const layout of Object.keys(LAYOUTS)) {
+    const ideal = checkTrace(idealTrace(layout), map);
+    const idealPass = ideal.beats.every((b) => b.verdict === 'VERIFIED' || b.verdict === 'N/A');
+    rows.push({ name: `ideal show, ${layout} St layout (no break)`, beat: '-', expected: 'all VERIFIED', got: ideal.beats.map((b) => `${b.id}:${b.verdict === 'VERIFIED' ? 'V' : b.verdict}`).join(' '), ok: idealPass, why: ideal.beats.filter((b) => b.verdict !== 'VERIFIED' && b.verdict !== 'N/A').map((b) => `${b.id}: ${b.summary}`).join(' | ') });
+  }
+  const cases = BREAKS.flatMap((brk) => (brk.layouts ?? ['45th']).map((layout) => ({ brk, layout })));
+  for (const { brk, layout } of cases) {
+    const result = checkTrace(brokenTrace(brk, layout), map);
     const beat = result.beats[brk.beat - 1];
     const others = result.beats.filter((b) => b.id !== brk.beat && b.verdict !== 'VERIFIED' && b.verdict !== 'N/A').map((b) => b.id);
     const why = beat.criteria.filter((c) => c.pass === false).map((c) => `${c.name} ${c.value}${c.unit}`).join('; ');
@@ -34,14 +38,14 @@ function selftest(dump) {
       ok &&= !!c && c.pass === want;
       target = ` [${brk.criterion}: ${c ? `${c.value}${c.unit} ${c.pass ? 'passes' : 'fails'}` : 'missing'}, want ${want ? 'pass' : 'fail'}]`;
     }
-    rows.push({ name: brk.name, beat: brk.beat, expected: `${expected}${brk.criterion ? ` on "${brk.criterion}"` : ''}`, got: `${beat.verdict}${target}`, ok, why, others });
+    rows.push({ name: layout === '45th' ? brk.name : `${brk.name} (${layout} St layout)`, beat: brk.beat, expected: `${expected}${brk.criterion ? ` on "${brk.criterion}"` : ''}`, got: `${beat.verdict}${target}`, ok, why, others });
   }
   return { rows, ok: rows.every((r) => r.ok) };
 }
 
 // The map dump cut down to what lies near the synthetic show's path
 function fixture(dump) {
-  const pts = idealTrace().frames.filter((_, i) => i % 30 === 0);
+  const pts = Object.keys(LAYOUTS).flatMap((layout) => idealTrace(layout).frames.filter((_, i) => i % 30 === 0));
   const near = (r) => pts.some((p) => p.x > r.minX - FIXTURE_REACH && p.x < r.maxX + FIXTURE_REACH && p.z > r.minZ - FIXTURE_REACH && p.z < r.maxZ + FIXTURE_REACH);
   const edgeBox = (e) => {
     const x1 = e.x0 + e.dx * e.span, z1 = e.z0 + e.dz * e.span;

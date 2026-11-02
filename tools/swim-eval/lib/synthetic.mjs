@@ -4,14 +4,15 @@
 // and a bit laps round the cop at 8.2 m and 40° (centred 1 m east of it: the circle that stays clear of the kerb there, by
 // the game's map),
 // out down 7th Ave to 75 mph with a split and a close call, drifting the run's corners (42nd St, 8th Ave, 57th St, 9th
-// Ave) and roaming down 9th Ave.
+// Ave) and roaming down 9th Ave. That is the show as it stood to e7f9c83 (the cop at 7th Ave & 45th St); the same show
+// is also laid out the way worker C moves it (2026-11-03: the cop at 7th & 42nd, the run's first turn at 34th St), so
+// the checker is seen judging both by the trace's own cop and route.
 import { avenueX, streetZ } from '../../../js/city-config.js';
 import { COP, wrapAngle } from './geometry.mjs';
 
 const RAD = Math.PI / 180;
 const DT = 1 / 60;
 const IDEAL_RADIUS = 8.2;
-const IDEAL_CENTRE = { x: COP.x + 1, z: COP.z }; // (where a 40° circle clears the kerb all the way round)
 const IDEAL_SLIP = 40 * RAD;
 const CORNER_SLIP = 25 * RAD;
 const CORNER_SLIDE = 18; // m either side of a corner that the car is sideways
@@ -20,8 +21,23 @@ const DRIFTED = 'drifted (one unbroken spell ≥ 15°, ≥ 0.5 s, ≥ 50% of the
 const PATH_STEP = 0.25; // m between the points of the run's path
 // z (m) of 7th Ave's stretch with Times Square's plaza east of it (45th-43rd St, 10-16 m off the avenue's line)
 const PLAZA_EAST_OF_7TH = [-205, -125];
+const WESTBOUND = -3.5; // m off a two-way street's line: its westbound half (swim-show.js)
 
-function frameAt(state, t) {
+// Where the show is staged: the cop, the circle round it, the run's corners after the way out down 7th Ave
+const LAYOUTS = {
+  // (the circle centred 1 m east of the cop: where a 40° circle clears the kerb all the way round)
+  '45th': {
+    cop: COP, centre: { x: COP.x + 1, z: COP.z }, radius: IDEAL_RADIUS,
+    run: [[avenueX('7'), streetZ(42) - 5.5], [avenueX('8'), streetZ(42) + WESTBOUND], [avenueX('8'), streetZ(57) + WESTBOUND], [avenueX('9'), streetZ(57) + WESTBOUND], [avenueX('9'), streetZ(42) + 30]]
+  },
+  // (the seat's donut-fit: a circle of 8-9 m round a cop at 7th & 42nd keeps the whole car on the road)
+  '42nd': {
+    cop: { x: -585.5, z: 1.0 }, centre: { x: -585.5, z: 1.0 }, radius: 8.5,
+    run: [[avenueX('7'), streetZ(34) + WESTBOUND], [avenueX('8'), streetZ(34) + WESTBOUND], [avenueX('8'), streetZ(57) + WESTBOUND], [avenueX('9'), streetZ(57) + WESTBOUND], [avenueX('9'), streetZ(42) + 30]]
+  }
+};
+
+function frameAt(state, t, cop) {
   // The car body turned `slip` off the direction of travel; its velocity over the ground along that direction
   const h = state.travel - state.slip;
   const wx = Math.sin(state.travel) * state.speed, wz = Math.cos(state.travel) * state.speed;
@@ -30,22 +46,24 @@ function frameAt(state, t) {
     f: Math.round(t / DT), t: +t.toFixed(4), dt: DT, wall: null, phase: state.phase, dp: state.dp ?? null, laps: null,
     x: state.x, z: state.z, h, v, vx: wx - Math.sin(h) * v, vz: wz - Math.cos(h) * v, w: 0, st: 0,
     slip: -state.slip, spin: state.spin ?? 0, gear: 2, k: state.keys, thr: state.thr ?? 0, brk: 0, hb: 0,
-    cx: COP.x, cz: COP.z, ch: -Math.PI / 2, cs: state.copState ?? 'parked', tGap: 5, tHit: 0, bHit: 0, copHit: 0,
+    cx: cop.x, cz: cop.z, ch: -Math.PI / 2, cs: state.copState ?? 'parked', tGap: 5, tHit: 0, bHit: 0, copHit: 0,
     seg: 0, rev: 0, queued: 0, cam: 0
   };
 }
 
-function idealTrace() {
+function idealTrace(layoutName = '45th') {
+  const layout = LAYOUTS[layoutName];
+  const { cop, centre, radius } = layout;
   const frames = [];
   const events = [];
   let t = 0;
   const push = (state) => {
     t += DT;
-    frames.push(frameAt(state, t));
+    frames.push(frameAt(state, t, cop));
   };
   // Roll: down 7th Ave's middle lane at 10 mph (4.5 m/s), 4 s, from 30 m short of the cop's line
   const x7 = avenueX('7');
-  let z = COP.z - 34;
+  let z = cop.z - 34;
   for (let i = 0; i < 4 / DT; i++) {
     const speed = Math.min(4.5, 0.5 + i * DT * 3);
     z += speed * DT;
@@ -53,15 +71,15 @@ function idealTrace() {
   }
   events.push({ kind: 'phase', t, from: 'roll', to: 'donuts' });
   // Launch onto the circle (joining it due north of the cop... on the line round), floored: 0.6 s
-  // Donuts: 2.3 laps anticlockwise seen from above at IDEAL_RADIUS, 8 m/s, 40° sideways
-  const startBearing = Math.atan2(x7 - IDEAL_CENTRE.x, z - IDEAL_CENTRE.z);
+  // Donuts: 2.3 laps anticlockwise seen from above at the layout's radius, 8 m/s, 40° sideways
+  const startBearing = Math.atan2(x7 - centre.x, z - centre.z);
   const laps = 2.3;
   const speed = 8;
-  const total = (laps * 2 * Math.PI * IDEAL_RADIUS) / speed;
+  const total = (laps * 2 * Math.PI * radius) / speed;
   for (let i = 0; i < total / DT; i++) {
-    const a = startBearing + (i * DT * speed) / IDEAL_RADIUS;
+    const a = startBearing + (i * DT * speed) / radius;
     const launching = i * DT < 0.6;
-    const x = IDEAL_CENTRE.x + Math.sin(a) * IDEAL_RADIUS, zz = IDEAL_CENTRE.z + Math.cos(a) * IDEAL_RADIUS;
+    const x = centre.x + Math.sin(a) * radius, zz = centre.z + Math.cos(a) * radius;
     const travel = a + Math.PI / 2;
     push({
       phase: 'donuts', dp: launching ? 'launch' : 'drift', x, z: zz, travel, slip: launching ? (i * DT / 0.6) * IDEAL_SLIP : IDEAL_SLIP,
@@ -79,11 +97,8 @@ function idealTrace() {
     v += 9 * DT;
   }
   events.push({ kind: 'phase', t, from: 'donuts', to: 'escape' });
-  const run = [
-    { x: x7, z: streetZ(42) - 5.5 }, { x: avenueX('8'), z: streetZ(42) - 3.5 }, { x: avenueX('8'), z: streetZ(57) - 3.5 },
-    { x: avenueX('9'), z: streetZ(57) - 3.5 }, { x: avenueX('9'), z: streetZ(42) + 30 }
-  ];
-  events.push({ kind: 'path', t, points: [[x, zz], [x7, COP.z + 40], ...run.map((p) => [p.x, p.z])] });
+  const run = layout.run.map(([px, pz]) => ({ x: px, z: pz }));
+  events.push({ kind: 'path', t, points: [[x, zz], [x7, cop.z + 40], ...run.map((p) => [p.x, p.z])] });
   // Along the run's legs, each corner rounded on an arc: up to 75 mph on the straights, 15 m/s through the corners,
   // sideways round them
   const path = roundedPath([{ x: x7, z: zz }, ...run], CORNER_RADIUS);
@@ -106,7 +121,9 @@ function idealTrace() {
       events.push({ kind: 'close', t: t + 0.5, x: p.x, z: p.z + 15, mph: Math.round(v * 2.237), phase });
     }
   }
-  return { source: 'run', label: 'synthetic ideal show', cop: { ...COP }, frames, events, meta: { synthetic: true, lapsBefore: 0 } };
+  // (the show's ESCAPE_ROUTE, as a run's trace carries it: from the cop to where the roam takes over)
+  const route = [{ ...cop }, ...run.slice(0, 4)];
+  return { source: 'run', label: `synthetic ideal show (${layoutName} St layout)`, cop: { ...cop }, route, frames, events, meta: { synthetic: true, lapsBefore: 0, layout: layoutName } };
 }
 
 // A polyline with each corner rounded on an arc of `radius`: points every PATH_STEP m ({ x, z, h, s: m along, leg }),
@@ -154,44 +171,46 @@ function roundedPath(pts, radius) {
   return { points, corners };
 }
 
-// One break per beat: what it changes, and the beat it must fail
+// One break per beat: what it changes, and the beat it must fail; on the 45th St layout, or on both (BOTH) where the
+// break reads nothing but the trace's own cop, route and phases
+const BOTH = Object.keys(LAYOUTS);
 const BREAKS = [
   { beat: 1, name: 'start on the plaza', apply: (tr) => shiftWhere(tr, (f) => f.phase === 'roll', -13, 0) },
-  { beat: 1, name: 'start heading away from the cop', apply: (tr) => { tr.frames[0].h += Math.PI; } },
-  { beat: 2, name: 'roll at 16 mph', apply: (tr) => scaleSpeedWhere(tr, (f) => f.phase === 'roll', 1.6) },
+  { beat: 1, name: 'start heading away from the cop', layouts: BOTH, apply: (tr) => { tr.frames[0].h += Math.PI; } },
+  { beat: 2, name: 'roll at 16 mph', layouts: BOTH, apply: (tr) => scaleSpeedWhere(tr, (f) => f.phase === 'roll', 1.6) },
   { beat: 2, name: 'roll only 1.5 s', apply: (tr) => { const roll = tr.frames.filter((f) => f.phase === 'roll'); for (const f of roll.slice(90)) f.phase = 'off'; tr.frames = tr.frames.filter((f) => f.phase !== 'off'); } },
   { beat: 2, name: 'burnout in the roll', apply: (tr) => { for (const f of tr.frames.filter((q) => q.phase === 'roll').slice(60, 90)) f.spin = 1; } },
   { beat: 3, name: 'launch off the gas', apply: (tr) => { for (const f of tr.frames.filter((q) => q.dp === 'launch')) { f.k = ''; f.thr = 0; f.spin = 0; } } },
-  { beat: 4, name: 'circle 5 m off the cop', apply: (tr) => shiftWhere(tr, (f) => f.phase === 'donuts' && f.dp !== 'powerOut', 5, 0) },
+  { beat: 4, name: 'circle 5 m off the cop', layouts: BOTH, apply: (tr) => shiftWhere(tr, (f) => f.phase === 'donuts' && f.dp !== 'powerOut', 5, 0) },
   { beat: 4, name: 'one lap only', apply: (tr) => { const d = tr.frames.filter((f) => f.phase === 'donuts' && f.dp === 'drift'); for (const f of d.slice(Math.floor(d.length * 0.45))) f.dp = 'cut'; tr.frames = tr.frames.filter((f) => f.dp !== 'cut'); retime(tr); } },
-  { beat: 4, name: 'touches the cop', apply: (tr) => { tr.frames.find((f) => f.dp === 'drift').copHit = 1; } },
+  { beat: 4, name: 'touches the cop', layouts: BOTH, apply: (tr) => { tr.frames.find((f) => f.dp === 'drift').copHit = 1; } },
   { beat: 4, name: 'circle radius 14 m (over the kerb)', apply: (tr) => scaleRadius(tr, 14 / IDEAL_RADIUS) },
-  { beat: 4, name: 'drift angle 15°', apply: (tr) => { for (const f of tr.frames.filter((q) => q.dp === 'drift')) f.slip = -15 * RAD; } },
+  { beat: 4, name: 'drift angle 15°', layouts: BOTH, apply: (tr) => { for (const f of tr.frames.filter((q) => q.dp === 'drift')) f.slip = -15 * RAD; } },
   // (Codex round 1's false passes, kept as breaks)
   { beat: 4, name: 'donut gripping 90 % of the way round', apply: (tr) => { const d = tr.frames.filter((q) => q.dp === 'drift'); d.forEach((f, i) => { if (i % 10) f.slip = 0; }); } },
   { beat: 4, name: 'an ellipse (5.7 × 10.3 m) round the cop', apply: (tr) => { for (const f of tr.frames.filter((q) => q.phase === 'donuts' && q.dp !== 'powerOut')) { f.x = COP.x + 1 + (f.x - COP.x - 1) * (5.7 / IDEAL_RADIUS); f.z = COP.z + (f.z - COP.z) * (10.3 / IDEAL_RADIUS); } } },
-  { beat: 5, name: 'contacts while powering out', apply: (tr) => { for (const f of tr.frames.filter((q) => q.dp === 'powerOut')) f.bHit = 1; } },
+  { beat: 5, name: 'contacts while powering out', layouts: BOTH, apply: (tr) => { for (const f of tr.frames.filter((q) => q.dp === 'powerOut')) f.bHit = 1; } },
   { beat: 8, name: 'the run cut before the roam (no roam proper)', expect: 'INCONCLUSIVE', apply: (tr) => { tr.frames = tr.frames.filter((f) => f.t <= 75); } },
   { beat: 5, name: 'slow way out (40% speed)', apply: (tr) => { const e = tr.frames.findIndex((f) => f.dp === 'powerOut'); for (const f of tr.frames.slice(e, e + 300)) f.v *= 0.4, f.vx *= 0.4, f.vz *= 0.4; } },
-  { beat: 6, name: 'hits traffic on 7th Ave', apply: (tr) => { const f = tr.frames.find((q) => q.phase === 'escape' && q.v > 25); tr.events.push({ kind: 'contact-traffic', t: f.t, x: f.x, z: f.z, mph: 60, phase: 'escape' }); } },
+  { beat: 6, name: 'hits traffic on 7th Ave', layouts: BOTH, apply: (tr) => { const f = tr.frames.find((q) => q.phase === 'escape' && q.v > 25); tr.events.push({ kind: 'contact-traffic', t: f.t, x: f.x, z: f.z, mph: 60, phase: 'escape' }); } },
   // (Codex round 3: a contact the traffic resolves inside the tick shows only as the game's own impact report)
   { beat: 6, name: 'a traffic impact only the game reported', apply: (tr) => { const f = tr.frames.find((q) => q.phase === 'escape' && q.v > 25); tr.events.push({ kind: 'impact-traffic', t: f.t, x: f.x, z: f.z, speed: 3, phase: 'escape' }); } },
   { beat: 6, name: '7th Ave at 60 mph', apply: (tr) => { for (const f of tr.frames.filter((q) => q.phase === 'escape' && q.z < streetZ(42) - 20 && q.z > COP.z)) { const k = Math.min(1, 26.8 / Math.max(1, Math.hypot(f.v, f.vx, f.vz))); f.v *= k; f.vx *= k; f.vz *= k; } } },
-  { beat: 6, name: 'no splits', apply: (tr) => { tr.events = tr.events.filter((e) => e.kind !== 'split'); } },
+  { beat: 6, name: 'no splits', layouts: BOTH, apply: (tr) => { tr.events = tr.events.filter((e) => e.kind !== 'split'); } },
   // (Codex 2026-11-03 #8's false passes, kept as breaks: passes scored off the 7th Ave stretch, a detour off its
   // carriageway at speed, and 70 mph reached for one frame only)
-  { beat: 6, name: 'splits and close calls only on Eighth', criterion: 'splits on 7th Ave', apply: (tr) => movePassesTo(tr, (f) => Math.abs(f.x - avenueX('8')) < 1 && f.z < streetZ(42) - 30 && f.z > streetZ(57) + 30) },
+  { beat: 6, name: 'splits and close calls only on Eighth', layouts: BOTH, criterion: 'splits on 7th Ave', apply: (tr) => movePassesTo(tr, (f) => Math.abs(f.x - avenueX('8')) < 1 && f.z < streetZ(42) - 30 && f.z > streetZ(57) + 30) },
   { beat: 6, name: 'fast straight detours over plaza', criterion: 'frames off 7th Ave or over the kerb on it', apply: (tr) => shiftWhere(tr, (f) => f.phase === 'escape' && Math.abs(f.x - avenueX('7')) < 0.5 && f.z > PLAZA_EAST_OF_7TH[0] && f.z < PLAZA_EAST_OF_7TH[1], 13, 0) },
-  { beat: 6, name: '70 mph touched for one frame on 7th Ave', criterion: 'held ≥ 70 mph unbroken on 7th Ave', apply: (tr) => oneFastFrame(tr, 29, 32.2) },
+  { beat: 6, name: '70 mph touched for one frame on 7th Ave', layouts: BOTH, criterion: 'held ≥ 70 mph unbroken on 7th Ave', apply: (tr) => oneFastFrame(tr, 29, 32.2) },
   { beat: 7, name: 'a corner gripped', apply: (tr) => { for (const f of tr.frames) if (Math.hypot(f.x - avenueX('8'), f.z - (streetZ(42) - 3.5)) < 40) f.slip = 0; } },
   // (Codex 2026-11-03 #9's false pass, and the other ways a corner can be sideways without being drifted)
-  { beat: 7, name: 'all corners grip except one slip-spike frame per corner', criterion: DRIFTED, apply: (tr) => slipNearCorners(tr, (near) => { near.forEach((f) => { f.slip = 0; }); near[Math.floor(near.length / 2)].slip = -CORNER_SLIP; }) },
-  { beat: 7, name: 'every corner sideways only 0.3 s', criterion: DRIFTED, apply: (tr) => slipNearCorners(tr, (near) => { const mid = Math.floor(near.length / 2); near.forEach((f, i) => { f.slip = Math.abs(i - mid) < 0.15 / DT ? -CORNER_SLIP : 0; }); }) },
+  { beat: 7, name: 'all corners grip except one slip-spike frame per corner', layouts: BOTH, criterion: DRIFTED, apply: (tr) => slipNearCorners(tr, (near) => { near.forEach((f) => { f.slip = 0; }); near[Math.floor(near.length / 2)].slip = -CORNER_SLIP; }) },
+  { beat: 7, name: 'every corner sideways only 0.3 s', layouts: BOTH, criterion: DRIFTED, apply: (tr) => slipNearCorners(tr, (near) => { const mid = Math.floor(near.length / 2); near.forEach((f, i) => { f.slip = Math.abs(i - mid) < 0.15 / DT ? -CORNER_SLIP : 0; }); }) },
   { beat: 7, name: 'every corner\'s slide broken every 0.2 s', criterion: DRIFTED, apply: (tr) => slipNearCorners(tr, (near) => { near.forEach((f, i) => { if (Math.floor((i * DT) / 0.2) % 2) f.slip = 0; }); }) },
   { beat: 7, name: 'every corner gripped round, sideways only once out of it', criterion: DRIFTED, apply: (tr) => slipNearCorners(tr, (near, c) => { near.forEach((f) => { const past = (f.x - c[0]) * Math.sin(f.h) + (f.z - c[1]) * Math.cos(f.h); f.slip = past > 12 ? -CORNER_SLIP : 0; }); }) },
   { beat: 7, name: 'the route turns where the car drives straight on', criterion: 'turns completed', apply: (tr) => { const p = tr.events.find((e) => e.kind === 'path'); p.points.splice(2, 0, [avenueX('7'), streetZ(44)], [avenueX('7') + 60, streetZ(44)], [avenueX('7'), streetZ(44) + 1]); } },
   { beat: 7, name: 'a corner cut over the pavement', apply: (tr) => shiftWhere(tr, (f) => Math.hypot(f.x - avenueX('8'), f.z - (streetZ(57) - 3.5)) < 25, 11, 11) },
-  { beat: 8, name: 'roam stuck 15 s', apply: (tr) => stall(tr, 15) }
+  { beat: 8, name: 'roam stuck 15 s', layouts: BOTH, apply: (tr) => stall(tr, 15) }
 ];
 
 function shiftWhere(tr, test, dx, dz) {
@@ -219,7 +238,7 @@ function movePassesTo(tr, test) {
 
 // The 7th Ave stretch held under `cap` m/s but for one frame at `peak` m/s
 function oneFastFrame(tr, cap, peak) {
-  const stretch = tr.frames.filter((f) => f.phase === 'escape' && Math.abs(f.x - avenueX('7')) < 0.5 && f.z < streetZ(42) - 25);
+  const stretch = tr.frames.filter((f) => f.phase === 'escape' && Math.abs(f.x - avenueX('7')) < 0.5 && f.z < tr.route[1].z - 25);
   const scaleTo = (f, mps) => {
     const k = mps / Math.max(1e-6, Math.hypot(Math.sin(f.h) * f.v + f.vx, Math.cos(f.h) * f.v + f.vz));
     f.v *= k; f.vx *= k; f.vz *= k;
@@ -259,11 +278,11 @@ function stall(tr, seconds) {
 }
 
 // The ideal trace with one break applied (a fresh copy each time)
-function brokenTrace(brk) {
-  const tr = idealTrace();
+function brokenTrace(brk, layout = '45th') {
+  const tr = idealTrace(layout);
   brk.apply(tr);
-  tr.label = `synthetic: ${brk.name}`;
+  tr.label = `synthetic (${layout} St layout): ${brk.name}`;
   return tr;
 }
 
-export { BREAKS, IDEAL_RADIUS, brokenTrace, idealTrace, wrapAngle };
+export { BREAKS, IDEAL_RADIUS, LAYOUTS, brokenTrace, idealTrace, wrapAngle };
