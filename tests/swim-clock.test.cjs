@@ -15,7 +15,9 @@ test.before(async () => {
   const roam = await import('../js/swim-roam.js');
   const carriageway = await import('../js/swim-carriageway.js');
   physics = loadModule(read('js/drift-physics.js'));
-  const autopilot = loadModule(read('js/drift-autopilot.js'), { imports: { './drift-physics.js': physics } });
+  const autopilot = loadModule(read('js/drift-autopilot.js'), {
+    imports: { './drift-physics.js': physics, './drift-corner.js': loadModule(read('js/drift-corner.js')) }
+  });
   swimCar = loadModule(read('js/swim-car.js'), {
     imports: {
       'three/webgpu': {}, 'three/tsl': {}, './city-config.js': config, './drift-physics.js': physics, './tsl-materials.js': {},

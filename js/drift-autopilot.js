@@ -1,4 +1,5 @@
-import { M5_DRIFT, fullDriveForce } from './drift-physics.js';
+import { M5_DRIFT, fullDriveForce, stepDriftCar } from './drift-physics.js';
+import { CornerDriver, fitCorner, sizeCorner } from './drift-corner.js';
 
 // The AI driver for swimming: it presses the player's keys (W, S, A, D, the handbrake), one frame at a time, through
 // the car's own KeyboardDriver, to follow a route along the streets as fast as the corners allow, handbrake-flick into
@@ -50,6 +51,8 @@ const AUTOPILOT = {
   // over-rotated and drove on 20-30 m into the block beyond, 33 samples off the roadway in 220 s; at 50° 16, at 70° 2)
   // (and still lifts as the slide swings past that: holding the gas there gained 0.04 s back to speed in the sims and
   // ran a drift into 57th St wide into a storefront in the browser)
+  cornerDrive: {}, // with a road: the look-ahead that drives the slide round the fitted corner (drift-corner.js
+  // CORNER_DRIVE), options over its own
   releaseAngle: 14 * RAD, // coming out, the counter-steer is let go below this angle
   exitLead: 0.3, // s ahead it reads the turn still to go from the car's yaw rate
   exitSlip: 6 * RAD, // drift angle below which the corner is done (swimSlip: the swimming then keeps W down),
@@ -100,6 +103,8 @@ const AUTOPILOT = {
   moveCost: 1.2, // score (m of ground) per metre moved across: it doesn't swerve for nothing
   lineUpDistance: 150, // m before a drifted corner where it lines up on its entry line: before it brakes (moving across
   // with the brake key down steps the tail out) and turns in (still moving across then, the slide runs wide),
+  lineUpTime: 6, // ...or this many seconds of its speed before it, if more (at 80 mph, 150 m left a move across two
+  // lanes still going as it braked: it ran on 5 m past its line, over 8th Ave's curb into 57th St)
   lineUpCost: 40, // score per metre off that line: whenever a plan there is safe, it takes it
   entryMargin: 1.5, // m in from the street's outside edge that it lines up on for a drifted corner (the widest arc)
   holds: [0, 0.4], // s it tries holding its line before a move across: at once, or a late flick
@@ -411,6 +416,10 @@ class DriftAutopilot {
   // √(turnGrip × R) round it (18-20 m/s: research swimming-craft.md §2), and it turns in where the arc starts, R short
   // of the next street's outside line. A two-way street's outside past its centre line is the oncoming half: it uses no
   // more of it than centreAllowance.
+  // With a road to fit it to (options.road: swim-carriageway.js), the corner is a path (drift-corner.js fitCorner): those
+  // same outside lines and arc, narrowed until the car's whole body, turned as the slide turns it, stays on the road
+  // with a reserve round it the whole way (an arc touching the corridor's inside edge put a 40° slide's tail 1 m over the
+  // curb, Codex 2026-11-03 #4). The slide then holds to it (decide).
   shapeCorner(turn) {
     const o = this.options;
     const band = this.corridor(), next = this.corridor(this.segment + 1);
@@ -422,10 +431,50 @@ class DriftAutopilot {
     const exitLine = right ? leftEdge(next) - o.entryMargin : next.right + o.entryMargin;
     const b = Math.max(1, right ? exitLine - next.right : next.left - exitLine);
     const beyond = right ? exitLine : -exitLine;
+    if (o.road) {
+      // (a right turn into a two-way street comes out on its own half: its outside is the oncoming one, and the queue the
+      // show holds short of the corner stands there, 26 m out: fresh-s1 stopped nose to nose with it and backed out
+      // six times)
+      const twoWay = next.centre !== null && next.centre !== undefined;
+      const ownHalf = right && twoWay ? Math.min(exitLine, next.centre - o.carHalfWidth - o.passMargin) : exitLine;
+      const fitted = this.fittedCorner(ownHalf, right ? band.right : band.left, right ? next.right : next.left);
+      // (no wider than the speed it takes the corner at allows: cornerSpeed caps it)
+      this.cornerV = Math.min(o.cornerSpeed, Math.sqrt(o.turnGrip * fitted.radius));
+      this.sizeCornerPath(this.cornerV);
+      return;
+    }
+    this.cornerPath = this.cornerFit = null;
     const radius = clamp(a + b + Math.sqrt(2 * a * b), o.minRadius, o.maxRadius);
     this.cornerRadius = radius;
     this.cornerV = Math.min(o.cornerSpeed, Math.sqrt(o.turnGrip * radius));
     this.turnInAt = Math.max(o.minTurnIn, radius - beyond);
+  }
+
+  // The corner at the end of this leg fitted to the road (once per corner: drift-corner.js fitCorner), from the outside
+  // lines shapeCorner gives and the corridors' inside edges
+  fittedCorner(exitLine, entryInside, exitInside) {
+    const vertex = this.path[this.segment + 1];
+    const key = `${this.segment}:${vertex.x}:${vertex.z}`;
+    if (this.cornerKey === key && this.cornerFit) return this.cornerFit;
+    const s = this.seg(this.segment), next = this.seg(this.segment + 1);
+    this.cornerKey = key;
+    this.cornerFit = fitCorner({ vertex, ux: s.ux, uz: s.uz, vx: next.ux, vz: next.uz },
+      { entry: this.entryLine, exit: exitLine, entryInside, exitInside }, this.options.road, this.options.cornerFit);
+    this.cornerPath = null;
+    return this.cornerFit;
+  }
+
+  // The fitted corner's arc for a slide at `speed` (drift-corner.js sizeCorner), and the entry line and turn-in it sets
+  sizeCornerPath(speed) {
+    const o = this.options;
+    const radius = speed * speed / o.turnGrip;
+    if (!this.cornerPath || Math.abs(this.cornerPath.sizedFor - radius) > 1) {
+      this.cornerPath = sizeCorner(this.cornerFit, radius, o.road, o.cornerFit);
+      this.cornerPath.sizedFor = radius;
+    }
+    this.entryLine = this.cornerPath.entryLine;
+    this.cornerRadius = this.cornerPath.radius;
+    this.turnInAt = Math.max(o.minTurnIn, this.cornerPath.turnIn);
   }
 
   // Swimming: a look a few seconds ahead. Every car nearby is run forward at its own velocity (along the street and
@@ -984,7 +1033,7 @@ class DriftAutopilot {
     // A driver decides a few times a second, not every frame: between decisions it flies the last plan
     // It lines up on the outside of the turn, entryMargin in from the street's edge: the widest arc the streets allow
     if (sharp && !this.cornering) this.shapeCorner(turn);
-    this.lineUp = sharp && toCorner < o.lineUpDistance;
+    this.lineUp = sharp && toCorner < Math.max(o.lineUpDistance, Math.abs(u) * o.lineUpTime);
     this.cornerAhead = sharp ? toCorner : Infinity; // m to the drifted corner ahead, which caps the plans' speed
     this.sincePlan = (this.sincePlan ?? Infinity) + dt;
     this.clock += dt;
@@ -1056,6 +1105,12 @@ class DriftAutopilot {
       this.cornerExit = Math.atan2(next.ux, next.uz);
       this.turningIn = true;
       this.cornering = true;
+      // (a new corner's slide starts with no choice carried over from the last, on the arc the speed it has now takes:
+      // slowed by traffic on the way in, a tighter one)
+      if (this.cornerDriver) this.cornerDriver.choice = null;
+      if (this.cornerFit && o.road) this.sizeCornerPath(Math.min(this.cornerV, Math.max(1, u)));
+      // (the look-ahead flicks it itself: no scripted wind-on and kick)
+      if (this.cornerPath && o.road && driver && (o.cornerDrive?.fromTurnIn ?? true)) this.turningIn = false;
     }
     // (wound on into the turn: still turned the other way from lining up, the wheel hasn't got there)
     if (this.turningIn && driver.steer * this.cornerTurn >= o.kickSteer) {
@@ -1128,12 +1183,22 @@ class DriftAutopilot {
       // (coming out, the counter-steer is let go before the slide ends: held as the gas comes back on, the keyboard
       // driver reads it as a manji, a slide the other way)
       if (toGo < o.exitTurn && ahead < o.releaseAngle && input.steer * into < 0) input.steer = 0;
+      // A corner fitted to the road is driven round its path by the look-ahead (drift-corner.js CornerDriver): the
+      // wheel, W and the handbrake that keep the car on it, its body on the road and the slide alive
+      if (this.cornerPath && o.road && driver) {
+        this.cornerDriver ??= new CornerDriver({ stepDriftCar, steeringKey, Hands }, o.road, o.cornerDrive);
+        this.cornerChoice = this.cornerDriver.update(car, dt, driver, this.hands, this.cornerPath, cornerSpeed);
+        input.steer = this.cornerChoice.wheel;
+        input.handbrake = this.cornerChoice.handbrake;
+        input.brake = this.cornerChoice.brake;
+      }
     }
 
     // The corner is done once the car is travelling along the new street and the slide has all but ended
     if (this.cornering && !kicking && slipAbs < o.exitSlip && toGo < o.exitAlign) {
       this.cornering = false;
     }
+    if (!this.cornering || kicking) this.cornerChoice = null;
     if (this.turningIn) {
       // Winding the lock on: still braking for the corner (trail braking), off the gas
       input.throttle = 0;
@@ -1142,6 +1207,9 @@ class DriftAutopilot {
       // The flick: off the gas (W down with the handbrake spins the rears up for its release and over-rotates the car)
       input.throttle = 0;
       input.brake = 0;
+    } else if (this.cornerChoice) {
+      input.brake = this.cornerChoice.brake;
+      input.throttle = this.cornerChoice.forward;
     } else if (this.cornering) {
       // Hold the slide on the gas (the keyboard driver works the throttle for the angle while W is held), and lift
       // when the tail swings well past the angle it wants (the rears bite and stop the swing) or the slide picks up
