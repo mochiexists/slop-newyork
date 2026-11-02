@@ -53,7 +53,17 @@ const T = {
   cornerTurn: 45 * RAD, // 7: a route corner this sharp is a drift corner
   cornerReach: 25, // m: the car passing within this of a corner has driven it
   cornerWindow: 30, // m round the corner whose frames are the corner's
-  cornerSlip: 15 * RAD, // 7: a corner is drifted if the drift angle reaches this in it
+  cornerSlip: 15 * RAD, // 7: the drift angle that is sideways...
+  // ...and a corner is drifted only if the turn completes (cornerExitAlign) and one unbroken spell that sideways lasts
+  // cornerDriftTime and covers cornerDriftShare of the distance the car's travel turns over (2026-11-03, Codex #9: one
+  // 16.7 ms slip spike made a gripped corner "drifted"). Calibrated on musa's own driving: REPORT.md, fixes/harness.
+  cornerDriftTime: 0.5, // s
+  cornerDriftShare: 0.5,
+  cornerTurnFrom: 0.1, // the turning distance: from where the travel has turned this share of the corner's turn...
+  cornerTurnTo: 0.9, // ...to where it has turned this share
+  cornerExitAlign: 45 * RAD, // 7: leaving the corner's window travelling this close to the way out, and...
+  cornerExitPast: 15, // ...this many m down the way out from the corner: the turn completed
+  turnMinSpeed: 2, // m/s: slower, the direction of travel is too noisy to read a turn from
   roamMinTime: 30, // 8: s of roam needed to judge it
   stoppedSpeed: 1, // 8: m/s under which the car is stopped
   stoppedShare: 0.1, // 8: share of the roam stopped at most
@@ -477,12 +487,17 @@ function cornersOf(ctx) {
       const [ax, az] = pts[i - 1], [bx, bz] = pts[i], [cx, cz] = pts[i + 1];
       const turn = wrapAngle(Math.atan2(cx - bx, cz - bz) - Math.atan2(bx - ax, bz - az));
       const key = `${Math.round(bx)},${Math.round(bz)}`;
-      if (Math.abs(turn) >= T.cornerTurn && !seen.has(key)) seen.set(key, { x: bx, z: bz, turn });
+      const inH = Math.atan2(bx - ax, bz - az), outH = Math.atan2(cx - bx, cz - bz);
+      if (Math.abs(turn) >= T.cornerTurn && !seen.has(key)) seen.set(key, { x: bx, z: bz, turn, inH, outH });
     }
   }
   if (seen.size || trace.source !== 'session') return [...seen.values()];
-  // A session: turns of the travel heading over 60 m of road
-  const frames = ctx.run.concat(ctx.roam);
+  return turnsOf(ctx.run.concat(ctx.roam));
+}
+
+// Turns read off the car's direction of travel over 60 m of road (a session, which has no route): where each is, and
+// the headings in and out
+function turnsOf(frames) {
   const corners = [];
   let i = 0;
   while (i < frames.length) {
@@ -494,13 +509,68 @@ function cornersOf(ctx) {
     const turn = wrapAngle(frames[j].travel - frames[i].travel);
     if (Math.abs(turn) >= 60 * RAD && frames[i].g > 5) {
       const mid = frames[Math.floor((i + j) / 2)];
-      corners.push({ x: mid.x, z: mid.z, turn });
+      corners.push({ x: mid.x, z: mid.z, turn, inH: frames[i].travel, outH: frames[j].travel });
       i = j;
     } else {
       i++;
     }
   }
   return corners;
+}
+
+// The car's first pass through corner c: the frames from coming within cornerWindow of it to leaving, if it got
+// within cornerReach; `left` false when the frames end inside the window (the trace ended mid-corner)
+function cornerPass(frames, c) {
+  const d = (f) => Math.hypot(f.x - c.x, f.z - c.z);
+  const closest = frames.findIndex((f) => d(f) < T.cornerReach);
+  if (closest < 0) return null;
+  let a = closest, b = closest;
+  while (a > 0 && d(frames[a - 1]) < T.cornerWindow) a--;
+  while (b < frames.length - 1 && d(frames[b + 1]) < T.cornerWindow) b++;
+  return { frames: frames.slice(a, b + 1), left: b < frames.length - 1 };
+}
+
+// How a pass drives corner c (headings inH → outH): whether the turn completed, the distance the car's travel turned
+// over (cornerTurnFrom to cornerTurnTo of the corner's turn), and the unbroken spell at ≥ cornerSlip that covers most
+// of it: its s and the share of the turning distance it covers. Exported for the calibration on player sessions.
+function cornerDrift(pass, c) {
+  const frames = pass.frames;
+  const turn = wrapAngle(c.outH - c.inH);
+  // (the share of the corner's turn the travel has made, held over frames too slow to read it from)
+  let progress = 0;
+  const shares = frames.map((f) => {
+    if (f.g >= T.turnMinSpeed) progress = wrapAngle(f.travel - c.inH) / turn;
+    return progress;
+  });
+  const from = shares.findIndex((s) => s >= T.cornerTurnFrom);
+  const to = shares.findIndex((s) => s >= T.cornerTurnTo);
+  const last = frames[frames.length - 1];
+  const past = (last.x - c.x) * Math.sin(c.outH) + (last.z - c.z) * Math.cos(c.outH);
+  const completed = pass.left && to >= 0 && past >= T.cornerExitPast && Math.abs(wrapAngle(last.travel - c.outH)) <= T.cornerExitAlign;
+  // The turning stretch and its length
+  const stepLength = (i) => (i > 0 ? Math.hypot(frames[i].x - frames[i - 1].x, frames[i].z - frames[i - 1].z) : 0);
+  const turning = from >= 0 && to >= from ? [from, to] : null;
+  let turnLength = 0;
+  if (turning) for (let i = turning[0] + 1; i <= turning[1]; i++) turnLength += stepLength(i);
+  // Every unbroken sideways spell: its time and how much of the turning stretch it covers
+  let best = { time: 0, covered: 0, peak: 0 };
+  let spell = null;
+  const close = () => {
+    if (spell && (spell.covered > best.covered || (spell.covered === best.covered && spell.time > best.time))) best = spell;
+    spell = null;
+  };
+  frames.forEach((f, i) => {
+    if (Math.abs(f.slip) < T.cornerSlip) return close();
+    spell ??= { time: 0, covered: 0, peak: 0, t: f.t };
+    spell.time += f.dt;
+    spell.peak = Math.max(spell.peak, Math.abs(f.slip));
+    if (turning && i > turning[0] && i <= turning[1] && Math.abs(frames[i - 1].slip) >= T.cornerSlip) spell.covered += stepLength(i);
+  });
+  close();
+  const share = turnLength > 0 ? best.covered / turnLength : 0;
+  const peak = Math.max(...frames.map((f) => Math.abs(f.slip)));
+  const drifted = completed && best.time >= T.cornerDriftTime && share >= T.cornerDriftShare;
+  return { completed, turnLength, spell: best.time, share, peak, drifted, spellAt: best.t ?? frames[0].t };
 }
 
 // 7. Corners drifted, on the road
@@ -510,28 +580,44 @@ function beatCorners(ctx) {
   if (!frames.length) return beatResult(7, 'Corners drifted, on the road', INCONCLUSIVE, [criterion('run frames', '0', null, '> 0')], 'not reached');
   const corners = cornersOf(ctx);
   const driven = [];
+  let unfinished = 0;
   for (const c of corners) {
-    const near = frames.filter((f) => Math.hypot(f.x - c.x, f.z - c.z) < T.cornerWindow);
-    if (!near.length || Math.min(...near.map((f) => Math.hypot(f.x - c.x, f.z - c.z))) > T.cornerReach) continue;
-    const slip = Math.max(...near.map((f) => Math.abs(f.slip)));
+    const pass = cornerPass(frames, c);
+    if (!pass) continue;
+    // (the trace ending inside the corner's window: not driven yet, so not judged)
+    if (!pass.left) {
+      unfinished++;
+      continue;
+    }
+    const near = pass.frames;
+    const drift = cornerDrift(pass, c);
     const off = near.filter((f) => f.off);
     const hits = near.filter((f) => (f.bHit ?? 0) > 0);
     const touches = trafficContacts(trace, near[0].t, near[near.length - 1].t).filter((e) => Math.hypot(e.x - c.x, e.z - c.z) < T.cornerWindow);
-    driven.push({ ...c, slip, off: off.length, frames: near.length, hits: hits.length + touches.length, t: near[0].t, offWhat: offRoadSummary(off), firstOff: off[0]?.t });
+    driven.push({ ...c, ...drift, slip: drift.peak, off: off.length, frames: near.length, hits: hits.length + touches.length, t: near[0].t, offWhat: offRoadSummary(off), firstOff: off[0]?.t });
   }
-  if (!driven.length) return beatResult(7, 'Corners drifted, on the road', INCONCLUSIVE, [criterion('corners driven', '0', null, '≥ 1')], 'no corner reached');
-  const undrifted = driven.filter((c) => c.slip < T.cornerSlip);
+  if (!driven.length) return beatResult(7, 'Corners drifted, on the road', INCONCLUSIVE, [criterion('corners driven', unfinished ? `0 (${unfinished} the trace ends in)` : '0', null, '≥ 1')], 'no corner driven');
+  const incomplete = driven.filter((c) => !c.completed);
+  const undrifted = driven.filter((c) => !c.drifted);
   const offRoad = driven.filter((c) => c.off > 0);
   const hit = driven.filter((c) => c.hits > 0);
+  const shortest = driven.reduce((m, c) => (c.spell < m.spell ? c : m), driven[0]);
+  const thinnest = driven.reduce((m, c) => (c.share < m.share ? c : m), driven[0]);
   const criteria = [
-    criterion('corners driven', String(driven.length), true, '≥ 1'),
-    criterion('drifted (≥ 15°)', `${driven.length - undrifted.length}/${driven.length}`, undrifted.length === 0, 'all'),
+    criterion('corners driven', `${driven.length}${unfinished ? ` (and ${unfinished} the trace ends in)` : ''}`, true, '≥ 1'),
+    criterion('turns completed', `${driven.length - incomplete.length}/${driven.length}`, incomplete.length === 0, 'all'),
+    criterion(`drifted (one unbroken spell ≥ ${Math.round(deg(T.cornerSlip))}°, ≥ ${T.cornerDriftTime} s, ≥ ${T.cornerDriftShare * 100}% of the turn)`,
+      `${driven.length - undrifted.length}/${driven.length} (shortest spell ${fmt(shortest.spell, 2)} s; least of the turn ${fmt(thinnest.share * 100, 0)}%)`, undrifted.length === 0, 'all'),
     criterion('on the road throughout', `${driven.length - offRoad.length}/${driven.length}${offRoad.length ? ` (${offRoad.map((c) => c.offWhat).join('; ')})` : ''}`, offRoad.length === 0, 'all'),
     criterion('without contacts', trace.source === 'session' ? 'not logged' : `${driven.length - hit.length}/${driven.length}`, trace.source === 'session' ? null : hit.length === 0, 'all')
   ];
   const failures = [];
-  for (const c of offRoad.slice(0, 4)) failures.push({ t: c.firstOff, label: `corner (${fmt(c.x, 0)}, ${fmt(c.z, 0)}) over the ${c.offWhat.split(' ')[0]}`, beat: 7 });
-  for (const c of undrifted.slice(0, 3)) failures.push({ t: c.t, label: `corner (${fmt(c.x, 0)}, ${fmt(c.z, 0)}) gripped (${fmt(deg(c.slip), 0)}°)`, beat: 7 });
+  const at = (c) => `corner (${fmt(c.x, 0)}, ${fmt(c.z, 0)})`;
+  for (const c of offRoad.slice(0, 4)) failures.push({ t: c.firstOff, label: `${at(c)} over the ${c.offWhat.split(' ')[0]}`, beat: 7 });
+  for (const c of undrifted.slice(0, 3)) {
+    const how = c.completed ? `gripped (spell ${fmt(c.spell, 2)} s, ${fmt(c.share * 100, 0)}% of the turn, peak ${fmt(deg(c.peak), 0)}°)` : 'turn not completed';
+    failures.push({ t: c.spellAt, label: `${at(c)} ${how}`, beat: 7 });
+  }
   return beatResult(7, 'Corners drifted, on the road', verdictOf(criteria), criteria, summaryOf(criteria), { failures, corners: driven });
 }
 
@@ -635,4 +721,4 @@ function beatOfFrame(f, result) {
   return 0;
 }
 
-export { INCONCLUSIVE, NA, NOT_VERIFIED, T as THRESHOLDS, VERIFIED, beatOfFrame, checkTrace };
+export { INCONCLUSIVE, NA, NOT_VERIFIED, T as THRESHOLDS, VERIFIED, annotate, beatOfFrame, checkTrace, cornerDrift, cornerPass, turnsOf };

@@ -15,6 +15,9 @@ const IDEAL_CENTRE = { x: COP.x + 1, z: COP.z }; // (where a 40° circle clears 
 const IDEAL_SLIP = 40 * RAD;
 const CORNER_SLIP = 25 * RAD;
 const CORNER_SLIDE = 18; // m either side of a corner that the car is sideways
+const CORNER_RADIUS = 10; // m, the arc each corner of the run is driven on
+const DRIFTED = 'drifted (one unbroken spell ≥ 15°, ≥ 0.5 s, ≥ 50% of the turn)'; // beat 7's criterion
+const PATH_STEP = 0.25; // m between the points of the run's path
 // z (m) of 7th Ave's stretch with Times Square's plaza east of it (45th-43rd St, 10-16 m off the avenue's line)
 const PLAZA_EAST_OF_7TH = [-205, -125];
 
@@ -81,36 +84,74 @@ function idealTrace() {
     { x: avenueX('9'), z: streetZ(57) - 3.5 }, { x: avenueX('9'), z: streetZ(42) + 30 }
   ];
   events.push({ kind: 'path', t, points: [[x, zz], [x7, COP.z + 40], ...run.map((p) => [p.x, p.z])] });
-  // Along the run's legs: up to 75 mph on the straights, 15 m/s through the corners, sideways round them
-  let from = { x: x7, z: zz };
+  // Along the run's legs, each corner rounded on an arc: up to 75 mph on the straights, 15 m/s through the corners,
+  // sideways round them
+  const path = roundedPath([{ x: x7, z: zz }, ...run], CORNER_RADIUS);
+  const end = path.points[path.points.length - 1].s;
   let phase = 'escape';
   let splitDone = false;
-  for (let leg = 0; leg < run.length; leg++) {
-    const to = run[leg];
-    const length = Math.hypot(to.x - from.x, to.z - from.z);
-    const travel = Math.atan2(to.x - from.x, to.z - from.z);
-    for (let s = 0; s < length;) {
-      const toCorner = length - s;
-      const cornerAhead = leg < run.length - 1;
-      const cap = cornerAhead ? Math.min(33.5, 15 + toCorner * 0.6) : 20;
-      v = Math.min(cap, v + 9 * DT);
-      if (v > cap) v = cap;
-      s += v * DT;
-      const k = Math.min(1, s / length);
-      const px = from.x + (to.x - from.x) * k, pz = from.z + (to.z - from.z) * k;
-      const sinceCorner = s, untilCorner = length - s;
-      const sideways = (leg > 0 && sinceCorner < CORNER_SLIDE) || (cornerAhead && untilCorner < CORNER_SLIDE);
-      if (leg >= 4) phase = 'swim';
-      push({ phase, x: px, z: pz, travel, slip: sideways ? CORNER_SLIP : 0, speed: v, keys: 'W', thr: 1, copState: 'chasing' });
-      if (!splitDone && leg === 0 && v > 30) {
-        splitDone = true;
-        events.push({ kind: 'split', t, x: px, z: pz, mph: Math.round(v * 2.237), phase });
-        events.push({ kind: 'close', t: t + 0.5, x: px, z: pz + 15, mph: Math.round(v * 2.237), phase });
-      }
+  for (let s = 0, i = 0; s < end;) {
+    const next = path.corners.find((c) => c > s);
+    const cap = next === undefined ? 20 : Math.min(33.5, 15 + Math.max(0, next - s - CORNER_RADIUS) * 0.6);
+    v = Math.min(cap, v + 9 * DT);
+    s += v * DT;
+    while (i < path.points.length - 2 && path.points[i + 1].s < s) i++;
+    const p = path.points[i];
+    const nearest = Math.min(...path.corners.map((c) => Math.abs(c - s)));
+    if (p.leg >= 4) phase = 'swim';
+    push({ phase, x: p.x, z: p.z, travel: p.h, slip: nearest < CORNER_SLIDE ? CORNER_SLIP : 0, speed: v, keys: 'W', thr: 1, copState: 'chasing' });
+    if (!splitDone && p.leg === 0 && v > 30) {
+      splitDone = true;
+      events.push({ kind: 'split', t, x: p.x, z: p.z, mph: Math.round(v * 2.237), phase });
+      events.push({ kind: 'close', t: t + 0.5, x: p.x, z: p.z + 15, mph: Math.round(v * 2.237), phase });
     }
-    from = to;
   }
   return { source: 'run', label: 'synthetic ideal show', cop: { ...COP }, frames, events, meta: { synthetic: true, lapsBefore: 0 } };
+}
+
+// A polyline with each corner rounded on an arc of `radius`: points every PATH_STEP m ({ x, z, h, s: m along, leg }),
+// and the m along it of each arc's middle
+function roundedPath(pts, radius) {
+  const points = [];
+  const corners = [];
+  let s = 0;
+  const add = (x, z, h, leg) => {
+    const last = points[points.length - 1];
+    if (last) s += Math.hypot(x - last.x, z - last.z);
+    points.push({ x, z, h, s, leg });
+  };
+  const line = (a, b, leg) => {
+    const h = Math.atan2(b.x - a.x, b.z - a.z);
+    const n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / PATH_STEP));
+    for (let k = 0; k < n; k++) add(a.x + ((b.x - a.x) * k) / n, a.z + ((b.z - a.z) * k) / n, h, leg);
+  };
+  let from = pts[0];
+  for (let i = 1; i < pts.length; i++) {
+    const b = pts[i];
+    const hIn = Math.atan2(b.x - from.x, b.z - from.z);
+    if (i === pts.length - 1) {
+      line(from, b, i - 1);
+      add(b.x, b.z, hIn, i - 1);
+      break;
+    }
+    const c = pts[i + 1];
+    const hOut = Math.atan2(c.x - b.x, c.z - b.z);
+    const turn = wrapAngle(hOut - hIn);
+    const cut = radius * Math.tan(Math.abs(turn) / 2); // m from the corner to where the arc meets each leg
+    const enter = { x: b.x - Math.sin(hIn) * cut, z: b.z - Math.cos(hIn) * cut };
+    line(from, enter, i - 1);
+    // the arc's centre: to the side the road turns to (+ turn is to the left, heading atan2(x, z))
+    const side = Math.sign(turn);
+    const cx = enter.x + Math.cos(hIn) * radius * side, cz = enter.z - Math.sin(hIn) * radius * side;
+    const n = Math.max(2, Math.ceil((radius * Math.abs(turn)) / PATH_STEP));
+    for (let k = 0; k < n; k++) {
+      const h = hIn + (turn * k) / n;
+      add(cx - Math.cos(h) * radius * side, cz + Math.sin(h) * radius * side, h, k < n / 2 ? i - 1 : i);
+      if (k === Math.floor(n / 2)) corners.push(s);
+    }
+    from = { x: b.x + Math.sin(hOut) * cut, z: b.z + Math.cos(hOut) * cut };
+  }
+  return { points, corners };
 }
 
 // One break per beat: what it changes, and the beat it must fail
@@ -143,12 +184,27 @@ const BREAKS = [
   { beat: 6, name: 'fast straight detours over plaza', criterion: 'frames off 7th Ave or over the kerb on it', apply: (tr) => shiftWhere(tr, (f) => f.phase === 'escape' && Math.abs(f.x - avenueX('7')) < 0.5 && f.z > PLAZA_EAST_OF_7TH[0] && f.z < PLAZA_EAST_OF_7TH[1], 13, 0) },
   { beat: 6, name: '70 mph touched for one frame on 7th Ave', criterion: 'held ≥ 70 mph unbroken on 7th Ave', apply: (tr) => oneFastFrame(tr, 29, 32.2) },
   { beat: 7, name: 'a corner gripped', apply: (tr) => { for (const f of tr.frames) if (Math.hypot(f.x - avenueX('8'), f.z - (streetZ(42) - 3.5)) < 40) f.slip = 0; } },
+  // (Codex 2026-11-03 #9's false pass, and the other ways a corner can be sideways without being drifted)
+  { beat: 7, name: 'all corners grip except one slip-spike frame per corner', criterion: DRIFTED, apply: (tr) => slipNearCorners(tr, (near) => { near.forEach((f) => { f.slip = 0; }); near[Math.floor(near.length / 2)].slip = -CORNER_SLIP; }) },
+  { beat: 7, name: 'every corner sideways only 0.3 s', criterion: DRIFTED, apply: (tr) => slipNearCorners(tr, (near) => { const mid = Math.floor(near.length / 2); near.forEach((f, i) => { f.slip = Math.abs(i - mid) < 0.15 / DT ? -CORNER_SLIP : 0; }); }) },
+  { beat: 7, name: 'every corner\'s slide broken every 0.2 s', criterion: DRIFTED, apply: (tr) => slipNearCorners(tr, (near) => { near.forEach((f, i) => { if (Math.floor((i * DT) / 0.2) % 2) f.slip = 0; }); }) },
+  { beat: 7, name: 'every corner gripped round, sideways only once out of it', criterion: DRIFTED, apply: (tr) => slipNearCorners(tr, (near, c) => { near.forEach((f) => { const past = (f.x - c[0]) * Math.sin(f.h) + (f.z - c[1]) * Math.cos(f.h); f.slip = past > 12 ? -CORNER_SLIP : 0; }); }) },
+  { beat: 7, name: 'the route turns where the car drives straight on', criterion: 'turns completed', apply: (tr) => { const p = tr.events.find((e) => e.kind === 'path'); p.points.splice(2, 0, [avenueX('7'), streetZ(44)], [avenueX('7') + 60, streetZ(44)], [avenueX('7'), streetZ(44) + 1]); } },
   { beat: 7, name: 'a corner cut over the pavement', apply: (tr) => shiftWhere(tr, (f) => Math.hypot(f.x - avenueX('8'), f.z - (streetZ(57) - 3.5)) < 25, 11, 11) },
   { beat: 8, name: 'roam stuck 15 s', apply: (tr) => stall(tr, 15) }
 ];
 
 function shiftWhere(tr, test, dx, dz) {
   for (const f of tr.frames) if (test(f)) { f.x += dx; f.z += dz; }
+}
+
+// Each of the run's corners: its frames within 40 m, handed to `edit` with the corner
+function slipNearCorners(tr, edit) {
+  const path = tr.events.find((e) => e.kind === 'path').points;
+  for (const c of path.slice(2, -1)) {
+    const near = tr.frames.filter((f) => f.phase !== 'donuts' && Math.hypot(f.x - c[0], f.z - c[1]) < 40);
+    if (near.length) edit(near, c);
+  }
 }
 
 // Every split and close call moved onto frames that pass `test` (a third of the way along them, a second apart)
