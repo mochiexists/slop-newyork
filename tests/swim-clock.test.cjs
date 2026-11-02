@@ -152,6 +152,40 @@ test('the show starts its run on the clock: the traffic reseeded once, from the 
   assert.ok(world.director.steps >= 12, 'the director steps every tick');
 });
 
+// Codex 2026-11-03 #7: elapsed summed tick by tick kept the page's history (P on a fresh page at 40 s and after a
+// minute's warm-up at 100 s read 59.999999999998856 and 120.00000000001592 2400 ticks on: a light red in one run and
+// green in the other). The show's run starts on SHOW_SIGNAL_TIME exactly, and every tick's clock is counted from there.
+test('the show\'s run starts on its point in the signal cycle and reads the same clock tick for tick after any warm-up', () => {
+  const clocks = (warmup) => {
+    const world = makeWorld();
+    const clock = world.controllers.swimClock;
+    let elapsed = 0;
+    // driving about before P, on uneven frames
+    const next = frames('mix', 3);
+    for (let time = 0; time < warmup;) {
+      const dt = next();
+      time += dt;
+      elapsed = clock.advance(dt, elapsed, 'swim');
+      clock.endFrame();
+    }
+    world.swimShow.start();
+    world.controllers.swimPilot = null; // (the clock is the point here, not the AI's driving)
+    const seen = [];
+    for (let i = 0; i < 2400; i++) {
+      elapsed = clock.advance(1 / 120, elapsed, 'swim');
+      clock.endFrame();
+      seen.push(elapsed);
+    }
+    return { seen, run: clock.run };
+  };
+  const fresh = clocks(0);
+  const warm = clocks(61.7);
+  assert.equal(fresh.run.elapsed, show.SHOW_SIGNAL_TIME, 'the run starts on the show\'s clock');
+  assert.equal(warm.run.elapsed, show.SHOW_SIGNAL_TIME, '...after a warm-up too');
+  assert.deepEqual(warm.seen, fresh.seen, 'every tick reads the same clock');
+  assert.equal(fresh.seen[2399], show.SHOW_SIGNAL_TIME + 20, '2400 ticks on is 20 s on, exactly');
+});
+
 test('the drawn car lies between its last two ticks, and the sim state is back after the frame', () => {
   const world = makeWorld();
   const { car, controllers } = world;

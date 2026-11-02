@@ -170,8 +170,9 @@ class SwimClock {
   /**
    * Starts a run at the next frame: the traffic and pedestrians laid out again round (x, z), by default where the car
    * is, from `seed` (by default a fresh one). The last call before the frame wins: entering swim mode and then the
-   * show in one key press is the show's run. `elapsed`: the city's clock to start it on (a replay's, as recorded),
-   * by default the clock as it is.
+   * show in one key press is the show's run. `elapsed`: the city's clock to start it on (the show's point in the
+   * signal cycle, a replay's as recorded), by default the clock as it is. Each tick's clock is that start plus the
+   * run's whole ticks times the tick.
    */
   startRun({ seed = Math.floor(Math.random() * 2 ** 31), x = null, z = null, reason = 'start', elapsed = null } = {}) {
     this.pendingRun = { seed, x, z, reason, elapsed };
@@ -195,10 +196,12 @@ class SwimClock {
     const car = this.controllers.entities.swim;
     // A run starts on entering the mode, and anew where a teleport put the car
     if (!this.pendingRun && (!this.run || moved(car, this.curr))) this.startRun({ reason: this.run ? 'teleport' : 'start' });
-    this.elapsed = this.pendingRun ? this.beginRun(car, elapsed) : elapsed;
+    if (this.pendingRun) this.elapsed = this.beginRun(car, elapsed);
     this.clock.advance(dt, (tick) => {
       capturePose(car, this.prev);
-      this.elapsed += tick;
+      // (counted from the run's start in whole ticks, never summed: two runs on the same start clock read the same
+      // elapsed at every tick, however long the page ran before them, so a light turns on the same tick in both)
+      this.elapsed = this.run.elapsed + (this.clock.ticks + 1 - this.run.tick) * tick;
       this.beforeTick?.(this.clock.ticks);
       this.step(car, tick);
       capturePose(car, this.curr);
