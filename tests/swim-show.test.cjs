@@ -28,7 +28,8 @@ test.before(async () => {
       './drift-autopilot.js': autopilot,
       './vehicle-physics.js': {},
       './swim-roam.js': roam,
-      './swim-carriageway.js': await import('../js/swim-carriageway.js')
+      './swim-carriageway.js': await import('../js/swim-carriageway.js'),
+      './swim-recovery.js': await import('../js/swim-recovery.js')
     }
   });
 });
@@ -427,4 +428,51 @@ test('stopped right behind a bus at its stop, the AI backs out at an angle and p
   assert.equal(contacts, 0, 'never touches the bus or the parked car');
   assert.ok(passedAt !== null && passedAt < 8, `round the bus ${passedAt?.toFixed(1)} s after stopping behind it`);
   assert.ok(reversing < 2.5, `backing out ${reversing.toFixed(1)} s in all`);
+});
+
+test('coming up on a red light\'s queue with the light\'s red still to run, the AI rolls up timed for the green instead of standing behind it', () => {
+  // Rolling south down 7th Ave at 30 mph, a queue standing across all its lanes 120 m ahead, 25 s of red to come
+  const car = makeCar({ x: config.avenueX('7'), z: config.streetZ(36), heading: 0 });
+  car.speed = 13;
+  const { swimShow, controllers, driver } = makeShow(car);
+  // (the city's clock 35 s into the cycle: the avenues' red, city-config.js SIGNAL_TIMING)
+  controllers.swimClock = { elapsed: 35 };
+  assert.equal(swimShow.roam(5), true);
+  const queue = [-7.2, -3.6, 0, 3.6, 7.2].map((x) => ({
+    x: config.avenueX('7') + x, z: car.position.z + 120, yaw: 0, speed: 0, half: 2.3, halfWidth: 0.92, edge: true
+  }));
+  swimShow.obstacles = queue;
+  let stood = 0, reversing = 0;
+  for (let n = 0; n < 25 * 60; n++) {
+    controllers.swimClock.elapsed += FRAME;
+    frame(car, controllers, driver);
+    if (Math.abs(car.speed) < 1) stood += FRAME;
+    if (car.speed < -0.2) reversing++;
+  }
+  assert.equal(reversing, 0, 'it never backs out of the queue');
+  assert.ok(stood < 3, `it barely stands (${stood.toFixed(1)} s of the 25 s red at under 1 m/s)`);
+  assert.ok(car.position.z < queue[0].z - 4.5, 'behind the queue, not in it');
+});
+
+test('stopped nose to nose in a lane it can\'t get round, a car right behind it: it never backs into that car, and finds another way on rather than trying forever', () => {
+  // Driving west on 42nd St, nothing but a wall of cars across the street just ahead and one parked right behind
+  const car = makeCar({ x: config.avenueX('7') - 60, z: config.streetZ(42) - 3.5, heading: -Math.PI / 2 });
+  const { swimShow, controllers, driver } = makeShow(car);
+  assert.equal(swimShow.roam(5), true);
+  const wall = [-7, -3.5, 0, 3.5, 7].map((dz) => ({
+    x: car.position.x - 8, z: config.streetZ(42) + dz, yaw: Math.PI / 2, speed: 0, half: 2.3, halfWidth: 0.92, edge: true
+  }));
+  const behind = { x: car.position.x + 7.2, z: car.position.z, yaw: -Math.PI / 2, speed: 0, half: 2.3, halfWidth: 0.92, edge: true };
+  swimShow.obstacles = [...wall, behind];
+  const { vehicleContact } = loadModule(read('js/vehicle-physics.js'));
+  let touched = 0;
+  const paths = new Set([swimShow.pilot.path]);
+  for (let n = 0; n < 20 * 60; n++) {
+    frame(car, controllers, driver);
+    paths.add(swimShow.pilot.path);
+    const a = { x: car.position.x, z: car.position.z, sin: Math.sin(car.heading), cos: Math.cos(car.heading), halfW: 0.97, halfL: 2.52 };
+    if (vehicleContact(a, { x: behind.x, z: behind.z, sin: Math.sin(behind.yaw), cos: Math.cos(behind.yaw), halfW: 0.92, halfL: 2.3 }, {})) touched++;
+  }
+  assert.equal(touched, 0, 'never backs into the car behind');
+  assert.ok(paths.size > 1, `it reroutes (${paths.size - 1} new routes in 20 s)`);
 });
