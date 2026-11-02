@@ -286,6 +286,13 @@ const BREAKS = [
   // takeover cut it short is no failure of the show's)
   { beat: 6, base: 'handoff', name: 'a cop contact before the takeover', criterion: 'cop contacts (frames)', apply: (tr) => { const take = tr.events.find((e) => e.kind === 'input').t; tr.frames.filter((q) => q.t < take - 1).pop().copHit = 1; } },
   { beat: 6, base: 'handoff', name: 'the run under 70 mph until the takeover (cut short, not failed)', expect: 'N/A', apply: (tr) => { for (const f of tr.frames) { const g = Math.hypot(Math.sin(f.h) * f.v + f.vx, Math.cos(f.h) * f.v + f.vz); if (g > 26.8) { const k = 26.8 / g; f.v *= k; f.vx *= k; f.vz *= k; } } } },
+  // (Codex round 3: ...but a stretch run under 70 mph all the way to its corner before the takeover is the show's failure)
+  { beat: 6, base: 'handoff', layouts: BOTH, name: 'the whole 7th Ave stretch under 70 mph, the takeover after its corner', criterion: 'held ≥ 70 mph unbroken on 7th Ave', apply: (tr) => {
+    const corner = tr.route[1];
+    const reach = tr.frames.find((f) => f.phase !== 'roll' && f.phase !== 'donuts' && Math.hypot(f.x - corner.x, f.z - corner.z) < 25).t;
+    for (const f of tr.frames) { const g = Math.hypot(Math.sin(f.h) * f.v + f.vx, Math.cos(f.h) * f.v + f.vz); if (g > 26.8) { const k = 26.8 / g; f.v *= k; f.vx *= k; f.vz *= k; } }
+    retakeAt(tr, reach + 5);
+  } },
   { beat: 9, base: 'handoff', name: 'the player\'s key lost for one tick', criterion: 'the player\'s key (KeyD) wins at once', apply: (tr) => takeoverFrames(tr, (f, i) => { if (i === 0) Object.assign(f, { phase: 'escape', pilot: 1, k: 'W' }); }) },
   { beat: 9, base: 'handoff', name: 'the AI grabs the wheel back before I', criterion: 'the AI lets go (ticks it still drove, to I)', apply: (tr) => takeoverFrames(tr, (f, i, all) => { if (i === Math.floor(all.length * 0.8)) Object.assign(f, { pilot: 1, k: 'W' }); }) },
   { beat: 9, base: 'handoff', name: 'I does nothing', criterion: 'I: the AI takes the wheel at once', apply: (tr) => { for (const f of handbackFrames(tr)) Object.assign(f, { phase: 'off', pilot: 0, k: '' }); tr.events = tr.events.filter((e) => !(e.kind === 'path' && e.t > handbackAt(tr))); } },
@@ -304,6 +311,20 @@ function takeoverFrames(tr, edit) {
   const take = tr.events.find((e) => e.kind === 'input' && e.key === 'KeyD').t;
   const list = tr.frames.filter((f) => f.t > take && f.t <= handbackAt(tr));
   list.forEach((f, i) => edit(f, i, list));
+}
+
+// The handoff show's takeover and hand-back moved to `take` s (the frames re-labelled to match)
+function retakeAt(tr, take) {
+  const back = take + HAND_BACK_AFTER;
+  for (const f of tr.frames) {
+    if (f.t <= take) Object.assign(f, { phase: f.phase === 'off' || f.phase === 'roam' ? 'escape' : f.phase, pilot: 1, pk: '', k: f.phase === 'off' || f.phase === 'roam' ? 'W' : f.k });
+    else if (f.t <= back) Object.assign(f, { phase: 'off', pilot: 0, k: f.t <= take + TAKE_HOLD ? 'D' : '', pk: f.t <= take + TAKE_HOLD ? 'D' : '' });
+    else Object.assign(f, { phase: 'roam', pilot: 1, k: 'W', pk: '' });
+  }
+  for (const e of tr.events) {
+    if (e.kind === 'input' && e.key === 'KeyD') e.t = e.action === 'up' ? take + TAKE_HOLD : take;
+    if (e.kind === 'input' && e.key === 'KeyI') e.t = back;
+  }
 }
 
 function handbackAt(tr) {
