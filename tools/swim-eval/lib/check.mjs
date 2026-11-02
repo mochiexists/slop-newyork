@@ -67,6 +67,8 @@ const T = {
   cornerTurnTo: 0.9, // ...to where it has turned this share
   cornerExitAlign: 45 * RAD, // 7: leaving the corner's window travelling this close to the way out, and...
   cornerExitPast: 15, // ...this many m down the way out from the corner: the turn completed
+  cornerTurnReach: 60, // m round a corner over which its turn and its slide are read (a wide drift turns on past the
+  // cornerWindow that its kerb and contacts are judged on: 57th St & 8th Ave on 2771a69, 70 % round at 30 m out)
   turnMinSpeed: 2, // m/s: slower, the direction of travel is too noisy to read a turn from
   roamMinTime: 30, // 8: s of roam needed to judge it
   stoppedSpeed: 1, // 8: m/s under which the car is stopped
@@ -537,14 +539,15 @@ function cornersOf(ctx) {
       if (!seen.has(key)) seen.set(key, { x: bx, z: bz, turn, inH, outH, beyond: [] });
       // (the route past it, as each path had it from when it was set, sampled along its legs from cornerWindow past
       // the corner: driving any of that without the corner is driving past the corner, Codex rounds 1 and 2)
-      seen.get(key).beyond.push({ t: e.t, until, points: routeBeyond([bx, bz], pts.slice(i + 1)) });
+      seen.get(key).beyond.push({ t: e.t, until, points: routeBeyond([bx, bz], pts.slice(i + 1, i + 2)) });
     }
   });
   if (seen.size || trace.source !== 'session') return [...seen.values()];
   return turnsOf(ctx.run.concat(ctx.roam));
 }
 
-// Points every BEYOND_STEP m along the legs from `corner` through `rest`, from cornerWindow m past the corner on
+// Points every BEYOND_STEP m along the legs from `corner` through `rest` (the next leg: beatCorners), from
+// cornerWindow m past the corner on
 const BEYOND_STEP = 5; // m
 function routeBeyond(corner, rest) {
   const out = [];
@@ -585,23 +588,29 @@ function turnsOf(frames) {
   return corners;
 }
 
-// The car's first pass through corner c: the frames from coming within cornerWindow of it to leaving, if it got
-// within cornerReach; `left` false when the frames end inside the window (the trace ended mid-corner)
+// The car's first pass through corner c, if it got within cornerReach: the frames within cornerWindow of it (its kerb
+// and contacts), and those within cornerTurnReach (its turn and slide); `leftWindow` / `left` false when the frames end
+// inside the window / the turn's reach (the trace ended mid-corner)
 function cornerPass(frames, c) {
   const d = (f) => Math.hypot(f.x - c.x, f.z - c.z);
   const closest = frames.findIndex((f) => d(f) < T.cornerReach);
   if (closest < 0) return null;
-  let a = closest, b = closest;
-  while (a > 0 && d(frames[a - 1]) < T.cornerWindow) a--;
-  while (b < frames.length - 1 && d(frames[b + 1]) < T.cornerWindow) b++;
-  return { frames: frames.slice(a, b + 1), left: b < frames.length - 1 };
+  const around = (reach) => {
+    let a = closest, b = closest;
+    while (a > 0 && d(frames[a - 1]) < reach) a--;
+    while (b < frames.length - 1 && d(frames[b + 1]) < reach) b++;
+    return [a, b];
+  };
+  const [a, b] = around(T.cornerWindow);
+  const [ta, tb] = around(T.cornerTurnReach);
+  return { frames: frames.slice(a, b + 1), turn: frames.slice(ta, tb + 1), leftWindow: b < frames.length - 1, left: tb < frames.length - 1 };
 }
 
 // How a pass drives corner c (headings inH → outH): whether the turn completed, the distance the car's travel turned
 // over (cornerTurnFrom to cornerTurnTo of the corner's turn), and the unbroken spell at ≥ cornerSlip that covers most
 // of it: its s and the share of the turning distance it covers. Exported for the calibration on player sessions.
 function cornerDrift(pass, c) {
-  const frames = pass.frames;
+  const frames = pass.turn ?? pass.frames;
   const turn = wrapAngle(c.outH - c.inH);
   // (the share of the corner's turn the travel has made, held over frames too slow to read it from)
   let progress = 0;
@@ -654,17 +663,22 @@ function beatCorners(ctx) {
     if (!pass) {
       // A corner never come within cornerReach of, though the car went on to the route beyond it: missed (cut wide
       // or skipped), not "not reached"
-      const past = (c.beyond ?? []).some((b) => frames.some((f) => f.t >= b.t && f.t < b.until && b.points.some(([x, z]) => Math.hypot(f.x - x, f.z - z) < T.cornerReach)));
+      // (on the leg after it, and after the car's closest approach to it: not a stretch of that street driven earlier,
+      // nor one the car reaches on its way to the corner from the other side)
+      const closest = frames.reduce((m, f) => (Math.hypot(f.x - c.x, f.z - c.z) < Math.hypot(m.x - c.x, m.z - c.z) ? f : m), frames[0]);
+      const past = (c.beyond ?? []).some((b) => frames.some((f) => f.t >= b.t && f.t < b.until && f.t > closest.t && b.points.some(([x, z]) => Math.hypot(f.x - x, f.z - z) < T.cornerReach)));
       if (past) missed.push(c);
       continue;
     }
-    // (the trace ending inside the corner's window: not driven yet, so not judged)
-    if (!pass.left) {
+    // (the trace ending inside the corner's window: not driven yet, so not judged; past the window but inside the
+    // turn's reach: its kerb and contacts judged, its turn and slide not yet)
+    if (!pass.leftWindow) {
       unfinished++;
       continue;
     }
     const near = pass.frames;
-    const drift = cornerDrift(pass, c);
+    const drift = pass.left ? cornerDrift(pass, c) : { unfinished: true, completed: true, drifted: true, spell: Infinity, share: 1, turnLength: 0, peak: Math.max(...near.map((f) => Math.abs(f.slip))), spellAt: near[0].t };
+
     const off = near.filter((f) => f.off);
     const hits = near.filter((f) => (f.bHit ?? 0) > 0);
     const touches = trafficContacts(trace, near[0].t, near[near.length - 1].t).filter((e) => Math.hypot(e.x - c.x, e.z - c.z) < T.cornerWindow);
@@ -679,14 +693,16 @@ function beatCorners(ctx) {
   const undrifted = driven.filter((c) => !c.drifted);
   const offRoad = driven.filter((c) => c.off > 0);
   const hit = driven.filter((c) => c.hits > 0);
-  const shortest = driven.reduce((m, c) => (c.spell < m.spell ? c : m), driven[0]);
-  const thinnest = driven.reduce((m, c) => (c.share < m.share ? c : m), driven[0]);
+  // (the turn and slide of a corner the trace ends in are not judged: left out of these, not passed)
+  const judged = driven.filter((c) => !c.unfinished);
+  const shortest = judged.reduce((m, c) => (c.spell < m.spell ? c : m), judged[0] ?? { spell: null });
+  const thinnest = judged.reduce((m, c) => (c.share < m.share ? c : m), judged[0] ?? { share: null });
   const criteria = [
-    criterion('corners driven', `${driven.length}${unfinished ? ` (and ${unfinished} the trace ends in)` : ''}`, true, '≥ 1'),
+    criterion('corners driven', `${driven.length}${driven.length > judged.length ? ` (${driven.length - judged.length} with the trace ending in its turn: its turn and slide not judged)` : ''}${unfinished ? `; ${unfinished} more the trace ends in` : ''}`, true, '≥ 1'),
     missedCriterion,
-    criterion('turns completed', `${driven.length - incomplete.length}/${driven.length}`, incomplete.length === 0, 'all'),
+    criterion('turns completed', `${judged.length - incomplete.length}/${judged.length}`, judged.length ? incomplete.length === 0 : null, 'all'),
     criterion(`drifted (one unbroken spell ≥ ${Math.round(deg(T.cornerSlip))}°, ≥ ${T.cornerDriftTime} s, ≥ ${T.cornerDriftShare * 100}% of the turn)`,
-      `${driven.length - undrifted.length}/${driven.length} (shortest spell ${fmt(shortest.spell, 2)} s; least of the turn ${fmt(thinnest.share * 100, 0)}%)`, undrifted.length === 0, 'all'),
+      `${judged.length - undrifted.length}/${judged.length}${judged.length ? ` (shortest spell ${fmt(shortest.spell, 2)} s; least of the turn ${fmt(thinnest.share * 100, 0)}%)` : ''}`, judged.length ? undrifted.length === 0 : null, 'all'),
     criterion('on the road throughout', `${driven.length - offRoad.length}/${driven.length}${offRoad.length ? ` (${offRoad.map((c) => c.offWhat).join('; ')})` : ''}`, offRoad.length === 0, 'all'),
     criterion('without contacts', trace.source === 'session' ? 'not logged' : `${driven.length - hit.length}/${driven.length}`, trace.source === 'session' ? null : hit.length === 0, 'all')
   ];
