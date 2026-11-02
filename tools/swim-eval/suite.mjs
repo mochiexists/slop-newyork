@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 // The suite: every scenario of lib/scenarios.mjs baselineSuite() (or --only a,b), a few at a time, each checked, then
 // the summary page across them. Runs already in --out with a trace are kept and only re-checked (--rerun to redo them).
-// usage: node tools/swim-eval/suite.mjs --out <dir> [--jobs 2] [--only name,name] [--port 8792] [--summary-only] [--rerun]
+// usage: node tools/swim-eval/suite.mjs --out <dir> [--set baseline|deterministic] [--jobs 2] [--only name,name] [--port 8792] [--summary-only] [--rerun]
 //        [--title "..."]
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { checkRunDir } from './lib/check-run.mjs';
 import { summaryPage } from './lib/report.mjs';
 import { runScenario } from './lib/runner.mjs';
-import { baselineSuite } from './lib/scenarios.mjs';
+import { baselineSuite, deterministicSuite } from './lib/scenarios.mjs';
 import { REPO, ensureServer } from './run.mjs';
 
 const DEFAULT_ASSETS = '/Users/timapple/Documents/mcc/fujira/theshore/swimming-in-slop-newyork/assets';
@@ -27,7 +27,10 @@ if (!out) {
 const jobs = Number(opt('--jobs', '2'));
 const port = Number(opt('--port', '8792'));
 const only = opt('--only')?.split(',');
-const scenarios = baselineSuite().filter((s) => !only || only.includes(s.name));
+// --set baseline (89419cc's: every clock, the frame rate changed the run) | deterministic (a fixed-clock build: one run
+// per seed, more seeds)
+const set = opt('--set', 'baseline');
+const scenarios = (set === 'deterministic' ? deterministicSuite() : baselineSuite()).filter((s) => !only || only.includes(s.name));
 mkdirSync(join(out, 'maps'), { recursive: true });
 
 // Stopped means stopped: Playwright closes its browsers on a signal, and without this the workers would go on to the

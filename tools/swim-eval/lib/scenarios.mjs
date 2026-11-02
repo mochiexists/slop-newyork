@@ -81,6 +81,27 @@ function baselineSuite() {
   return list;
 }
 
+// The suite for a deterministic build (2771a69 on: a fixed 1/120 s clock, so a seed's run is the same tick for tick at
+// any frame rate): one run per seed, on the 30 Hz clock (it renders a quarter of the frames for the same ticks), on
+// more traffic seeds; each scenario kind once more on another clock, to show the run doesn't change with it
+function deterministicSuite() {
+  const list = [];
+  for (let trafficSeed = 1; trafficSeed <= 8; trafficSeed++) {
+    list.push(scenario(`fresh-s${trafficSeed}-30`, { profile: '30', trafficSeed, seed: trafficSeed }));
+  }
+  list.push(scenario('fresh-s1-120', { profile: '120', trafficSeed: 1, seed: 1 }));
+  list.push(scenario('fresh-s1-musa', { profile: 'musa', trafficSeed: 1, seed: 1 }));
+  list.push(scenario('warm-s1-30', { profile: '30', trafficSeed: 1, seed: 11, warmup: 60 }));
+  list.push(scenario('warm-s2-30', { profile: '30', trafficSeed: 2, seed: 12, warmup: 60 }));
+  list.push(scenario('warm-s3-30', { profile: '30', trafficSeed: 3, seed: 13, warmup: 90 }));
+  const family = launchFamily();
+  for (const [name, inject] of Object.entries(family)) {
+    list.push(scenario(`${name}-30`, { profile: '30', trafficSeed: 1, seed: 21, inject, duration: LAUNCH_SHOW }));
+  }
+  list.push(scenario('launch-musa-musa', { profile: 'musa', trafficSeed: 1, seed: 21, inject: family['launch-musa'], duration: LAUNCH_SHOW }));
+  return list;
+}
+
 // Deliberately broken builds (patched in the page, lib/runner.mjs), to see the live checks fail: not in the baseline
 function brokenBuilds() {
   return [
@@ -95,7 +116,7 @@ function brokenBuilds() {
 }
 
 function findScenario(name) {
-  const known = [...baselineSuite(), ...brokenBuilds()].find((s) => s.name === name);
+  const known = [...baselineSuite(), ...deterministicSuite(), ...brokenBuilds()].find((s) => s.name === name);
   if (known) return known;
   // fresh-s<seed>-<profile>[-w<warmup>], made up on the spot
   const match = /^fresh-s(\d+)-(\w+?)(?:-w(\d+))?$/.exec(name);
@@ -105,4 +126,4 @@ function findScenario(name) {
   return null;
 }
 
-export { FULL_SHOW, LAUNCH_SHOW, PROFILES, baselineSuite, findScenario, launchFamily, scenario, turned, wrapAngle };
+export { FULL_SHOW, LAUNCH_SHOW, PROFILES, baselineSuite, deterministicSuite, findScenario, launchFamily, scenario, turned, wrapAngle };
