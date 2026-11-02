@@ -11,7 +11,11 @@ Ave (or at an `I`-key roam's start). Needs ≥ 30 s of it: the full scenarios gi
 **How it is driven.** The AI's keys.
 
 **The end state that proves it** (`beatRoam`): stopped (ground speed < 1 m/s) under 10 % of the roam; never stuck (no
-10 s window in which the car stays within 5 m of where it was); the show still driving at the end (phase not `off`).
+10 s window in which the car stays within 5 m of where it was) unless it was waiting at a red light: the stop's
+heading along an avenue or a street, and its light (city-config.js `signalPhase` on the city clock the trace logs,
+`sig`) red or amber the whole stop but its first 10 s of green; no clock logged, across the grid, or longer into a
+green: stuck. Red-light waits are shown, not failed; they still count as stopped; the show still driving at the end
+(phase not `off`).
 Time spent backing out is shown. The speed chart's tail, and `failures/` stills at a stuck moment.
 
 **Gotchas.**

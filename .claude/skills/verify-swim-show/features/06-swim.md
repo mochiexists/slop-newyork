@@ -9,13 +9,20 @@ reach its start.
 
 **How it is driven.** The AI's keys.
 
-**The end state that proves it** (`beatSwim`, window: escape until the car is within 25 m of 57th St & 9th Ave): top
-speed on 7th Ave (frames with 7th Ave the nearest street, before the 42nd St corner) ≥ 70 mph; ≥ 1 split and ≥ 1 close
-call scored by the game (`closeCalls.update`, events `split` / `close`); 0 traffic contacts (oriented boxes
-overlapping, any speed: events `contact-traffic`, each with a screenshot), 0 building pushes, 0 cop contacts.
+**The end state that proves it** (`beatSwim`). One window, the 7th Ave stretch: from where beat 5's way out ends (the
+50 mph moment) to the route's first corner (the first turn of the build's `ESCAPE_ROUTE`, carried in the trace: 42nd
+St to e7f9c83, 34th St once worker C's opening lands), fixed by the route, not by where the car is. In it: every frame
+on 7th Ave (any named road within its width + 4 m, so crossings count) with the footprint clear of the kerb; ≥ 70 mph
+held unbroken ≥ 1 s; ≥ 1 split and ≥ 1 close call scored by the game in its time and on 7th Ave. Over the whole run: 0
+traffic contacts (every contact traffic.js accepts with the car, hooked before the correction and at any speed:
+`touch-traffic`; plus box overlaps and the game's impact reports), 0 building pushes, 0 cop contacts.
 
 **Gotchas.**
 - 7th Ave from 45th to 42nd St is ~245 m, from a car leaving a donut: 70 mph there needs the way out to be quick.
-- The game's own collision listener only reports impacts over 0.5 m/s (`impact-traffic`); the box overlap catches
-  the gentle ones too. A contact's screenshot is taken on the frame it starts.
+- The game's own collision listener only reports impacts over 0.5 m/s (`impact-traffic`) and the box overlap is
+  sampled after the cars are pushed apart: a grazing sideswipe escaped both (Codex 2026-11-03 #10), so the runner
+  hooks traffic.js's `collideWithPlayer` as it is served (`GAME_HOOKS`). A contact's screenshot is taken on the frame
+  it starts.
+- Codex's false passes are selftest breaks now: splits only on 8th Ave, a detour over the plaza at speed, 70 mph for
+  one frame.
 - A session has no traffic in it: its contacts, splits and close calls are "not logged" (INCONCLUSIVE, not a pass).
