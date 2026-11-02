@@ -133,6 +133,12 @@ const AUTOPILOT = {
   queueSpeed: 2, // m/s: below this, behind a car no faster this close ahead in its line, it is waiting in a queue
   queueGap: 6, // m of bumper-to-bumper gap
   queueReach: 60, // m ahead a car standing in its line makes the oncoming half free to use (oncomingCost)
+  // A red light's queue standing across its line (redLeft: s of red still to come at the light ahead, which the show
+  // reads off the city's clock): it rolls up to the queue's tail timed to reach it as the queue moves off, rather than
+  // standing behind it for the rest of the red (Midtown's lights change together: on an avenue it meets a red queue
+  // about once a minute, and stood 32 s at each in the baseline runs)
+  creepDischarge: 3, // s after the green that the tail of a queue moves off
+  creepMin: 1.4, // m/s it creeps at, at least (a walking pace: not standing)
   wayRoundReach: 20, // m ahead it looks for a way round something it is stopped behind (wayRound)
   pullSpeed: 4, // m/s it pulls round at (pullRound),
   pullAim: 8, // ...aiming at the line round this far ahead,
@@ -327,6 +333,7 @@ class DriftAutopilot {
     this.gasDebt = 0; // s × pedal it wanted beyond the pedal its W has given (press, below)
     this.gassing = 0; // W it wants down
     this.keepSpeed = 0; // m/s its plans should not slow below (0: no such wish)
+    this.redLeft = 0; // s of red still to come at the light ahead on its street (set by the show from the city clock)
     this.path = [];
     this.segment = 0;
     this.offset = 0; // current lateral offset from the route line (m, + left)
@@ -358,6 +365,41 @@ class DriftAutopilot {
     this.moveWay = 0;
     this.moveStart = -Infinity;
     this.holdLockUntil = -Infinity;
+  }
+
+  // Behind a queue standing in the line it is on, with the light still red for redLeft s: the speed that reaches the
+  // queue's tail as it moves off (creepDischarge after the green), at least creepMin; Infinity with no such queue. From
+  // the cars its last plan saw.
+  creepSpeed(car) {
+    const o = this.options;
+    const seen = this._seen, count = this._seenCount ?? 0;
+    if (!(this.redLeft > 0) || !seen || this.path.length < 2) return Infinity;
+    const line = this.targetOffset;
+    const egoAlong = footprintAlong(o, 0), egoAcross = footprintAcross(o, 0);
+    let gap = Infinity;
+    for (let i = 0; i < count; i++) {
+      const ob = seen[i];
+      if (!ob.sameWay || ob.along <= 0 || Math.abs(ob.vAlong) > o.queueSpeed) continue;
+      if (Math.abs(ob.lateral - line) > ob.across + egoAcross + o.passMargin) continue;
+      gap = Math.min(gap, ob.along - ob.extentAlong - egoAlong);
+    }
+    if (gap === Infinity || gap > o.scanAhead) return Infinity;
+    return Math.max(o.creepMin, (gap - o.queueGap) / (this.redLeft + o.creepDischarge));
+  }
+
+  // Getting going again after backing out (swim-show.js unstick): the plans it made for where it was, any corner it
+  // was in and any move across it had begun are no longer about where the car is
+  forgetPlans() {
+    this.plan = null;
+    this.sincePlan = Infinity;
+    this.flickAt = undefined;
+    this.moveWay = 0;
+    this.moveStart = -Infinity;
+    this.holdLockUntil = -Infinity;
+    this.turningIn = this.cornering = false;
+    this.kick = 0;
+    this.cornerChoice = null;
+    if (this.cornerDriver) this.cornerDriver.choice = null;
   }
 
   // Segment geometry: start, unit direction, length
@@ -1072,6 +1114,12 @@ class DriftAutopilot {
     let feedForward = this.sincePlan < o.pedalTime && planned > 0 && planned < o.cruiseSpeed ? plan.accel : 0;
     // (a lift is off both pedals, unless a corner or pointing the wrong way asks for the brake)
     let coasting = Boolean(plan.coast) && this.sincePlan < o.pedalTime;
+    // (behind a red light's queue: the speed that reaches its tail as it moves off, on no more than the plan's pedal)
+    const creep = this.creepSpeed(car);
+    if (creep < target) {
+      target = creep;
+      feedForward = Math.min(0, feedForward);
+    }
     if (this.pull) {
       target = o.pullSpeed;
       feedForward = 0;

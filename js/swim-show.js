@@ -1,5 +1,5 @@
 import * as THREE from 'three/webgpu';
-import { avenueX, nearestRoads, streetZ } from './city-config.js';
+import { SIGNAL_TIMING, avenueX, nearestRoads, signalPhase, streetZ } from './city-config.js';
 import {
   BODY_SPECS,
   buildCarGeometry,
@@ -17,6 +17,7 @@ import { resolveVehicleContact, vehicleContact } from './vehicle-physics.js';
 import { RoamRoute } from './swim-roam.js';
 import { footprintOff } from './swim-carriageway.js';
 import * as CARRIAGEWAY from './swim-carriageway.js';
+import { RECOVERY, Recovery, chooseReverse } from './swim-recovery.js';
 
 // The swimming show: the AI takes the car through the reference clips' greatest hits, and keeps driving for as long as
 // the player lets it. Times Square is cleared of traffic, an NYPD cruiser watches with its lights on, the car rolls up
@@ -114,6 +115,7 @@ const PULL_ROUND_AFTER = 0.6; // s stopped behind something with a way round it 
 const PULL_ROUND_TIME = 1.5; // ...backing out this long at most, the wheel turned to swing the nose toward the way round
 const MAX_PULL_ROUND_TRIES = 2; // tries at pulling round before it backs straight out instead (the way round may be a
 // gap it can't actually fit through, and it would swing at it forever)
+const REROUTE_SEED_STEP = 101; // each reroute's roam seed on from the show's (ROAM_SEED), so a run replays its reroutes
 const SIM_STEPS_PER_SECOND = 240; // the drift model's step rate (controllers.js steps the M5 the same)
 
 // The show's swimmer is sketchier than the autopilot's defaults (drift-autopilot.js AUTOPILOT): flat out at 90 mph,
@@ -898,6 +900,10 @@ class SwimShow {
     this.clearedCorner = undefined;
     this.stuck = this.reversing = this.unstickTries = 0;
     this.roundLine = null;
+    // (and its getting-going-again starts afresh: swim-recovery.js)
+    this.recovery = null;
+    this.recoveryPath = null;
+    this.reroutes = 0;
     this.exitAt = undefined;
     this.tookOver = false;
     this.inSeat = false;
@@ -1031,6 +1037,7 @@ class SwimShow {
         }
         this.extendRoute();
         this.clearNextCorner(car);
+        this.pilot.redLeft = this.redLeft();
         Object.assign(keys, this.pilot.drive(car, dt, this.obstacles, driver));
         this.unstick(car, dt, keys);
         // Off the end of the streets the roam knows: start over from wherever the car is (or give the car back)
@@ -1078,6 +1085,22 @@ class SwimShow {
     }
   }
 
+  // s of red (or amber, then red) still to come at the lights of the street the AI is driving, by the city's clock
+  // (city-config.js: every light of Midtown changes together); 0 when it is green, or without a clock
+  redLeft() {
+    const clock = this.controllers.swimClock;
+    const p = this.pilot;
+    if (!clock || p.path.length < 2) return 0;
+    const s = p.seg(p.segment);
+    const avenue = Math.abs(s.uz) > Math.abs(s.ux); // avenues run along z
+    const { cycle, avenueAmber, avenueRed } = SIGNAL_TIMING;
+    const t = ((clock.elapsed % cycle) + cycle) % cycle;
+    if (signalPhase(clock.elapsed, avenue) === 'green') return 0;
+    // (avenues: red from avenueAmber to the cycle's end; streets: red to avenueRed, amber from streetAmber)
+    if (avenue) return cycle - Math.max(t, avenueAmber);
+    return t < avenueRed ? avenueRed - t : cycle - t + avenueRed;
+  }
+
   // Whether the route's turn at b (from a, on to c) is sharp enough for the AI to drift it
   isDrifted(a, b, c) {
     const turn = wrapAngle(Math.atan2(c.x - b.x, c.z - b.z) - Math.atan2(b.x - a.x, b.z - a.z));
@@ -1091,21 +1114,43 @@ class SwimShow {
   // turns the car the opposite way to the wheel), longer each time it is still stuck. The show never means to stand
   // still, but in a queue with no way round (a red light's, across every lane: the AI's planner tells) it waits its
   // turn, unless that queue is short of the corner the show holds clear: those cars are waiting for it to go round first.
+  // Its states (swim-recovery.js): driving; backing out, only along a way back it has checked is clear of the traffic
+  // and the curbs, a few metres at a walking pace (it used to hold S for up to 3.3 s, 25 m at 20 mph, blind); then
+  // reacquiring, its plans and any corner it was in forgotten. And it never tries the same thing forever: after two
+  // tries, or 4 s stopped without getting further along its route (not waiting in a queue), it reroutes from where
+  // the car is.
   unstick(car, dt, keys) {
+    const recovery = this.recovery ??= new Recovery();
     if (this.reversing > 0) {
       this.reversing -= dt;
-      // (the nose swung toward the point beside the tail of what it is stuck behind, or down the route on its own line)
+      // (the nose swung toward the point beside the tail of what it is stuck behind, or the wheel it checked the way
+      // back with)
       const pulling = this.roundLine !== null;
-      const aim = pulling ? this.pullPoint : this.pilot.pointAhead(car, UNSTICK_AIM, this.pilot.offset);
-      const error = wrapAngle(Math.atan2(aim.x - car.position.x, aim.z - car.position.z) - car.heading);
-      // Pulling round, it backs out only until the nose points past it: then it drives round
-      if (pulling && Math.abs(error) < UNSTICK_ALIGNED) this.reversing = 0;
-      if (pulling && this.reversing <= 0) this.pilot.pullRound(this.roundLine, this.pullPoint);
-      const steer = Math.abs(error) > UNSTICK_ALIGNED ? -Math.sign(error) : 0;
-      Object.assign(keys, { forward: 0, backward: 1, left: steer > 0 ? 1 : 0, right: steer < 0 ? 1 : 0, handbrake: 0 });
+      let steer = this.reverseSteer ?? 0;
+      if (pulling) {
+        const error = wrapAngle(Math.atan2(this.pullPoint.x - car.position.x, this.pullPoint.z - car.position.z) - car.heading);
+        // Pulling round, it backs out only until the nose points past it: then it drives round
+        if (Math.abs(error) < UNSTICK_ALIGNED) this.reversing = 0;
+        steer = Math.abs(error) > UNSTICK_ALIGNED ? -Math.sign(error) : 0;
+      }
+      // ...and no further than the way back it found clear, counting the roll it still has to stop (let go at the
+      // length itself, the car rolled on 0.6 m into the car behind)
+      const backed = Math.hypot(car.position.x - this.reverseFrom.x, car.position.z - this.reverseFrom.z);
+      const rolling = car.speed < 0 ? car.speed * car.speed / (2 * RECOVERY.reverseBrake) : 0;
+      if (backed + rolling >= this.reverseLength) this.reversing = 0;
+      if (this.reversing <= 0) {
+        recovery.state = 'reacquire';
+        this.pilot.forgetPlans();
+        if (pulling) this.pilot.pullRound(this.roundLine, this.pullPoint);
+      }
+      const back = this.reversing > 0 && car.speed > -RECOVERY.reverseSpeed ? 1 : 0;
+      Object.assign(keys, { forward: 0, backward: back, left: steer > 0 ? 1 : 0, right: steer < 0 ? 1 : 0, handbrake: 0 });
       return;
     }
-    if (car.speed > UNSTUCK_SPEED) this.unstickTries = 0;
+    if (car.speed > UNSTUCK_SPEED) {
+      this.unstickTries = 0;
+      recovery.state = 'drive';
+    }
     const held = this.clearedCorner !== undefined ? this.pilot.path[this.clearedCorner] : null;
     const heldQueue = held && Math.hypot(held.x - car.position.x, held.z - car.position.z) < CORNER_CLEAR_RADIUS + HELD_QUEUE_REACH;
     // A way round what it is stopped behind (a bus at its stop): it doesn't wait for it, it pulls round
@@ -1114,15 +1159,65 @@ class SwimShow {
     // (and never longer than a red light lasts: a queue still standing after that is waiting for something else)
     this.queuedTime = this.pilot.queued && stopped ? (this.queuedTime || 0) + dt : 0;
     const waiting = this.pilot.queued && round === null && !heldQueue && this.queuedTime < QUEUE_PATIENCE;
+    // Getting nowhere: a new way on from here (not mid-pull round: that is getting somewhere, a little backwards first)
+    if (this.recoveryPath !== this.pilot.path) {
+      this.recoveryPath = this.pilot.path;
+      recovery.rerouted(this.routeProgress(car));
+    }
+    const reroute = recovery.progress(this.routeProgress(car), dt, waiting);
+    if (reroute && !this.pilot.pull && this.reroute(car)) return;
     this.stuck = stopped && !waiting ? (this.stuck || 0) + dt : 0;
     if (this.stuck > (round === null ? STUCK_TIME : PULL_ROUND_AFTER)) {
       this.stuck = 0;
       this.unstickTries = (this.unstickTries || 0) + 1;
-      // Backing out at an angle to pull round, or straight back for longer each try while it is still stuck
+      recovery.attempts++;
+      // Backing out at an angle to pull round, or straight back, the nose swung toward the route ahead (backing up
+      // turns the car the other way to the wheel); only along a way back that is clear
+      const aim = round === null ? this.pilot.pointAhead(car, UNSTICK_AIM, this.pilot.offset)
+        : this.pilot.pointAhead(car, round.tail + PULL_ROUND_PAST, round.line);
+      const error = wrapAngle(Math.atan2(aim.x - car.position.x, aim.z - car.position.z) - car.heading);
+      const wanted = Math.abs(error) > UNSTICK_ALIGNED ? -Math.sign(error) : 0;
+      const way = chooseReverse(car, wanted, this.obstacles, CARRIAGEWAY);
+      if (!way) return;
       this.roundLine = round === null ? null : round.line;
-      this.pullPoint = round === null ? null : this.pilot.pointAhead(car, round.tail + PULL_ROUND_PAST, round.line);
-      this.reversing = round === null ? REVERSE_TIME * Math.min(MAX_REVERSE_TRIES, this.unstickTries) : PULL_ROUND_TIME;
+      this.pullPoint = round === null ? null : aim;
+      this.reverseSteer = way.steer;
+      this.reverseFrom = { x: car.position.x, z: car.position.z };
+      this.reverseLength = round === null ? way.distance : Math.min(way.distance, RECOVERY.reverseDistance);
+      this.reversing = round === null ? REVERSE_TIME * MAX_REVERSE_TRIES : PULL_ROUND_TIME;
+      recovery.state = 'reverse';
     }
+  }
+
+  // m along the AI's route the car has come (the legs behind it and the way along this one)
+  routeProgress(car) {
+    const p = this.pilot;
+    if (p.path.length < 2) return 0;
+    let along = Math.max(0, p.alongSegment(car));
+    for (let i = 0; i < p.segment; i++) along += p.seg(i).length;
+    return along;
+  }
+
+  // A new way on from wherever the car is, heading the way it points (swim-roam.js, a seed of its own per reroute, so a
+  // run replays it): the streets it had in mind lead nowhere from here. Returns whether it found one.
+  reroute(car) {
+    this.reroutes = (this.reroutes ?? 0) + 1;
+    const roamer = new RoamRoute(ROAM_SEED + REROUTE_SEED_STEP * this.reroutes).startFrom(car.position.x, car.position.z, car.heading);
+    const route = [{ x: car.position.x, z: car.position.z }];
+    for (let i = 0; i < ROUTE_AHEAD; i++) {
+      const corner = roamer.next();
+      if (!corner) break;
+      route.push(corner);
+    }
+    if (route.length < 2) return false;
+    this.roamer = roamer;
+    this.pilot.setPath(route, { corridors: routeCorridors(route) });
+    this.clearedCorner = undefined;
+    this.traffic.setClearZone(null);
+    this.stuck = 0;
+    this.recoveryPath = this.pilot.path;
+    this.recovery.rerouted(this.routeProgress(car));
+    return true;
   }
 
   // Traffic the AI weaves through: the cars and buses near the swimming car

@@ -33,7 +33,8 @@ test.before(async () => {
       'three/webgpu': { Color: class { constructor() { this.r = this.g = this.b = 1; } } },
       './city-config.js': config, './cars.js': {}, './tsl-materials.js': {}, './drift-physics.js': physics,
       './drift-autopilot.js': autopilot, './vehicle-physics.js': {}, './swim-roam.js': roam,
-      './swim-carriageway.js': carriageway
+      './swim-carriageway.js': carriageway,
+      './swim-recovery.js': await import('../js/swim-recovery.js')
     }
   });
 });
