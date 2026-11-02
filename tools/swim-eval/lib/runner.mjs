@@ -201,6 +201,7 @@ async function runScenario(scenario, { outDir, port, repo, mapDir }) {
     const pAt = await page.evaluate((seed) => {
       globalThis.__clock.reseedMath(seed);
       globalThis.__trace.t0 = globalThis.__clock.simTime;
+      globalThis.__trace.simT = 0;
       globalThis.__trace.recording = true;
       return { frame: globalThis.__clock.loopFrame, simTime: globalThis.__clock.simTime };
     }, scenario.seed);

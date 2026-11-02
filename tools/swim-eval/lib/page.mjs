@@ -117,7 +117,11 @@ async function installProbe(cfg) {
   // (t0: the simTime of the P frame, set by the runner as it starts recording: every t in the trace is s since P)
   const trace = globalThis.__trace = { frames: [], events: [], recording: false, t0: 0 };
   const acc = { building: 0, buildingDepth: 0, cop: 0, copDepth: 0, traffic: 0, trafficSpeed: 0 };
-  const now = () => +(clock.simTime - trace.t0).toFixed(4);
+  // (s since P, of the sim's own steps: a frame on a fixed-clock build, 2771a69 on, steps 0-n ticks, and every event
+  // and record is stamped with the tick it happens in. simT is added to at the start of each step, the runner zeroes it
+  // at P.)
+  trace.simT = 0;
+  const now = () => +trace.simT.toFixed(4);
   const snapLimit = { last: -Infinity, count: 0 };
   const MAX_INCIDENT_SNAPS = 24;
   const INCIDENT_SNAP_GAP = 1.5; // s between screenshots of incidents
@@ -245,9 +249,27 @@ async function installProbe(cfg) {
   let lastPath = null;
   let lastPathLength = 0;
 
-  const update = d.update.bind(d);
-  d.update = (dt, camera) => {
-    update(dt, camera);
+  // One record per step of the sim: on a fixed-clock build (the director has step(), called by swim-clock.js once per
+  // 1/120 s tick, the car in its sim state) after each step; before (89419cc), after each frame's update(). Recording
+  // in update() on a fixed-clock build would log the car's drawn pose, between two ticks, and the frame's dt.
+  const fixedClock = typeof d.step === 'function';
+  trace.fixedClock = fixedClock;
+  if (fixedClock) {
+    const step = d.step.bind(d);
+    d.step = (dt) => {
+      if (trace.recording) trace.simT += dt;
+      step(dt);
+      record(dt);
+    };
+  } else {
+    const update = d.update.bind(d);
+    d.update = (dt, camera) => {
+      if (trace.recording) trace.simT += dt;
+      update(dt, camera);
+      record(dt);
+    };
+  }
+  function record(dt) {
     if (!trace.recording) return;
     const c = car;
     const p = show.pilot;
@@ -312,8 +334,8 @@ async function installProbe(cfg) {
       seg: p.segment, rev: show.reversing > 0 ? 1 : 0, queued: p.queued ? 1 : 0, cam: c.cameraYawOverride === null || c.cameraYawOverride === undefined ? 0 : 1
     });
     acc.building = acc.buildingDepth = acc.cop = acc.copDepth = acc.traffic = acc.trafficSpeed = 0;
-  };
-  return { ok: true, cop: showModule.COP_SPOT, showSpot: showModule.SHOW_SPOT, radius: showModule.DRIFT_RADIUS };
+  }
+  return { ok: true, fixedClock, cop: showModule.COP_SPOT, showSpot: showModule.SHOW_SPOT, radius: showModule.DRIFT_RADIUS };
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
