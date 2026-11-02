@@ -8,7 +8,7 @@
 //   warmup       s of driving before P (swim mode, the Squeeze start, W with the wheel swung side to side every second)
 //   inject       a start state written at the P frame (musa's launch and the bad launches round it)
 //   duration     s of show to run after P
-import { COP, wrapAngle } from './geometry.mjs';
+import { COP, DRIFT_RADIUS, wrapAngle } from './geometry.mjs';
 import { musaLaunchState } from './session.mjs';
 
 const RAD = Math.PI / 180;
@@ -39,18 +39,50 @@ function scaled(state, share) {
   return { ...state, speed: state.speed * share, vx: state.vx * share, vz: state.vz * share, angularVel: state.angularVel * share };
 }
 
-// musa's launch and the family of bad launches round it: each starts mid-donut, each must recover
+// musa's launch and the family of bad launches round it: each starts mid-donut, each must recover. Each is recorded
+// round the cop as it stood on 2026-11-01 (copAt: 7th Ave & 45th St); a run places it round the build's own cop
+// (placeLaunch), the too-close and too-far ones at their share of the build's drift radius (radiusShare).
 function launchFamily() {
-  const musa = musaLaunchState();
+  const musa = { ...musaLaunchState(), copAt: { ...COP } };
   const sideways = Math.sign(musa.slipAngle) || -1; // the way this slide is sideways (the session's slip sign)
   return {
     'launch-musa': { ...musa, label: 'musa\'s over-rotated launch (session frame 10800)' },
     'launch-overrotated': { ...turned(musa, 30 * RAD * -sideways), angularVel: musa.angularVel * 1.4, label: 'over-rotated: 30° further round, yaw ×1.4' },
     'launch-slow': { ...scaled(musa, 0.35), label: 'slow: 35% of musa\'s speed and yaw' },
     'launch-spun': { ...turned(musa, 60 * RAD * -sideways), label: 'spun past 90°: turned 60° on, slip ~105°' },
-    'launch-close': { ...atDistance(musa, 5.5), label: 'too close: 5.5 m from the cop' },
-    'launch-far': { ...atDistance(musa, 19), label: 'too far: 19 m from the cop' }
+    'launch-close': { ...atDistance(musa, 5.5), radiusShare: 5.5 / DRIFT_RADIUS, label: 'too close: 5.5 m from the cop (half the drift radius)' },
+    'launch-far': { ...atDistance(musa, 19), radiusShare: 19 / DRIFT_RADIUS, label: 'too far: 19 m from the cop (1.7 drift radii)' }
   };
+}
+
+// What the car must not start over (check.mjs KERB)
+const KERB = new Set(['pavement', 'plaza', 'median', 'park', 'building']);
+const CLAMP_STEP = 0.25; // m the start is moved toward the cop at a time, off the kerb
+
+// An injected launch placed round the build's cop (`build`: { cop, radius }, the page's COP_SPOT and DRIFT_RADIUS):
+// moved by the cop's move, heading and velocity kept; a launch named for its distance from the cop at that share of the
+// build's radius. A start with the car's footprint over the kerb is moved toward the cop until it is clear (the
+// carriageway round a cop at 42nd St is narrower than Times Square's), and run.json says by how much.
+function placeLaunch(state, build, map) {
+  const from = state.copAt ?? COP;
+  const cop = build.cop;
+  let x = state.x - from.x + cop.x, z = state.z - from.z + cop.z;
+  if (state.radiusShare) {
+    const d = Math.hypot(x - cop.x, z - cop.z);
+    const r = state.radiusShare * build.radius;
+    x = cop.x + ((x - cop.x) / d) * r;
+    z = cop.z + ((z - cop.z) / d) * r;
+  }
+  const placed = { recordedCop: from, cop: { x: cop.x, z: cop.z }, x, z, distance: Math.hypot(x - cop.x, z - cop.z), clamped: 0 };
+  const overKerb = (px, pz) => map.footprint(px, pz, state.heading).some((c) => KERB.has(c));
+  const d0 = placed.distance;
+  while (map && overKerb(x, z) && placed.clamped + CLAMP_STEP < d0) {
+    placed.clamped += CLAMP_STEP;
+    x = cop.x + ((placed.x - cop.x) * (d0 - placed.clamped)) / d0;
+    z = cop.z + ((placed.z - cop.z) * (d0 - placed.clamped)) / d0;
+  }
+  placed.overKerb = map ? overKerb(x, z) : null;
+  return { ...state, x, z, placed: { ...placed, x, z, distance: Math.hypot(x - cop.x, z - cop.z) } };
 }
 
 function scenario(name, fields) {
@@ -126,4 +158,4 @@ function findScenario(name) {
   return null;
 }
 
-export { FULL_SHOW, LAUNCH_SHOW, PROFILES, baselineSuite, deterministicSuite, findScenario, launchFamily, scenario, turned, wrapAngle };
+export { FULL_SHOW, LAUNCH_SHOW, PROFILES, baselineSuite, deterministicSuite, findScenario, launchFamily, placeLaunch, scenario, turned, wrapAngle };

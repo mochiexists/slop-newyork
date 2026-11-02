@@ -11,7 +11,7 @@ import { COP, SHOW_SPOT, kasaFit } from '../tools/swim-eval/lib/geometry.mjs';
 import { CARRIAGEWAY_SLACK, SwimMap } from '../tools/swim-eval/lib/map.mjs';
 import { idealTrace } from '../tools/swim-eval/lib/synthetic.mjs';
 import { MAIN_HOOKS, rewriteMain } from '../tools/swim-eval/lib/runner.mjs';
-import { launchFamily, turned } from '../tools/swim-eval/lib/scenarios.mjs';
+import { launchFamily, placeLaunch, turned } from '../tools/swim-eval/lib/scenarios.mjs';
 import { toTrace } from '../tools/swim-eval/lib/session.mjs';
 import { selftest } from '../tools/swim-eval/selftest.mjs';
 
@@ -102,6 +102,29 @@ test('the bad launches keep the car\'s ground velocity and turn or move it as na
   // (to the recorder's rounding: its speed and sideways velocity were stored to 4 decimals, so not quite square)
   const back = turned(turned(musa, 0.3), -0.3);
   assert.ok(Math.abs(back.speed - musa.speed) < 1e-4 && Math.abs(back.vx - musa.vx) < 1e-4);
+});
+
+test('a launch is placed round the build\'s own cop and radius, off the kerb', () => {
+  const map = new SwimMap(fixture);
+  const family = launchFamily();
+  // (the cop where it was recorded: nothing moves)
+  for (const s of Object.values(family)) {
+    const p = placeLaunch(s, { cop: COP, radius: 11 }, map);
+    assert.ok(Math.hypot(p.x - s.x, p.z - s.z) < 1e-9 && p.placed.clamped === 0);
+  }
+  // (worker C's cop at 7th Ave & 42nd St, radius 8.5: moved with it, close and far scaled to the radius, on the road)
+  const cop42 = { x: -585.5, z: 1.0 };
+  const musa = placeLaunch(family['launch-musa'], { cop: cop42, radius: 8.5 }, map);
+  assert.ok(Math.abs(Math.hypot(musa.x - cop42.x, musa.z - cop42.z) - Math.hypot(family['launch-musa'].x - COP.x, family['launch-musa'].z - COP.z)) < 1e-9);
+  assert.equal(musa.heading, family['launch-musa'].heading);
+  const far = placeLaunch(family['launch-far'], { cop: cop42, radius: 8.5 }, map);
+  assert.ok(Math.abs(far.placed.distance - 8.5 * 19 / 11) < 1e-9 && !far.placed.overKerb);
+  // (a start out over the pavement is brought in toward the cop until the car is clear)
+  // (16 m west of the cop and 12 m north, heading south: over the pavement west of 7th Ave, short of 42nd St)
+  const west = { ...family['launch-musa'], x: COP.x - 16, z: COP.z - 12, heading: 0 };
+  assert.ok(map.footprint(cop42.x - 16, cop42.z - 12, 0).includes('pavement'));
+  const wide = placeLaunch(west, { cop: cop42, radius: 8.5 }, map);
+  assert.ok(wide.placed.clamped > 0 && !wide.placed.overKerb && wide.placed.distance < Math.hypot(16, 12), JSON.stringify(wide.placed));
 });
 
 test('main.js still has every line the eval runner hooks, once', () => {
