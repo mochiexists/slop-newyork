@@ -44,6 +44,18 @@ test('it backs out the way it wants if that is clear, another way if not, and no
   assert.equal(chooseReverse(car(), 0, [parked(0, -6), parked(-2.4, -5.5), parked(2.4, -5.5)], road), null, 'boxed in');
 });
 
+test('stopped closer than its clearance to a car beside it, it still backs out straight, just never closer', () => {
+  // (fresh-s4-30 on 9f70d21: stopped 0.15 m beside a car, every way back read as blocked and it stood 88 s)
+  const beside = parked(0.97 + 0.95 + 0.15, 0);
+  assert.equal(reverseClear(car(), 0, 4.5, [beside], road), 4.5, 'straight back keeps its 0.15 m');
+  const way = chooseReverse(car(), 0, [beside], road);
+  assert.deepEqual([way.steer, way.distance], [0, 4.5]);
+  // (A held backing swings the tail toward it: that gets closer, so it stays refused)
+  assert.ok(reverseClear(car(), -1, 4.5, [beside], road) < 1, 'swinging the tail into it is refused');
+  // (a car behind, clear by more than the clearance, still gets all of it)
+  assert.ok(reverseClear(car(), 0, 4.5, [beside, parked(0, -7.5)], road) < 2.5, 'the car behind still counts in full');
+});
+
 test('backing out that gets it nowhere: a reroute after two tries or 4 s stopped, never while it waits at a light', () => {
   const recovery = new Recovery();
   assert.equal(recovery.progress(0, 0.1, false), false);

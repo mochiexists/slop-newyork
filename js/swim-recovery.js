@@ -20,6 +20,7 @@ const RECOVERY = {
   halfWidth: 0.97, // the swim car's half extents (swim-car.js SWIM_BOX)
   halfLength: 2.52
 };
+const CLEARANCES = [0.3, 0.2, 0.1, 0.05, 0.02, 0]; // m it keeps, most first, round something it already stands close to
 
 // Whether two boxes (centre, heading, half extents across and along) overlap: the separating axes of both
 function boxesOverlap(ax, az, ah, aw, al, bx, bz, bh, bw, bl) {
@@ -44,18 +45,29 @@ function boxesOverlap(ax, az, ah, aw, al, bx, bz, bh, bw, bl) {
 function reverseClear(car, steer, distance, obstacles, road, options = {}) {
   const o = { ...RECOVERY, ...options };
   let x = car.position.x, z = car.position.z, h = car.heading;
-  const w = o.halfWidth + o.clearance, l = o.halfLength + o.clearance;
+  // A car (or a curb) already inside the clearance where the car stands counts only once the car gets closer to it than
+  // it is: the clearance it gets is the most of CLEARANCES the car clears it by now (stopped 0.15 m beside a car, the
+  // whole 0.3 m refused every way back, and the AI stood for 88 s: fresh-s4-30 on 9f70d21)
+  const near = [];
+  for (const ob of obstacles) {
+    const close = Math.abs(ob.x - x) < 12 && Math.abs(ob.z - z) < 12;
+    const clear = close ? CLEARANCES.find((c) => c <= o.clearance && !boxesOverlap(x, z, h, o.halfWidth + c, o.halfLength + c, ob.x, ob.z, ob.yaw ?? 0, ob.halfWidth ?? 0.95, ob.half ?? 2.3)) : o.clearance;
+    // (already touching it: it is left out, as the way back only parts them or the car is stuck either way)
+    if (clear !== undefined) near.push({ ob, clear });
+  }
+  const roadMargin = road ? CLEARANCES.find((c) => c <= o.clearance && road.footprintOff(x, z, h, c) === 0) : undefined;
+  const offAtStart = road && roadMargin === undefined ? road.footprintOff(x, z, h, 0) : 0;
   for (let d = o.sampleStep; d <= distance + 1e-9; d += o.sampleStep) {
     x -= Math.sin(h) * o.sampleStep;
     z -= Math.cos(h) * o.sampleStep;
     h -= steer * o.sampleStep / o.turnRadius;
-    if (road && road.footprintOff(x, z, h, o.clearance) > 0) return d - o.sampleStep;
+    if (road && (roadMargin === undefined ? road.footprintOff(x, z, h, 0) > offAtStart : road.footprintOff(x, z, h, roadMargin) > 0)) return d - o.sampleStep;
     const t = d / o.reverseSpeed;
-    for (const ob of obstacles) {
+    for (const { ob, clear } of near) {
       const yaw = ob.yaw ?? 0;
       const ox = ob.x + Math.sin(yaw) * (ob.speed || 0) * t, oz = ob.z + Math.cos(yaw) * (ob.speed || 0) * t;
       if (Math.abs(ox - x) > 12 || Math.abs(oz - z) > 12) continue;
-      if (boxesOverlap(x, z, h, w, l, ox, oz, yaw, ob.halfWidth ?? 0.95, ob.half ?? 2.3)) return d - o.sampleStep;
+      if (boxesOverlap(x, z, h, o.halfWidth + clear, o.halfLength + clear, ox, oz, yaw, ob.halfWidth ?? 0.95, ob.half ?? 2.3)) return d - o.sampleStep;
     }
   }
   return distance;
