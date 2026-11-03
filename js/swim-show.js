@@ -1099,6 +1099,7 @@ class SwimShow {
     const near = corner && Math.hypot(corner.x - car.position.x, corner.z - car.position.z) < CORNER_CLEAR_DISTANCE;
     if (near && this.clearedCorner !== index) {
       this.clearedCorner = index;
+      this.releasedCorner = undefined;
       this.traffic.setClearZone({ x: corner.x, z: corner.z, r: CORNER_CLEAR_RADIUS });
       // ...and the street past it is laid out for swimming: pairs of cars side by side to split, staged as the car
       // comes up to the corner (round it, out of sight; down 7th Ave, as it powers out of the drift)
@@ -1191,10 +1192,18 @@ class SwimShow {
       this.unstickTries = 0;
       recovery.state = 'drive';
     }
-    const held = this.clearedCorner !== undefined ? this.pilot.path[this.clearedCorner] : null;
-    const heldQueue = held && Math.hypot(held.x - car.position.x, held.z - car.position.z) < CORNER_CLEAR_RADIUS + HELD_QUEUE_REACH;
-    // A way round what it is stopped behind (a bus at its stop): it doesn't wait for it, it pulls round
     const stopped = Math.abs(car.speed) < 1;
+    const held = this.clearedCorner !== undefined && this.releasedCorner !== this.clearedCorner ? this.pilot.path[this.clearedCorner] : null;
+    let heldQueue = held && Math.hypot(held.x - car.position.x, held.z - car.position.z) < CORNER_CLEAR_RADIUS + HELD_QUEUE_REACH;
+    // Queued behind cars the show holds short of the corner it keeps clear, the corner is let go: they are waiting for
+    // the AI to go first, and it for them. (Backing out to find a way round instead, it went back and forth behind them
+    // at 8th Ave & 42nd St, 59 s stood: fresh-s8-30 on 8db6e9b.) Its traffic drives on, and the AI waits its turn.
+    if (heldQueue && this.pilot.queued && stopped) {
+      this.traffic.setClearZone(null);
+      this.releasedCorner = this.clearedCorner;
+      heldQueue = false;
+    }
+    // A way round what it is stopped behind (a bus at its stop): it doesn't wait for it, it pulls round
     const round = stopped && (this.unstickTries || 0) < MAX_PULL_ROUND_TRIES ? this.pilot.wayRound(car) : null;
     // (and never longer than a red light lasts: a queue still standing after that is waiting for something else)
     // (rolling up to a red light's queue is waiting for it too: the autopilot's creep)

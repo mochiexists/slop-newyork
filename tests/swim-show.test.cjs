@@ -428,25 +428,33 @@ test('roaming into a red light\'s queue across every lane, the AI waits behind i
   assert.ok(car.speed > 8, `and drives on after it (${car.speed.toFixed(1)} m/s)`);
 });
 
-test('a queue held short of the corner the show keeps clear is waiting for the AI: it backs out rather than wait for good', () => {
-  // Rolling south down 7th Ave, cars stopped across every lane at the edge of its first corner's clear zone
+test('a queue held short of the corner the show keeps clear is waiting for the AI: the show lets the corner go and the AI waits its turn, never backing out', () => {
+  // Rolling south down 7th Ave, cars stopped across every lane at the edge of its first corner's clear zone; let go,
+  // they drive on (fresh-s8-30 on 8db6e9b backed out behind such a queue at 8th Ave & 42nd St, again and again)
   const car = makeCar({ x: config.avenueX('7'), z: config.streetZ(36), heading: 0 });
   car.speed = 13;
-  const { swimShow, controllers, driver } = makeShow(car);
+  let released = false;
+  const { swimShow, controllers, driver } = makeShow(car, { setClearZone(zone) { if (zone === null) released = true; } });
   assert.equal(swimShow.roam(5), true);
   const corner = swimShow.pilot.path[1];
   const sign = Math.sign(corner.z - car.position.z);
   // (on down the avenue to 140 m short of that corner)
   car.position.z = corner.z - sign * 140;
-  swimShow.obstacles = [-7.2, -3.6, 0, 3.6, 7.2].map((x) => ({
-    x: config.avenueX('7') + x, z: corner.z - sign * 30, yaw: 0, speed: 0, half: 2.3, halfWidth: 0.92, edge: true
+  const queue = [-7.2, -3.6, 0, 3.6, 7.2].map((x) => ({
+    x: config.avenueX('7') + x, z: corner.z - sign * 30, yaw: sign > 0 ? 0 : Math.PI, speed: 0, half: 2.3, halfWidth: 0.92, edge: true
   }));
-  let reversed = false;
-  for (let n = 0; n < 20 * 60 && !reversed; n++) {
+  swimShow.obstacles = queue;
+  let reversed = false, releasedAt = null;
+  for (let n = 0; n < 25 * 60; n++) {
     frame(car, controllers, driver);
-    reversed = car.speed < -0.2;
+    reversed ||= car.speed < -0.2;
+    if (released && releasedAt === null) releasedAt = n / 60;
+    // (the held cars drive off once the corner is let go)
+    if (released) for (const v of queue) { v.speed = 8; v.z += sign * 8 * FRAME; }
   }
-  assert.ok(reversed, 'it backs out to find a way round');
+  assert.ok(releasedAt !== null, 'the corner is let go');
+  assert.equal(reversed, false, 'it never backs out');
+  assert.ok(sign * (car.position.z - (corner.z - sign * 30)) > 0, 'and it is on past where the queue stood');
 });
 
 test('rolling slowly into a red light\'s queue near the end of the red, the AI rolls up to its tail and waits there, never backing out', () => {
