@@ -363,6 +363,7 @@ class DriftAutopilot {
     this.driftedCorner = -1;
     this.finished = false;
     this.queued = false; // waiting behind a queue (planGap)
+    this.creeping = false; // rolling up to a red light's queue (creepSpeed)
     this.clock = 0; // s it has been driving (decide)
     this.flickAt = undefined; // the clock's time a late flick it chose goes
     this.moveWay = 0; // the way its line last moved across (+1 left, -1 right) and when that move started
@@ -405,6 +406,8 @@ class DriftAutopilot {
       gap = Math.min(gap, ob.along - ob.extentAlong - egoAlong);
     }
     if (gap === Infinity || gap > o.scanAhead) return Infinity;
+    // (up to its tail and no further)
+    if (gap <= o.queueGap) return 0;
     return Math.max(o.creepMin, (gap - o.queueGap) / (this.redLeft + o.creepDischarge));
   }
 
@@ -1273,7 +1276,11 @@ class DriftAutopilot {
     let coasting = Boolean(plan.coast) && this.sincePlan < o.pedalTime;
     // (behind a red light's queue: the speed that reaches its tail as it moves off, on no more than the plan's pedal)
     const creep = this.creepSpeed(car);
-    if (creep < target) {
+    this.creeping = creep < Infinity;
+    // ...and with no plan clear of the queue (every line ends in it), the creep, not a stop short of it: the plans brake
+    // for the queue's tail as if it were a wall, and it stood 20 m short of a red light's queue on 8th Ave, angled, not
+    // reading as queued, and backed out of it (fresh-s1-30 and fresh-s3-30 on 8db6e9b)
+    if (creep < target || (this.creeping && !plan.safe)) {
       target = creep;
       feedForward = Math.min(0, feedForward);
     }

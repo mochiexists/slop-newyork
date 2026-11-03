@@ -1197,8 +1197,10 @@ class SwimShow {
     const stopped = Math.abs(car.speed) < 1;
     const round = stopped && (this.unstickTries || 0) < MAX_PULL_ROUND_TRIES ? this.pilot.wayRound(car) : null;
     // (and never longer than a red light lasts: a queue still standing after that is waiting for something else)
-    this.queuedTime = this.pilot.queued && stopped ? (this.queuedTime || 0) + dt : 0;
-    const waiting = this.pilot.queued && round === null && !heldQueue && this.queuedTime < QUEUE_PATIENCE;
+    // (rolling up to a red light's queue is waiting for it too: the autopilot's creep)
+    const inQueue = this.pilot.queued || this.pilot.creeping;
+    this.queuedTime = inQueue && stopped ? (this.queuedTime || 0) + dt : 0;
+    const waiting = inQueue && round === null && !heldQueue && this.queuedTime < QUEUE_PATIENCE;
     // Getting nowhere: a new way on from here (not mid-pull round: that is getting somewhere, a little backwards first)
     if (this.recoveryPath !== this.pilot.path) {
       this.recoveryPath = this.pilot.path;

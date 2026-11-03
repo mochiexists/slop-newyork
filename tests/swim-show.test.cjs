@@ -449,6 +449,31 @@ test('a queue held short of the corner the show keeps clear is waiting for the A
   assert.ok(reversed, 'it backs out to find a way round');
 });
 
+test('rolling slowly into a red light\'s queue near the end of the red, the AI rolls up to its tail and waits there, never backing out', () => {
+  // (fresh-s1-30 on 8db6e9b: out of 34th St onto 8th Ave, 7 s of red left, a bus, a van and a car across the lanes at
+  // the stop line; it braked to a stand 20 m short of them, read as stuck and backed out)
+  const car = makeCar({ x: config.avenueX('7'), z: config.streetZ(36), heading: 0 });
+  car.speed = 8;
+  const { swimShow, controllers, driver } = makeShow(car);
+  controllers.swimClock = { elapsed: 53 };
+  assert.equal(swimShow.roam(5), true);
+  const queue = [-7.2, -3.6, 0, 3.6, 7.2].map((x) => ({
+    x: config.avenueX('7') + x, z: car.position.z + 32, yaw: 0, speed: 0, half: 2.3, halfWidth: 0.92, edge: true
+  }));
+  swimShow.obstacles = queue;
+  let reversing = 0, stood = 0;
+  for (let n = 0; n < 7 * 60; n++) {
+    controllers.swimClock.elapsed += FRAME;
+    frame(car, controllers, driver);
+    if (car.speed < -0.2) reversing++;
+    if (Math.abs(car.speed) < 0.5) stood += FRAME;
+  }
+  const gap = queue[0].z - queue[0].half - (car.position.z + 2.52);
+  assert.equal(reversing, 0, 'it never backs out of the queue');
+  assert.ok(stood < 1, `it doesn't stand short of it (${stood.toFixed(1)} s)`);
+  assert.ok(gap > 0 && gap < 14, `near the queue's tail when the light changes (${gap.toFixed(1)} m behind it)`);
+});
+
 test('a queue that stands longer than any red light is not one: the AI stops waiting and backs out', () => {
   const car = makeCar({ x: config.avenueX('7'), z: config.streetZ(36), heading: 0 });
   car.speed = 13;
